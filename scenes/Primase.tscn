@@ -1,0 +1,21 @@
+[gd_scene format=3 uid="uid://bilxx478kru23"]
+
+[ext_resource type="Script" uid="uid://ls1pcww3ia7q" path="res://scripts/primase.gd" id="1_iso2q"]
+
+[node name="Primase" type="CharacterBody2D" unique_id=1178342259]
+script = ExtResource("1_iso2q")
+
+[node name="Label" type="Label" parent="." unique_id=824057443]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -31.5
+offset_top = -11.5
+offset_right = 31.5
+offset_bottom = 11.5
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 4
+text = "Primase"

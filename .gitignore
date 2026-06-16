@@ -1,0 +1,14 @@
+# Godot 4+ specific ignores
+.godot/
+*.import
+*.translation
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+
+# Ignore IDE/Editor files (optional but recommended)
+.vscode/
+.idea/
+*.sln
+*.csproj

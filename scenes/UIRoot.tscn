@@ -1,0 +1,249 @@
+[gd_scene format=3 uid="uid://dgleakxo7ndl3"]
+
+[ext_resource type="Script" uid="uid://vf64ilchux4n" path="res://scripts/ui_controller.gd" id="1_dj8aq"]
+
+[node name="UIRoot" type="Control" unique_id=256846932]
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("1_dj8aq")
+
+[node name="MarginContainer" type="MarginContainer" parent="." unique_id=1222815866]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 40.0
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginContainer" unique_id=346223766]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="TitleLabel" type="Label" parent="MarginContainer/VBoxContainer" unique_id=1176581425]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Simulador Molecular"
+
+[node name="ModeDropdown" type="OptionButton" parent="MarginContainer/VBoxContainer" unique_id=1117526719]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+selected = 0
+item_count = 3
+popup/item_0/text = "Replicação de DNA"
+popup/item_0/id = 2
+popup/item_1/text = "Livre"
+popup/item_1/id = 0
+popup/item_2/text = "Cardume"
+popup/item_2/id = 1
+
+[node name="ControlButtonsHBox" type="HBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=269371099]
+layout_mode = 2
+alignment = 1
+
+[node name="StartButton" type="Button" parent="MarginContainer/VBoxContainer/ControlButtonsHBox" unique_id=1755752463]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "▶"
+
+[node name="PauseButton" type="Button" parent="MarginContainer/VBoxContainer/ControlButtonsHBox" unique_id=1044473434]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "⏸"
+
+[node name="ResetButton" type="Button" parent="MarginContainer/VBoxContainer/ControlButtonsHBox" unique_id=167480231]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "↻"
+
+[node name="HSeparator" type="HSeparator" parent="MarginContainer/VBoxContainer" unique_id=1580603560]
+layout_mode = 2
+
+[node name="CollapseButton" type="Button" parent="MarginContainer/VBoxContainer" unique_id=604891203]
+layout_mode = 2
+text = "▼ Opções"
+alignment = 0
+
+[node name="CollapsibleContent" type="VBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=1949093312]
+layout_mode = 2
+
+[node name="TemperatureSection" type="VBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent" unique_id=1917741109]
+layout_mode = 2
+
+[node name="TempSlider" type="HSlider" parent="MarginContainer/VBoxContainer/CollapsibleContent/TemperatureSection" unique_id=1500747845]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+min_value = 10.0
+max_value = 45.0
+step = 0.1
+value = 37.0
+
+[node name="TempLabel" type="Label" parent="MarginContainer/VBoxContainer/CollapsibleContent/TemperatureSection" unique_id=1803481888]
+layout_mode = 2
+text = "Temperatura: 37.0 °C"
+
+[node name="HSeparator2" type="HSeparator" parent="MarginContainer/VBoxContainer/CollapsibleContent" unique_id=785775598]
+layout_mode = 2
+
+[node name="SectionEnzymes" type="VBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent" unique_id=430035573]
+layout_mode = 2
+
+[node name="SectionEnzymesButton" type="Button" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes" unique_id=1369360348]
+layout_mode = 2
+text = "▼ Ativar/Desativar"
+alignment = 0
+
+[node name="EnzymesContent" type="VBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes" unique_id=1410489549]
+layout_mode = 2
+
+[node name="CheckHelicase" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent" unique_id=2051420494]
+layout_mode = 2
+button_pressed = true
+text = "Helicase"
+
+[node name="CheckLeading" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent" unique_id=318173870]
+layout_mode = 2
+button_pressed = true
+text = "Polimerase Fita Líder"
+
+[node name="CheckLagging" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent" unique_id=195727303]
+layout_mode = 2
+button_pressed = true
+text = "Polimerase Fita Tardia"
+
+[node name="CheckLigase" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent" unique_id=1972202653]
+layout_mode = 2
+button_pressed = true
+text = "Ligase"
+
+[node name="CheckBases" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent" unique_id=170503777]
+layout_mode = 2
+button_pressed = true
+text = "Bases Livres"
+
+[node name="EnzymesContentButtons" type="HBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent" unique_id=224316950]
+layout_mode = 2
+
+[node name="ApplyButton" type="Button" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent/EnzymesContentButtons" unique_id=732413246]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Aplicar"
+
+[node name="RestoreDefaultsButton" type="Button" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent/EnzymesContentButtons" unique_id=650783948]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "↻ Restaurar"
+
+[node name="HSeparator3" type="HSeparator" parent="MarginContainer/VBoxContainer/CollapsibleContent" unique_id=1076613973]
+layout_mode = 2
+
+[node name="SectionHighlight" type="VBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent" unique_id=1485977605]
+layout_mode = 2
+
+[node name="SectionHighlightButton" type="Button" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight" unique_id=1013427688]
+layout_mode = 2
+text = "▼ Destacar"
+alignment = 0
+
+[node name="SectionHighlightContent" type="VBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight" unique_id=979264627]
+layout_mode = 2
+
+[node name="HSeparator4" type="HSeparator" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent" unique_id=27605276]
+layout_mode = 2
+
+[node name="BasesHighlightButton" type="Button" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent" unique_id=113070764]
+layout_mode = 2
+text = "▼ Bases Nitrogenadas"
+alignment = 0
+
+[node name="BasesHighlightContent" type="VBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent" unique_id=182215955]
+layout_mode = 2
+
+[node name="CheckHighlightA" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/BasesHighlightContent" unique_id=461444263]
+layout_mode = 2
+text = "Adenina"
+
+[node name="CheckHighlightT" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/BasesHighlightContent" unique_id=748254691]
+layout_mode = 2
+text = "Timina"
+
+[node name="CheckHighlightC" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/BasesHighlightContent" unique_id=1500683801]
+layout_mode = 2
+text = "Citosina"
+
+[node name="CheckHighlightG" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/BasesHighlightContent" unique_id=986707707]
+layout_mode = 2
+text = "Guanina"
+
+[node name="CheckHighlightAT" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/BasesHighlightContent" unique_id=720067987]
+layout_mode = 2
+text = "Pares A-T"
+
+[node name="CheckHighlightCG" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/BasesHighlightContent" unique_id=1079192384]
+layout_mode = 2
+text = "Pares C-G"
+
+[node name="EnzimesHighlightButton" type="Button" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent" unique_id=323870464]
+layout_mode = 2
+text = "▼ Enzimas"
+alignment = 0
+
+[node name="EnzimesHighlightContent" type="VBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent" unique_id=403848514]
+layout_mode = 2
+
+[node name="CheckHighlightHelicase" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=860190002]
+layout_mode = 2
+text = "Helicase
+"
+
+[node name="CheckHighlightLeading" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=483163942]
+layout_mode = 2
+text = "Polimerase Líder
+"
+
+[node name="CheckHighlightLagging" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=414894708]
+layout_mode = 2
+text = "Polimerase Tardia
+"
+
+[node name="CheckHighlightLigase" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=680479134]
+layout_mode = 2
+text = "Ligase
+"
+
+[node name="CheckHighlightPrimase" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=1297836667]
+layout_mode = 2
+text = "Primase
+"
+
+[node name="ClearHighlightButton" type="Button" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent" unique_id=1952552863]
+layout_mode = 2
+text = "↻ Limpar Destaque"
+
+[node name="HSeparator5" type="HSeparator" parent="MarginContainer/VBoxContainer/CollapsibleContent" unique_id=846629398]
+layout_mode = 2
+
+[node name="SectionAppearance" type="VBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent" unique_id=1764375551]
+layout_mode = 2
+
+[node name="SectionAppearanceButton" type="Button" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionAppearance" unique_id=1362560455]
+layout_mode = 2
+text = "▼ Aparência"
+alignment = 0
+
+[node name="SectionAppearanceContent" type="VBoxContainer" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionAppearance" unique_id=743084723]
+layout_mode = 2
+
+[node name="CheckShowAllBases" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionAppearance/SectionAppearanceContent" unique_id=2086480539]
+layout_mode = 2
+text = "Mostrar todas as bases livres"
+
+[node name="LightMode" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionAppearance/SectionAppearanceContent" unique_id=87707374]
+layout_mode = 2
+text = "Modo Claro"
+
+[node name="DarkMode" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionAppearance/SectionAppearanceContent" unique_id=588647288]
+layout_mode = 2
+button_pressed = true
+text = "Modo Escuro"

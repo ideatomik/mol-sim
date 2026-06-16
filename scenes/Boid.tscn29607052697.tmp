@@ -1,0 +1,22 @@
+[gd_scene format=3 uid="uid://ckmm7peoqnvt"]
+
+[ext_resource type="Script" uid="uid://bgvotu6gf7pkb" path="res://boid.gd" id="1_3wvxu"]
+
+[sub_resource type="PhysicsMaterial" id="PhysicsMaterial_3wvxu"]
+friction = 0.0
+bounce = 1.0
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_csibm"]
+
+[node name="Node2D" type="Node2D" unique_id=1217166378 groups=["boids"]]
+
+[node name="Boid" type="RigidBody2D" parent="." unique_id=73834147 groups=["boids"]]
+physics_material_override = SubResource("PhysicsMaterial_3wvxu")
+gravity_scale = 0.0
+custom_integrator = true
+script = ExtResource("1_3wvxu")
+speed = null
+size = null
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Boid" unique_id=831378876]
+shape = SubResource("CircleShape2D_csibm")

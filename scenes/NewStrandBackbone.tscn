@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cwyxl6ocwxds5"]
+
+[ext_resource type="Script" uid="uid://dd6tawvkw770e" path="res://scripts/new_strand_backbone.gd" id="1_5xc0c"]
+
+[node name="NewStrandBackbone" type="Node2D" unique_id=2086024748]
+script = ExtResource("1_5xc0c")
