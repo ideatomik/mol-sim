@@ -12,13 +12,14 @@ var base_A_color: Color = Color(0.8, 0.2, 0.2)
 var base_T_color: Color = Color(0.2, 0.2, 0.8)
 var base_C_color: Color = Color(0.85, 0.6, 0.1)
 var base_G_color: Color = Color(0.2, 0.8, 0.2)
+var base_U_color: Color = Color(0.701961, 0.192157, 0.945098)
 
-var enzyme_helicase_color: Color = Color(0.6, 0.2, 0.8)
+var enzyme_helicase_color: Color = Color(1.0, 0.0, 0.321569)
 var enzyme_polymerase_color: Color = Color(0.95, 0.6, 0.1)
 var enzyme_ligase_color: Color = Color(0.0, 0.8, 0.8)
 var enzyme_primase_color: Color = Color(0.2, 0.6, 0.9)
 
-var nick_color: Color = Color(1.0, 0.3, 0.3, 0.9)
+var nick_color: Color = Color(1.0, 0.3, 0.3, 0.9) #TODO: nick mechanics revamp. only show at beginning and end of the empty  space
 var dimmed_alpha: float = 0.25
 var highlight_alpha: float = 1.0
 

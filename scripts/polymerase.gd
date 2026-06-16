@@ -15,7 +15,6 @@ var current_fragment_target_index: int = -1
 const LABEL_W: float = 110.0
 const LABEL_H: float = 30.0
 const RADIUS: float = 15.0
-const FILL_COLOR: Color = Color(0.95, 0.6, 0.1)
 const MOVE_SPEED: float = 120.0
 
 func _ready():
@@ -27,6 +26,15 @@ func _ready():
 		add_to_group("leading_poly_highlight")
 	else:
 		add_to_group("lagging_poly_highlight")
+	
+	# Set the initial color
+	_update_enzyme_color()	
+	# Listen for theme changes
+	if ThemeManager:
+		ThemeManager.theme_changed.connect(_update_enzyme_color)
+
+func _update_enzyme_color():
+	var new_color = ThemeManager.enzyme_polymerase_color
 
 func _physics_process(delta):
 	var rules = SimulationManager.current_rules
@@ -229,9 +237,9 @@ func _draw():
 	var label_h = 30.0
 	var radius = 15.0
 	
-	draw_rect(Rect2(-clamp_w/2, -clamp_h/2, clamp_w, clamp_h), FILL_COLOR)
-	draw_circle(Vector2(0, -clamp_h/2), radius, FILL_COLOR)
-	draw_circle(Vector2(0, clamp_h/2), radius, FILL_COLOR)
-	draw_rect(Rect2(-label_w/2, -label_h/2, label_w, label_h), FILL_COLOR)
-	draw_circle(Vector2(-label_w/2, 0), radius, FILL_COLOR)
-	draw_circle(Vector2(label_w/2, 0), radius, FILL_COLOR)
+	draw_rect(Rect2(-clamp_w/2, -clamp_h/2, clamp_w, clamp_h), ThemeManager.enzyme_polymerase_color)
+	draw_circle(Vector2(0, -clamp_h/2), radius, ThemeManager.enzyme_polymerase_color)
+	draw_circle(Vector2(0, clamp_h/2), radius, ThemeManager.enzyme_polymerase_color)
+	draw_rect(Rect2(-label_w/2, -label_h/2, label_w, label_h), ThemeManager.enzyme_polymerase_color)
+	draw_circle(Vector2(-label_w/2, 0), radius, ThemeManager.enzyme_polymerase_color)
+	draw_circle(Vector2(label_w/2, 0), radius, ThemeManager.enzyme_polymerase_color)

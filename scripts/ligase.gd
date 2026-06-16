@@ -13,12 +13,19 @@ var seal_tween: Tween
 const WIDTH: float = 50.0
 const HEIGHT: float = 25.0
 const RADIUS: float = 12.5
-const FILL_COLOR: Color = Color(0.0, 0.8, 0.8)
 
 func _ready():
 	add_to_group("ligases")
 	add_to_group("highlightable") # Allows it to be dimmed
 	add_to_group("ligase_highlight") # Allows it to be specifically highlighted
+	
+	_update_enzyme_color()	
+	# Listen for theme changes
+	if ThemeManager:
+		ThemeManager.theme_changed.connect(_update_enzyme_color)
+
+func _update_enzyme_color():
+	var new_color = ThemeManager.enzyme_ligase_color
 
 func _physics_process(delta):
 	var rules = SimulationManager.current_rules
@@ -84,6 +91,6 @@ func _trigger_detachment():
 	tween.tween_property(self, "modulate:a", 0.0, 1.2)
 
 func _draw():
-	draw_rect(Rect2(-WIDTH/2, -HEIGHT/2, WIDTH, HEIGHT), FILL_COLOR)
-	draw_circle(Vector2(-WIDTH/2, 0), RADIUS, FILL_COLOR)
-	draw_circle(Vector2(WIDTH/2, 0), RADIUS, FILL_COLOR)
+	draw_rect(Rect2(-WIDTH/2, -HEIGHT/2, WIDTH, HEIGHT), ThemeManager.enzyme_ligase_color)
+	draw_circle(Vector2(-WIDTH/2, 0), RADIUS, ThemeManager.enzyme_ligase_color)
+	draw_circle(Vector2(WIDTH/2, 0), RADIUS, ThemeManager.enzyme_ligase_color)

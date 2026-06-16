@@ -7,15 +7,25 @@ var bottom_strand: DnaStrand
 var end_x: float = 0.0
 var is_detaching: bool = false
 
-const WIDTH: float = 90.0
+const WIDTH: float = 110.0
 const HEIGHT: float = 30.0
 const RADIUS: float = 15.0
-const FILL_COLOR: Color = Color(0.6, 0.2, 0.8)
+#const FILL_COLOR: Color = Color(0.6, 0.2, 0.8)
 
 func _ready():
 	add_to_group("helicases")
 	add_to_group("highlightable") # Allows it to be dimmed
 	add_to_group("helicase_highlight") # Allows it to be specifically highlighted
+	
+	# Set the initial color
+	_update_helicase_color()
+	
+	# Listen for theme changes
+	if ThemeManager:
+		ThemeManager.theme_changed.connect(_update_helicase_color)
+
+func _update_helicase_color():
+	var new_color = ThemeManager.enzyme_helicase_color
 
 func _physics_process(delta):
 	var rules = SimulationManager.current_rules
@@ -58,11 +68,12 @@ func _draw():
 	var h = HEIGHT
 	var r = RADIUS
 	
-	draw_rect(Rect2(-w/2 + r, -h/2, w - 2*r, h), FILL_COLOR)
-	draw_circle(Vector2(-w/2 + r, 0), r, FILL_COLOR)
-	draw_circle(Vector2(w/2 - r, 0), r, FILL_COLOR)
+	draw_rect(Rect2(-w/2 + r, -h/2, w - 2*r, h), ThemeManager.enzyme_helicase_color)
+	draw_circle(Vector2(-w/2 + r, 0), r, ThemeManager.enzyme_helicase_color)
+	draw_circle(Vector2(w/2 - r, 0), r, ThemeManager.enzyme_helicase_color)
 	
-	draw_arc(Vector2(-w/2 + r, 0), r, PI/2, 3*PI/2, 32, Color.WHITE, 2.0, true)
-	draw_arc(Vector2(w/2 - r, 0), r, -PI/2, PI/2, 32, Color.WHITE, 2.0, true)
-	draw_line(Vector2(-w/2 + r, -h/2), Vector2(w/2 - r, -h/2), Color.WHITE, 2.0, true)
-	draw_line(Vector2(-w/2 + r, h/2), Vector2(w/2 - r, h/2), Color.WHITE, 2.0, true)
+	#border
+	#draw_arc(Vector2(-w/2 + r, 0), r, PI/2, 3*PI/2, 32, Color.WHITE, 2.0, true)
+	#draw_arc(Vector2(w/2 - r, 0), r, -PI/2, PI/2, 32, Color.WHITE, 2.0, true)
+	#draw_line(Vector2(-w/2 + r, -h/2), Vector2(w/2 - r, -h/2), Color.WHITE, 2.0, true)
+	#draw_line(Vector2(-w/2 + r, h/2), Vector2(w/2 - r, h/2), Color.WHITE, 2.0, true)
