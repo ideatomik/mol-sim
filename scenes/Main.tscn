@@ -10,6 +10,7 @@
 [ext_resource type="PackedScene" uid="uid://byoy0hl4v8trp" path="res://scenes/HydrogenBonds.tscn" id="7_jlsqs"]
 [ext_resource type="PackedScene" uid="uid://cwyxl6ocwxds5" path="res://scenes/NewStrandBackbone.tscn" id="8_q8u5g"]
 [ext_resource type="PackedScene" uid="uid://dilqvnkjylgm3" path="res://scenes/Ligase.tscn" id="9_lhr70"]
+[ext_resource type="Script" uid="uid://bc7cxuhdaar57" path="res://scripts/camera_controller.gd" id="10_wp0k4"]
 
 [node name="Main" type="Node2D" unique_id=1183616964]
 script = ExtResource("1_elqb8")
@@ -36,6 +37,7 @@ color = Color(0.101960786, 0.101960786, 0.14901961, 1)
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=873384085]
 position = Vector2(640, 360)
+script = ExtResource("10_wp0k4")
 
 [node name="UILayer" type="CanvasLayer" parent="." unique_id=1573077596]
 

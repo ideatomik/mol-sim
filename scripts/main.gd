@@ -83,7 +83,8 @@ func _on_window_resized():
 	_update_layout_positions()
 	
 	if camera:
-		camera.position = screen_center
+		#camera.position = screen_center
+		pass
 	
 	_build_walls()
 	_build_simulation()
@@ -185,6 +186,11 @@ func _spawn_dna(rules):
 	var dna_end_x = start_x + (DNA_SEQUENCE.size() * BASE_SPACING) + 100.0
 	var pol_lagging_ref = null
 	var new_backbone_ref = null
+	
+	# Tell the camera to frame the newly built DNA
+	var cam = $Camera2D # Adjust this path to match your scene tree
+	if cam and cam.has_method("setup_and_frame_level_0"):
+		cam.setup_and_frame_level_0(top_strand, bottom_strand)
 
 	# 3. CONDITIONAL: Helicase
 	if rules.enable_helicase:

@@ -111,6 +111,7 @@ func build_sequence(sequence: Array, base_scene: PackedScene, spacing: float, st
 	add_child(right_marker)
 
 	_update_backbone()
+	
 
 # CALLED EVERY FRAME TO KEEP ARROWS VISIBLE
 func _process(delta):
