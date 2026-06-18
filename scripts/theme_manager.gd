@@ -61,6 +61,14 @@ var arrow_scale: float = 0.9
 var bond_thickness: float = 1 # hydrogen bonds
 
 # ==========================================
+# SCREEN SHAKE
+# ==========================================
+var shake_strength_level_0: float = 0.00  # Very subtle shake in overview
+var shake_strength_level_1: float = 0.25  # Moderate shake in context view
+var shake_strength_level_2: float = 0.50  # Strong shake in action zone
+var shake_strength_level_3: float = 1.00 # Violent shake in microscope view
+
+# ==========================================
 # ACTIVE THEME STATE (What the game actually reads)
 # ==========================================
 var backbone_color: Color

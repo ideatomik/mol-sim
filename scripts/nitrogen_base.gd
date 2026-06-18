@@ -188,9 +188,7 @@ func reject():
 	var tween = create_tween()
 	tween.tween_property(self, "modulate", Color.RED, 0.1)
 	tween.tween_property(self, "modulate", Color.WHITE, 0.1)
-	var main_scene = get_tree().current_scene
-	if main_scene.has_method("trigger_shake"):
-		main_scene.trigger_shake(rules.shake_reject_strength if rules else 0.5, rules.shake_reject_decay if rules else 15.0)
+	
 	linear_velocity = linear_velocity.normalized() * bounce_speed
 
 func finalize_bind(final_pos: Vector2):
@@ -210,9 +208,6 @@ func finalize_bind(final_pos: Vector2):
 	tween.parallel().tween_property(self, "modulate", Color(0.8, 1.0, 0.4), 0.15)
 	tween.tween_property(self, "modulate", Color.WHITE, 0.15)
 	
-	var main_scene = get_tree().current_scene
-	if main_scene.has_method("trigger_shake") and rules:
-		main_scene.trigger_shake(rules.shake_approve_strength if rules else 0.25, rules.shake_approve_decay if rules else 10.0)
 	queue_redraw()
 
 func fade_and_free():

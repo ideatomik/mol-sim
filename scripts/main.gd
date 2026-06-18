@@ -114,13 +114,6 @@ func _create_wall(parent: Node2D, pos: Vector2, size: Vector2):
 	shape_node.shape = rect_shape
 	wall.add_child(shape_node)
 
-func _process(delta):
-	if shake_strength > 0.0:
-		camera.offset = Vector2(randf_range(-shake_strength, shake_strength), randf_range(-shake_strength, shake_strength))
-		shake_strength = move_toward(shake_strength, 0.0, shake_decay * delta)
-	else:
-		camera.offset = Vector2.ZERO
-
 func trigger_shake(strength: float, decay: float = 10.0):
 	shake_strength = max(shake_strength, strength)
 	shake_decay = decay
@@ -153,12 +146,12 @@ func _spawn_dna(rules):
 	
 	# 1 & 2. DNA Strands
 	var top_strand: DnaStrand = dna_strand_scene.instantiate()
-	top_strand.add_to_group("sim_objects") # NEW
+	top_strand.add_to_group("sim_objects")
 	top_strand.is_top_strand = true
 	top_strand.build_sequence(DNA_SEQUENCE, nitrogen_base_scene, BASE_SPACING, start_x, strand_y_top)
 	
 	var bottom_strand: DnaStrand = dna_strand_scene.instantiate()
-	bottom_strand.add_to_group("sim_objects") # NEW
+	bottom_strand.add_to_group("sim_objects")
 	bottom_strand.is_top_strand = false
 	var bottom_seq = []
 	for base in DNA_SEQUENCE:
@@ -166,7 +159,7 @@ func _spawn_dna(rules):
 	bottom_strand.build_sequence(bottom_seq, nitrogen_base_scene, BASE_SPACING, start_x, strand_y_bottom)
 
 	var h_bonds = hydrogen_bonds_scene.instantiate()
-	h_bonds.add_to_group("sim_objects") # NEW
+	h_bonds.add_to_group("sim_objects")
 	h_bonds.top_strand = top_strand
 	h_bonds.bottom_strand = bottom_strand
 
@@ -187,21 +180,23 @@ func _spawn_dna(rules):
 	var pol_lagging_ref = null
 	var new_backbone_ref = null
 	
-	# Tell the camera to frame the newly built DNA
-	var cam = $Camera2D # Adjust this path to match your scene tree
+	# Tell the camera to frame the newly built DNA (Level 0 Overview)
+	var cam = $Camera2D 
 	if cam and cam.has_method("setup_and_frame_level_0"):
 		cam.setup_and_frame_level_0(top_strand, bottom_strand)
 
 	# 3. CONDITIONAL: Helicase
+	var helicase_ref = null # Keep a reference to pass to the camera later
 	if rules.enable_helicase:
 		print("  -> SPAWNING HELICASE")
 		var helicase = helicase_scene.instantiate()
-		helicase.add_to_group("sim_objects") # NEW
+		helicase.add_to_group("sim_objects")
 		helicase.position = Vector2(start_x - 20, (strand_y_top + strand_y_bottom) / 2)
 		helicase.end_x = dna_end_x
 		helicase.top_strand = top_strand
 		helicase.bottom_strand = bottom_strand
 		add_child(helicase)
+		helicase_ref = helicase
 	else:
 		print("  -> SKIPPING HELICASE (Disabled in rules)")
 	
@@ -209,7 +204,7 @@ func _spawn_dna(rules):
 	if rules.enable_leading_polymerase:
 		print("  -> SPAWNING LEADING POLYMERASE")
 		var pol_leading = polymerase_scene.instantiate()
-		pol_leading.add_to_group("sim_objects") # NEW
+		pol_leading.add_to_group("sim_objects")
 		pol_leading.is_leading = true
 		pol_leading.nitrogen_base_scene = nitrogen_base_scene
 		pol_leading.position = Vector2(start_x - BASE_SPACING, strand_y_top - 120.0)
@@ -220,7 +215,7 @@ func _spawn_dna(rules):
 	if rules.enable_lagging_polymerase:
 		print("  -> SPAWNING LAGGING POLYMERASE")
 		pol_lagging_ref = polymerase_scene.instantiate()
-		pol_lagging_ref.add_to_group("sim_objects") # NEW
+		pol_lagging_ref.add_to_group("sim_objects")
 		pol_lagging_ref.is_leading = false
 		pol_lagging_ref.nitrogen_base_scene = nitrogen_base_scene
 		pol_lagging_ref.position = Vector2(start_x - BASE_SPACING, strand_y_bottom + 120.0)
@@ -231,14 +226,14 @@ func _spawn_dna(rules):
 	if rules.enable_leading_polymerase or rules.enable_lagging_polymerase:
 		print("  -> SPAWNING NEW BACKBONE RENDERER")
 		new_backbone_ref = new_strand_backbone_scene.instantiate()
-		new_backbone_ref.add_to_group("sim_objects") # NEW
+		new_backbone_ref.add_to_group("sim_objects")
 		add_child(new_backbone_ref)
 
 	# 7. CONDITIONAL: Ligase enzyme
 	if rules.enable_ligase and ligase_scene:
 		print("  -> SPAWNING LIGASE")
 		var ligase = ligase_scene.instantiate()
-		ligase.add_to_group("sim_objects") # NEW
+		ligase.add_to_group("sim_objects")
 		ligase.position = Vector2(start_x - BASE_SPACING - 80.0, strand_y_bottom + 120.0)
 		ligase.pol_lagging = pol_lagging_ref
 		ligase.backbone = new_backbone_ref
@@ -249,7 +244,7 @@ func _spawn_dna(rules):
 		print("  -> SPAWNING FREE BASES: ", rules.free_nucleotide_count)
 		for i in range(rules.free_nucleotide_count):
 			var free_base: NitrogenBase = nitrogen_base_scene.instantiate()
-			free_base.add_to_group("sim_objects") # NEW
+			free_base.add_to_group("sim_objects")
 			free_base.base_type = ["A", "T", "C", "G"][randi() % 4]
 			free_base.state = NitrogenBase.State.FREE
 			free_base.position = Vector2(
@@ -259,6 +254,24 @@ func _spawn_dna(rules):
 			add_child(free_base)
 	else:
 		print("  -> SKIPPING FREE BASES (Disabled in rules)")
+		
+	# ==========================================
+	# CAMERA TEST SEQUENCE
+	# Runs AFTER all enzymes and bases have spawned!
+	# ==========================================
+	if helicase_ref and camera:
+		# 1. Wait 3 seconds in Level 0, then enter Level 1 (Context)
+		await get_tree().create_timer(3.0).timeout
+		if camera.has_method("calculate_helicase_level_1_height"):
+			var h1 = camera.calculate_helicase_level_1_height(top_strand, bottom_strand)
+			camera.setup_level_1(helicase_ref, h1, 1) # Explicitly pass level 1
+			
+		# 2. Wait 3 seconds in Level 1, then enter Level 2 (Action Zone)
+		await get_tree().create_timer(3.0).timeout
+		if camera.has_method("calculate_helicase_level_2_height"):
+			var h2 = camera.calculate_helicase_level_2_height(top_strand, bottom_strand)
+			camera.setup_level_1(helicase_ref, h2, 2) # Explicitly pass level 2!
+	# ==========================================
 		
 	print("--- FINISHED _spawn_dna ---")
 

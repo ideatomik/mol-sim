@@ -44,10 +44,8 @@ func _draw():
 	if bases.size() < 2:
 		return
 		
-	# Scale arrow points dynamically using ThemeManager
-	var s = ThemeManager.arrow_scale if ThemeManager else 1.0
-	var arrow_right = PackedVector2Array([Vector2(-6*s, -5*s), Vector2(6*s, 0*s), Vector2(-6*s, 5*s)])
-	var arrow_left = PackedVector2Array([Vector2(6*s, -5*s), Vector2(-6*s, 0*s), Vector2(6*s, 5*s)])
+	var arrow_right = PackedVector2Array([Vector2(-6, -5), Vector2(6, 0), Vector2(-6, 5)])
+	var arrow_left = PackedVector2Array([Vector2(6, -5), Vector2(-6, 0), Vector2(6, 5)])
 	var arrow_shape = arrow_left if is_top_strand else arrow_right
 	
 	var arrow_color = ThemeManager.arrow_color if ThemeManager else Color(0.9, 0.9, 0.9, 0.8)
@@ -58,8 +56,9 @@ func _draw():
 		var b1 = bases[i]
 		var b2 = bases[i+1]
 		
+		# Only draw if bases are close together
 		if b1.position.distance_to(b2.position) < 100.0:
-			# DYNAMIC OFFSET CALCULATION (Preserves your animation!)
+			
 			var dist = current_helicase_x - b1.original_pos.x
 			var progress = clamp(dist / PEEL_WIDTH, 0.0, 1.0)
 			
@@ -69,16 +68,18 @@ func _draw():
 			
 			var p1 = Vector2(b1.position.x, b1.position.y + tangential_offset)
 			var p2 = Vector2(b2.position.x, b2.position.y + tangential_offset)
+			
+			# NEW: Calculate the angle of the line segment
+			var angle = (p2 - p1).angle()
+			
 			var mid_point = (p1 + p2) / 2.0
 			
 			var arrow_points = PackedVector2Array()
 			for p in arrow_shape:
-				arrow_points.append(mid_point + p)
+				# NEW: Rotate the arrow shape to match the line angle
+				arrow_points.append(mid_point + p.rotated(angle))
 				
 			draw_colored_polygon(arrow_points, arrow_color)
-	if backbone:
-		backbone.default_color = ThemeManager.backbone_color
-	queue_redraw() # Redraw arrows
 
 func build_sequence(sequence: Array, base_scene: PackedScene, spacing: float, start_x: float, start_y: float):
 	left_marker = base_scene.instantiate()

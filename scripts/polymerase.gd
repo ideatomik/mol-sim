@@ -37,6 +37,12 @@ func _update_enzyme_color():
 	var new_color = ThemeManager.enzyme_polymerase_color
 
 func _physics_process(delta):
+	# DEBUG: Print once every 2 seconds (120 physics frames at 60fps)
+	if Engine.get_physics_frames() % 120 == 0:
+		var cam = get_viewport().get_camera_2d()
+		var cam_level = cam.current_zoom_level if cam else -1
+		print("[%s] POLY DEBUG | CamLevel: %d | MyPos: %s" % [Time.get_ticks_msec(), cam_level, global_position])
+
 	var rules = SimulationManager.current_rules
 	if not rules or rules.mode != "DNA Repl":
 		return
@@ -132,6 +138,8 @@ func request_binding(nucleotide):
 		approve_binding(nucleotide, target_base)
 	else:
 		nucleotide.reject()
+		# SHAKE: Impact feedback for rejecting a wrong base!
+		_trigger_camera_shake(rules.shake_reject_strength if rules else 0.5, rules.shake_reject_decay if rules else 15.0)
 
 func approve_binding(nucleotide, target_base):
 	is_waiting_for_binding = false
@@ -157,6 +165,10 @@ func _on_binding_complete(nucleotide, target_base, snap_pos):
 	target_base.partner_base = nucleotide
 	nucleotide.partner_base = target_base
 	nucleotide.finalize_bind(snap_pos)
+	
+	# SHAKE: Impact feedback for successfully building the strand!
+	var rules = SimulationManager.current_rules
+	_trigger_camera_shake(rules.shake_approve_strength if rules else 0.25, rules.shake_approve_decay if rules else 10.0)
 	
 	if template_strand.is_top_strand:
 		if target_base == template_strand.bases[0]: _spawn_marker("5'", snap_pos.x - 35.0, snap_pos.y)
@@ -243,3 +255,8 @@ func _draw():
 	draw_rect(Rect2(-label_w/2, -label_h/2, label_w, label_h), ThemeManager.enzyme_polymerase_color)
 	draw_circle(Vector2(-label_w/2, 0), radius, ThemeManager.enzyme_polymerase_color)
 	draw_circle(Vector2(label_w/2, 0), radius, ThemeManager.enzyme_polymerase_color)
+
+func _trigger_camera_shake(base_strength: float, decay: float = 10.0):
+	var cam = get_viewport().get_camera_2d()
+	if cam and cam.has_method("trigger_shake"):
+		cam.trigger_shake(base_strength, decay)

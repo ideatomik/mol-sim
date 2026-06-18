@@ -58,7 +58,6 @@ func _draw_strand(bases: Array[NitrogenBase], y_offset: float, point_left: bool)
 	if bases.size() < 2:
 		return
 		
-	# Scale arrow points dynamically
 	var s = ThemeManager.arrow_scale if ThemeManager else 1.0
 	var arrow_right = PackedVector2Array([Vector2(-6*s, -5*s), Vector2(6*s, 0*s), Vector2(-6*s, 5*s)])
 	var arrow_left = PackedVector2Array([Vector2(6*s, -5*s), Vector2(-6*s, 0*s), Vector2(6*s, 5*s)])
@@ -76,17 +75,20 @@ func _draw_strand(bases: Array[NitrogenBase], y_offset: float, point_left: bool)
 		var p1 = Vector2(b1.position.x, b1.position.y + y_offset)
 		var p2 = Vector2(b2.position.x, b2.position.y + y_offset)
 		
+		# NEW: Calculate angle
+		var angle = (p2 - p1).angle()
+		var mid_point = (p1 + p2) / 2.0
+		
 		if b1.position.distance_to(b2.position) < 50.0:
-			draw_line(p1, p2, backbone_color, width, true) # <-- Uses centralized width
+			draw_line(p1, p2, backbone_color, width, true)
 			
-			var mid_point = (p1 + p2) / 2.0
 			var arrow_points = PackedVector2Array()
 			for p in arrow_shape:
-				arrow_points.append(mid_point + p)
+				# NEW: Rotate arrow points
+				arrow_points.append(mid_point + p.rotated(angle))
 			draw_colored_polygon(arrow_points, arrow_color)
 			
 		else:
-			var mid_point = (p1 + p2) / 2.0
 			var nick_length = 10.0
 			var is_sealed = sealed_gap_indices.has(i)
 			
@@ -94,7 +96,7 @@ func _draw_strand(bases: Array[NitrogenBase], y_offset: float, point_left: bool)
 				draw_line(p1, p2, backbone_color, width, true)
 				var arrow_points = PackedVector2Array()
 				for p in arrow_shape:
-					arrow_points.append(mid_point + p)
+					arrow_points.append(mid_point + p.rotated(angle))
 				draw_colored_polygon(arrow_points, arrow_color)
 			else:
 				draw_line(mid_point - Vector2(nick_length, 0), mid_point + Vector2(nick_length, 0), nick_color, width * 0.75, true)

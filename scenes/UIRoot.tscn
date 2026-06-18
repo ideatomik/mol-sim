@@ -247,3 +247,7 @@ text = "Modo Claro"
 layout_mode = 2
 button_pressed = true
 text = "Modo Escuro"
+
+[node name="CheckScreenShake" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionAppearance/SectionAppearanceContent" unique_id=1712551924]
+layout_mode = 2
+text = "Tremor da tela"

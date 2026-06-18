@@ -304,3 +304,13 @@ func _apply_theme():
 	if bg and ThemeManager:
 		# Read the background color directly from the ThemeManager
 		bg.color = ThemeManager.bg_color 
+
+func _on_screen_shake_toggled(toggled_on: bool):
+	var rules = SimulationManager.current_rules
+	if rules:
+		rules.enable_screen_shake = toggled_on
+		
+	# Tell the camera to update its internal state
+	var cam = get_node("/root/Main/Camera2D") # Adjust path
+	if cam:
+		cam.is_shake_enabled = toggled_on

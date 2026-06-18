@@ -30,6 +30,8 @@ enum ComplexityLevel {
 @export var shake_approve_strength: float = 0.25
 @export var shake_approve_decay: float = 10.0
 
+@export var enable_screen_shake: bool = true
+
 var is_running: bool = false
 var mode: String = "DNA Repl" # Kept for backward compatibility
 
