@@ -59,24 +59,29 @@ func _draw():
 		# Only draw if bases are close together
 		if b1.position.distance_to(b2.position) < 100.0:
 			
-			var dist = current_helicase_x - b1.original_pos.x
-			var progress = clamp(dist / PEEL_WIDTH, 0.0, 1.0)
+			# FIX: Calculate the dynamic offset for BOTH b1 and b2 individually!
+			var dist1 = current_helicase_x - b1.original_pos.x
+			var progress1 = clamp(dist1 / PEEL_WIDTH, 0.0, 1.0)
+			var start_offset1 = -BASE_RADIUS if is_top_strand else BASE_RADIUS
+			var end_offset1 = BASE_RADIUS if is_top_strand else -BASE_RADIUS
+			var offset1 = lerp(start_offset1, end_offset1, progress1)
 			
-			var start_offset = -BASE_RADIUS if is_top_strand else BASE_RADIUS
-			var end_offset = BASE_RADIUS if is_top_strand else -BASE_RADIUS
-			var tangential_offset = lerp(start_offset, end_offset, progress)
+			var dist2 = current_helicase_x - b2.original_pos.x
+			var progress2 = clamp(dist2 / PEEL_WIDTH, 0.0, 1.0)
+			var start_offset2 = -BASE_RADIUS if is_top_strand else BASE_RADIUS
+			var end_offset2 = BASE_RADIUS if is_top_strand else -BASE_RADIUS
+			var offset2 = lerp(start_offset2, end_offset2, progress2)
 			
-			var p1 = Vector2(b1.position.x, b1.position.y + tangential_offset)
-			var p2 = Vector2(b2.position.x, b2.position.y + tangential_offset)
+			# Apply the specific offsets to each point
+			var p1 = Vector2(b1.position.x, b1.position.y + offset1)
+			var p2 = Vector2(b2.position.x, b2.position.y + offset2)
 			
-			# NEW: Calculate the angle of the line segment
+			# Calculate the angle and midpoint based on the correctly offset points
 			var angle = (p2 - p1).angle()
-			
 			var mid_point = (p1 + p2) / 2.0
 			
 			var arrow_points = PackedVector2Array()
 			for p in arrow_shape:
-				# NEW: Rotate the arrow shape to match the line angle
 				arrow_points.append(mid_point + p.rotated(angle))
 				
 			draw_colored_polygon(arrow_points, arrow_color)

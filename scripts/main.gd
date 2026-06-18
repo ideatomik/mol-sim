@@ -255,24 +255,6 @@ func _spawn_dna(rules):
 	else:
 		print("  -> SKIPPING FREE BASES (Disabled in rules)")
 		
-	# ==========================================
-	# CAMERA TEST SEQUENCE
-	# Runs AFTER all enzymes and bases have spawned!
-	# ==========================================
-	if helicase_ref and camera:
-		# 1. Wait 3 seconds in Level 0, then enter Level 1 (Context)
-		await get_tree().create_timer(3.0).timeout
-		if camera.has_method("calculate_helicase_level_1_height"):
-			var h1 = camera.calculate_helicase_level_1_height(top_strand, bottom_strand)
-			camera.setup_level_1(helicase_ref, h1, 1) # Explicitly pass level 1
-			
-		# 2. Wait 3 seconds in Level 1, then enter Level 2 (Action Zone)
-		await get_tree().create_timer(3.0).timeout
-		if camera.has_method("calculate_helicase_level_2_height"):
-			var h2 = camera.calculate_helicase_level_2_height(top_strand, bottom_strand)
-			camera.setup_level_1(helicase_ref, h2, 2) # Explicitly pass level 2!
-	# ==========================================
-		
 	print("--- FINISHED _spawn_dna ---")
 
 func _get_complement(base: String) -> String:

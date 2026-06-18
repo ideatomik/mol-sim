@@ -2,6 +2,8 @@
 
 [ext_resource type="Script" uid="uid://vf64ilchux4n" path="res://scripts/ui_controller.gd" id="1_dj8aq"]
 
+[sub_resource type="ButtonGroup" id="ButtonGroup_rt4gy"]
+
 [node name="UIRoot" type="Control" unique_id=256846932]
 layout_mode = 3
 anchors_preset = 0
@@ -194,26 +196,31 @@ layout_mode = 2
 
 [node name="CheckHighlightHelicase" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=860190002]
 layout_mode = 2
+button_group = SubResource("ButtonGroup_rt4gy")
 text = "Helicase
 "
 
 [node name="CheckHighlightLeading" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=483163942]
 layout_mode = 2
+button_group = SubResource("ButtonGroup_rt4gy")
 text = "Polimerase Líder
 "
 
 [node name="CheckHighlightLagging" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=414894708]
 layout_mode = 2
+button_group = SubResource("ButtonGroup_rt4gy")
 text = "Polimerase Tardia
 "
 
 [node name="CheckHighlightLigase" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=680479134]
 layout_mode = 2
+button_group = SubResource("ButtonGroup_rt4gy")
 text = "Ligase
 "
 
 [node name="CheckHighlightPrimase" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionHighlight/SectionHighlightContent/EnzimesHighlightContent" unique_id=1297836667]
 layout_mode = 2
+button_group = SubResource("ButtonGroup_rt4gy")
 text = "Primase
 "
 

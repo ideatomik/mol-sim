@@ -150,47 +150,49 @@ func calculate_helicase_level_2_height(top: DnaStrand, bottom: DnaStrand) -> flo
 
 # Called every frame to update the camera position
 func _process(delta):
-		# DEBUG: Print camera state every 2 seconds to avoid spam
-	if Engine.get_physics_frames() % 120 == 0:
-		print("[%s] CAM PROCESS | Level: %d | Zoom: %s | CamPos: %s | TargetPos: %s" % [
-			Time.get_ticks_msec(), 
-			current_zoom_level, 
-			zoom, 
-			global_position, 
-			target_node.global_position if target_node else "None"
-		])
+	# ==========================================
+	# DYNAMIC TARGET SWITCHING
+	# ==========================================
+	if current_zoom_level > 0:
+		var new_target = _get_highlighted_enzyme()
+		
+		if new_target != target_node:
+			target_node = new_target
+			
+			# FIX: If user unselected the enzyme, zoom back out to Level 0!
+			if not target_node:
+				print("Camera: No enzyme highlighted. Returning to Level 0.")
+				if top_strand and bottom_strand:
+					setup_and_frame_level_0(top_strand, bottom_strand)
+				return # Stop tracking logic for this frame
+				
+			print("Camera: Switched target to ", target_node.name)
+	# ==========================================
+
 	if target_node:
-		# 1. ALWAYS lock the camera's Y position to the center of the DNA strands
-		if top_strand and bottom_strand and top_strand.bases.size() > 0:
-			var dna_center_y = (top_strand.bases[0].global_position.y + bottom_strand.bases[0].global_position.y) / 2.0
-			global_position.y = lerp(global_position.y, dna_center_y, 5.0 * delta)
+		# 1. Lock the camera's Y position to the SELECTED ENZYME
+		global_position.y = lerp(global_position.y, target_node.global_position.y, 5.0 * delta)
 
 		# 2. Handle X tracking based on the zoom level
 		if current_zoom_level == 1:
-			# LEVEL 1: Context Tracking (Keep Polymerases in frame)
-			var helicase_x = target_node.global_position.x
+			# LEVEL 1: Context Tracking
+			var target_x = target_node.global_position.x
 			var polymerases = get_tree().get_nodes_in_group("polymerases")
 			
-			var min_x = helicase_x
-			var max_x = helicase_x
+			var min_x = target_x
+			var max_x = target_x
 			
-			# Find the leftmost and rightmost enzymes in the complex
 			for pol in polymerases:
 				if pol.global_position.x < min_x:
 					min_x = pol.global_position.x
 				if pol.global_position.x > max_x:
 					max_x = pol.global_position.x
 					
-			# Calculate the center of the replication complex
 			var center_x = (min_x + max_x) / 2.0
-			
-			# Smoothly glide the camera to that center
 			global_position.x = lerp(global_position.x, center_x, 5.0 * delta)
 			
 		else:
-			# LEVELS 2 & 3: Tight Tracking (Focus only on the Helicase)
-			# We use lerp here too so the camera smoothly glides over to the Helicase
-			# instead of snapping rigidly when you switch zoom levels.
+			# LEVELS 2 & 3: Tight Tracking
 			global_position.x = lerp(global_position.x, target_node.global_position.x, 5.0 * delta)
 
 	# Handle Screen Shake
@@ -216,3 +218,132 @@ func trigger_shake(base_strength: float, decay: float = 10.0):
 	var final_strength = base_strength * zoom_multiplier
 	shake_strength = max(shake_strength, final_strength)
 	shake_decay = decay
+
+# ==========================================
+# SCROLL WHEEL ZOOM CONTROLS
+# ==========================================
+
+func _unhandled_input(event):
+	# Listen for scroll wheel clicks
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			_step_zoom(1)  # Zoom In
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			_step_zoom(-1) # Zoom Out
+
+func _step_zoom(direction: int):
+	var target = _get_highlighted_enzyme()
+	
+	#Prevent crash if no enzyme is selected
+	if not target:
+		return 
+	
+	if direction > 0: # Zooming IN
+		if current_zoom_level < 3:
+			var next_level = current_zoom_level + 1
+			var height = 300.0 # Default fallback
+			
+			# HELICASE MATH
+			if target.is_in_group("helicases"):
+				if next_level == 1 and has_method("calculate_helicase_level_1_height"):
+					height = calculate_helicase_level_1_height(top_strand, bottom_strand)
+				elif next_level == 2 and has_method("calculate_helicase_level_2_height"):
+					height = calculate_helicase_level_2_height(top_strand, bottom_strand)
+				elif next_level == 3 and has_method("calculate_both_strands_height"):
+					height = calculate_both_strands_height() # <-- UPDATED
+					
+			# POLYMERASE MATH
+			elif target.is_in_group("polymerases"):
+				if next_level == 1 and has_method("calculate_polymerase_level_1_height"):
+					height = calculate_polymerase_level_1_height(target)
+				elif next_level == 2 and has_method("calculate_polymerase_level_2_height"):
+					height = calculate_polymerase_level_2_height(target)
+				elif next_level == 3 and has_method("calculate_both_strands_height"):
+					height = calculate_both_strands_height() # <-- UPDATED
+					
+			# Apply the new level
+			setup_level_1(target, height, next_level)
+				
+	else: # Zooming OUT
+		if current_zoom_level > 0:
+			var prev_level = current_zoom_level - 1
+			if prev_level == 0:
+				# Return to Overview
+				if top_strand and bottom_strand:
+					setup_and_frame_level_0(top_strand, bottom_strand)
+			else:
+				# Step down to previous level (using placeholder height for now)
+				setup_level_1(target, 300.0, prev_level) 
+
+# Finds which enzyme is currently highlighted in the UI
+func _get_highlighted_enzyme() -> Node2D:
+	if not HighlightManager: 
+		return null
+		
+	var active_groups = HighlightManager.current_active_groups
+	
+	# Priority 1: Helicase
+	if active_groups.has("helicase_highlight"):
+		return get_tree().get_first_node_in_group("helicases")
+		
+	# Priority 2: Polymerases
+	var polys = get_tree().get_nodes_in_group("polymerases")
+	for pol in polys:
+		if active_groups.has("leading_poly_highlight") and pol.is_leading:
+			return pol
+		if active_groups.has("lagging_poly_highlight") and not pol.is_leading:
+			return pol
+			
+	# Priority 3: Ligase (Assuming the group name is "ligase_highlight")
+	var ligases = get_tree().get_nodes_in_group("ligases")
+	for lig in ligases:
+		if active_groups.has("ligase_highlight"):
+			return lig
+			
+	return null
+
+# ==========================================
+# POLYMERASE ZOOM PROFILES
+# ==========================================
+
+# Level 1: Context (Polymerase + Template Strand)
+func calculate_polymerase_level_1_height(target: Node2D) -> float:
+	if not target or not target.template_strand:
+		return 250.0 # Fallback
+		
+	# Distance from the polymerase lane to the template strand (usually 120px)
+	var distance_to_strand = abs(target.position.y - target.template_strand.bases[0].position.y)
+	
+	# Add the thickness of the strand and bases (approx 40px)
+	return distance_to_strand + 40.0
+
+# Level 2: Action Zone (Polymerase + Target Base)
+func calculate_polymerase_level_2_height(target: Node2D) -> float:
+	if not target or not target.template_strand:
+		return 120.0 # Fallback
+		
+	# We want to see the polymerase and the immediate base it's hovering over.
+	# This is roughly the distance from the polymerase center to the strand center.
+	var distance_to_strand = abs(target.position.y - target.template_strand.bases[0].position.y)
+	
+	# Tighter frame, just the enzyme and the immediate binding site
+	return distance_to_strand + 20.0
+
+# Level 3: Microscope (The Base Pairing)
+func calculate_polymerase_level_3_height(target: Node2D) -> float:
+	# Extreme close-up. We just want to see two bases pairing up.
+	# Two bases are roughly 30px tall each, plus a little padding.
+	return 60.0 
+
+# Calculates the height needed to see BOTH the top and bottom DNA strands
+# Uses original_pos to ignore the dynamic "peeling" animation
+func calculate_both_strands_height() -> float:
+	if not top_strand or not bottom_strand or top_strand.bases.size() == 0:
+		return 150.0 # Fallback
+		
+	# FIX: Use original_pos.y instead of global_position.y
+	var top_y = top_strand.bases[0].original_pos.y
+	var bottom_y = bottom_strand.bases[0].original_pos.y
+	
+	# Distance between the original strand centers + 40px of padding
+	return (bottom_y - top_y) + 40.0
