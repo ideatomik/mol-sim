@@ -148,6 +148,9 @@ func _process(delta):
 		
 		# Fast, smooth alpha tweening
 		modulate.a = lerp(modulate.a, target_alpha, delta * 10.0)
+		
+		# Force labels to always stay horizontal
+		rotation = 0
 
 func _integrate_forces(physics_state):
 	if self.state != State.FREE: 
