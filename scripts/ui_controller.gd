@@ -110,6 +110,15 @@ func _ready():
 	dark_mode_button.toggled.connect(_on_dark_mode_toggled)
 	
 	# 7. Initial Sync & State
+	# 7. Initial Sync & State
+	# FIX: Apply the default complexity's preset BEFORE syncing the UI.
+	# Without this, rules starts from its raw @export defaults (e.g.
+	# enable_ligase = true) instead of the FULL_REPLICATION preset's values,
+	# so the checkbox could show/restore a state that doesn't match the
+	# preset until the dropdown was manually changed at least once.
+	var rules = SimulationManager.current_rules
+	if rules:
+		rules.apply_preset()
 	_sync_ui_to_rules()
 	_apply_initial_collapse_states()
 	

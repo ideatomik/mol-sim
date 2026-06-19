@@ -16,6 +16,11 @@ func _ready():
 
 func _process(delta):
 	# NEW: Physically move the active lagging strand bases into the loop shape
+	# ORDERING NOTE: this reads partner_base.position / .is_on_loop, which are
+	# set by dna_strand.gd's update_peel() -- called from helicase.gd's
+	# _physics_process(). Godot runs all physics steps before _process() each
+	# frame, so this is safe as-is, but if update_peel()'s caller ever moves
+	# to _process(), this would need to read one frame behind instead.
 	_update_active_fragment_positions()
 	
 	queue_redraw()
@@ -26,7 +31,8 @@ func _update_active_fragment_positions():
 	
 	for base in all_bases:
 		if base.state == NitrogenBase.State.BOUND and base.partner_base != null:
-			if base.position.y > base.partner_base.position.y:
+			var parent_strand = base.partner_base.get_parent()
+			if parent_strand is DnaStrand and not parent_strand.is_top_strand:
 				bottom_new_bases.append(base)
 				
 	# FIX: Sort by the TEMPLATE base's original X position. 
@@ -36,59 +42,37 @@ func _update_active_fragment_positions():
 	if bottom_new_bases.size() < 2:
 		return
 
-	# Find the "Active" Fragment
-	var active_start_index = 0
-	for i in range(bottom_new_bases.size() - 1):
-		var b1 = bottom_new_bases[i]
-		var b2 = bottom_new_bases[i+1]
-		if b1.position.distance_to(b2.position) >= 50.0 and not sealed_gap_indices.has(i):
-			active_start_index = i + 1 
+	# TROMBONE LOOP (synced to template): rather than computing a second,
+	# independent loop curve, every new-strand base simply rides alongside
+	# its template partner_base -- which dna_strand.gd's update_peel() has
+	# already positioned correctly on the real loop curve. This guarantees
+	# the new strand and template strand always agree, since they're the
+	# same physical loop (base-paired the whole way), not two approximations
+	# of it. See partner_base.is_on_loop / partner_base.loop_normal_angle.
+	var on_loop_count = 0
+	for base in bottom_new_bases:
+		var partner = base.partner_base
+		if partner.is_on_loop:
+			on_loop_count += 1
 
-	if active_start_index >= bottom_new_bases.size():
-		return
+	# DIAGNOSTIC: same 2s cadence as the other debug prints. Confirms whether
+	# new-strand bases are actually inheriting is_on_loop from their template
+	# partner at all -- if on_loop_count stays 0 while dna_strand.gd reports
+	# loop:N > 0, the linkage between the two scripts is broken somewhere.
+	if Engine.get_physics_frames() % 120 == 0:
+		print("[%s] NEWSTRAND DEBUG | bottom_new_bases:%d on_loop:%d" % [
+			Time.get_ticks_msec(), bottom_new_bases.size(), on_loop_count
+		])
 
-	var active_bases = bottom_new_bases.slice(active_start_index, bottom_new_bases.size())
-
-	var lagging_poly = null
-	for pol in get_tree().get_nodes_in_group("polymerases"):
-		if not pol.is_leading: 
-			lagging_poly = pol
-			break
-
-	if not lagging_poly or active_bases.size() < 2:
-		return
-
-	var curve = Curve2D.new()
-	curve.bake_interval = 2.0 
-	var y_offset = BASE_RADIUS 
-	
-	# ANCHOR 1: The rightmost base (latest bound)
-	var p_right = Vector2(active_bases[-1].position.x, active_bases[-1].position.y + y_offset)
-	
-	# ANCHOR 2: The Polymerase factory
-	var p_bottom = Vector2(lagging_poly.position.x, lagging_poly.position.y) 
-	
-	# ANCHOR 3: The leftmost base of the active fragment
-	var p_left = Vector2(active_bases[0].position.x, active_bases[0].position.y + y_offset)
-
-	# Handles (Fixed to prevent twisting)
-	curve.add_point(p_right, Vector2(-40, 0), Vector2(40, 0))
-	curve.add_point(p_bottom, Vector2(50, 0), Vector2(-50, 0)) 
-	curve.add_point(p_left, Vector2(40, 0), Vector2(-40, 0))
-
-	# MOVE THE BASES TO THE CURVE
-	var total_len = curve.get_baked_length()
-	var segment_len = total_len / max(1, active_bases.size() - 1)
-	
-	for i in range(active_bases.size()):
-		var dist = segment_len * i
-		var t = curve.sample_baked_with_rotation(dist)
-		
-		# Update position (offset so the backbone line passes through the center)
-		active_bases[i].position = t.origin - Vector2(0, y_offset)
-		
-		# FIX: NO ROTATION! We leave the rotation alone so labels stay horizontal.
-
+	for base in bottom_new_bases:
+		var partner = base.partner_base
+		if partner.is_on_loop:
+			# On the curved part of the loop: offset outward along the
+			# curve's local normal instead of a flat vertical offset, so the
+			# new strand hugs the curve rather than cutting across it.
+			var normal = Vector2.RIGHT.rotated(partner.loop_normal_angle)
+			base.position = partner.position + normal * BASE_RADIUS
+			
 func _draw():
 	# 1. GATHER AND SORT BASES
 	# We find all bound bases in the scene and separate them into top (leading) 
@@ -100,7 +84,8 @@ func _draw():
 	
 	for base in all_bases:
 		if base.state == NitrogenBase.State.BOUND and base.partner_base != null:
-			if base.position.y < base.partner_base.position.y:
+			var parent_strand = base.partner_base.get_parent()
+			if parent_strand is DnaStrand and parent_strand.is_top_strand:
 				top_new_bases.append(base)
 			else:
 				bottom_new_bases.append(base)
@@ -225,39 +210,38 @@ func _draw_lagging_strand_loop(bases: Array[NitrogenBase], y_offset: float, arro
 			draw_line(mid_point - Vector2(nick_length, 0), mid_point + Vector2(nick_length, 0), nick_color, width * 0.75, true)
 
 	# Draw the Active Fragment (The Loop)
+	# NOTE: active_bases are already correctly positioned by
+	# _update_active_fragment_positions(), which derives each base's
+	# position from its template partner (which itself rides the real
+	# loop curve computed in dna_strand.gd). So we just connect the dots
+	# here -- no need to compute a second, independent curve.
 	if active_start_index < bases.size():
 		var active_bases = bases.slice(active_start_index, bases.size())
 		
 		if active_bases.size() > 1:
-			var curve = Curve2D.new()
-			curve.bake_interval = 2.0 
-			
-			# Anchors match the positioning logic exactly
-			var p_right = Vector2(active_bases[-1].position.x, active_bases[-1].position.y + y_offset)
-			var p_bottom = Vector2(active_bases[int(active_bases.size()/2)].position.x, active_bases[int(active_bases.size()/2)].position.y + 60.0) 
-			var p_left = Vector2(active_bases[0].position.x, active_bases[0].position.y + y_offset)
-
-			# Handles (Fixed to prevent twisting)
-			curve.add_point(p_right, Vector2(-40, 0), Vector2(40, 0))
-			curve.add_point(p_bottom, Vector2(50, 0), Vector2(-50, 0))
-			curve.add_point(p_left, Vector2(40, 0), Vector2(-40, 0))
-
-			var points = curve.get_baked_points()
-			for i in range(points.size() - 1):
-				draw_line(points[i], points[i+1], backbone_color, width, true)
-
-			# Draw arrows along the curve
-			var total_len = curve.get_baked_length()
-			var segment_len = total_len / max(1, active_bases.size() - 1)
-			
 			for i in range(active_bases.size() - 1):
-				var dist = segment_len * (i + 0.5) 
-				var t = curve.sample_baked_with_rotation(dist)
+				var b1 = active_bases[i]
+				var b2 = active_bases[i+1]
 				
+				# Offset perpendicular to the segment direction (not a flat
+				# y_offset) so the line hugs the curve correctly even while
+				# the bases are going around the bend of the loop.
+				var partner1 = b1.partner_base
+				var partner2 = b2.partner_base
+				var p1 = b1.position
+				var p2 = b2.position
+				if partner1 and partner1.is_on_loop:
+					p1 = partner1.position + Vector2.RIGHT.rotated(partner1.loop_normal_angle) * BASE_RADIUS
+				if partner2 and partner2.is_on_loop:
+					p2 = partner2.position + Vector2.RIGHT.rotated(partner2.loop_normal_angle) * BASE_RADIUS
+				
+				draw_line(p1, p2, backbone_color, width, true)
+				
+				var angle = (p2 - p1).angle()
+				var mid_point = (p1 + p2) / 2.0
 				var arrow_points = PackedVector2Array()
 				for p in arrow_shape:
-					# We keep the arrows rotated so they follow the flow of the backbone
-					arrow_points.append(t.origin + p.rotated(t.get_rotation()))
+					arrow_points.append(mid_point + p.rotated(angle))
 				draw_colored_polygon(arrow_points, arrow_color)
 
 # Called by Ligase when it successfully welds a gap.
@@ -275,7 +259,8 @@ func get_unsealed_gaps() -> Array[Dictionary]:
 	# Gather and sort bottom strand bases (Lagging strand)
 	for base in all_bases:
 		if base.state == NitrogenBase.State.BOUND and base.partner_base != null:
-			if base.position.y > base.partner_base.position.y:
+			var parent_strand = base.partner_base.get_parent()
+			if parent_strand is DnaStrand and not parent_strand.is_top_strand:
 				bottom_new_bases.append(base)
 				
 	bottom_new_bases.sort_custom(func(a, b): return a.position.x < b.position.x)

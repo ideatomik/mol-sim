@@ -116,7 +116,6 @@ text = "Polimerase Fita Tardia"
 
 [node name="CheckLigase" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent" unique_id=1972202653]
 layout_mode = 2
-button_pressed = true
 text = "Ligase"
 
 [node name="CheckBases" type="CheckButton" parent="MarginContainer/VBoxContainer/CollapsibleContent/SectionEnzymes/EnzymesContent" unique_id=170503777]

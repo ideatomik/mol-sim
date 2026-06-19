@@ -12,10 +12,20 @@ var current_target = null
 var move_tween: Tween
 var current_fragment_target_index: int = -1
 
+# FACTORY MODEL: Lagging polymerase stays tethered to the replisome and only
+# advances in discrete steps when an Okazaki fragment completes, rather than
+# continuously chasing the helicase (which is what the leading polymerase does).
+var factory_anchor_x: float = 0.0
+var factory_anchor_initialized: bool = false
+var _last_supply_check_frame: int = -1
+var anchor_tween: Tween
+
 const LABEL_W: float = 110.0
 const LABEL_H: float = 30.0
 const RADIUS: float = 15.0
 const MOVE_SPEED: float = 120.0
+const FACTORY_OFFSET: float = 150.0 # Distance the anchor trails behind the helicase
+const FRAGMENT_ADVANCE: float = 6 * 35.0 # Okazaki fragment length (6 bases * spacing), matches bases_bound_in_fragment threshold
 
 func _ready():
 	add_to_group("polymerases")
@@ -68,6 +78,12 @@ func _physics_process(delta):
 	var helicase_x = helicase.position.x if helicase else 99999.0 
 	var helicase_y = helicase.position.y if helicase else 0.0
 
+	# FACTORY MODEL: Set the lagging polymerase's initial anchor once we have a
+	# real helicase position to anchor relative to.
+	if not is_leading and not factory_anchor_initialized and helicase:
+		factory_anchor_x = helicase_x - FACTORY_OFFSET
+		factory_anchor_initialized = true
+
 	if is_processing or is_detaching:
 		return
 
@@ -77,6 +93,14 @@ func _physics_process(delta):
 				
 		if target_base != null:
 			is_waiting_for_binding = true
+
+			# REDIRECT MECHANIC: we know exactly which base type is needed
+			# right now -- check if one is already organically nearby; if
+			# not, redirect (or as a rare fallback, spawn) one instead of
+			# leaving the polymerase to wait on pure Brownian luck.
+			var needed_type = _get_complement(target_base.base_type)
+			_ensure_nucleotide_supply(needed_type)
+			
 			if current_target != target_base:
 				if current_target != null:
 					current_target.is_target = false
@@ -101,10 +125,27 @@ func _physics_process(delta):
 					_trigger_detachment()
 					return 
 				
-				var follow_x = helicase_x - 40.0
 				var follow_y = helicase_y + (-120.0 if template_strand.is_top_strand else 120.0)
-				position.x = move_toward(position.x, follow_x, MOVE_SPEED * 1.5 * delta)
-				position.y = move_toward(position.y, follow_y, MOVE_SPEED * 1.5 * delta)
+
+				if is_leading:
+					# LEADING STRAND: continuously chases the helicase, no looping needed.
+					var follow_x = helicase_x - 40.0
+					position.x = move_toward(position.x, follow_x, MOVE_SPEED * 1.5 * delta)
+					position.y = move_toward(position.y, follow_y, MOVE_SPEED * 1.5 * delta)
+				else:
+					# LAGGING STRAND (Factory/Trombone model): stays tethered near
+					# factory_anchor_x instead of tracking the helicase every frame.
+					# The anchor itself only advances in discrete steps (see
+					# _advance_factory_anchor), so the template loops out between
+					# this position and the helicase as the fork progresses.
+					# JOLT FIX: while the anchor tween is running, let it own
+					# position.x exclusively -- move_toward and the tween writing
+					# to the same property on the same frame was causing the jolt.
+					var anchor_tween_running = anchor_tween != null and anchor_tween.is_running()
+					if not anchor_tween_running:
+						var clamped_anchor_x = min(factory_anchor_x, helicase_x - 20.0)
+						position.x = move_toward(position.x, clamped_anchor_x, MOVE_SPEED * delta)
+					position.y = move_toward(position.y, follow_y, MOVE_SPEED * delta)
 
 func _trigger_detachment():
 	if is_detaching:
@@ -181,9 +222,31 @@ func _on_binding_complete(nucleotide, target_base, snap_pos):
 	if not is_leading and bases_bound_in_fragment >= 6:
 		bases_bound_in_fragment = 0
 		current_fragment_target_index = -1
+		# POST-HELICASE FIX: only advance the anchor if the helicase is still
+		# active -- if it's faded/detached, the replisome no longer exists so
+		# there's no biological reason to keep synthesizing or moving forward.
+		var helicase = get_tree().get_first_node_in_group("helicases")
+		if helicase and not is_detaching:
+			_advance_factory_anchor()
 		
 	is_processing = false
 	is_waiting_for_binding = true
+
+func _advance_factory_anchor():
+	# FACTORY MODEL: Called when an Okazaki fragment completes. The anchor
+	# steps forward by one fragment length, and the polymerase visually
+	# slides to the new position rather than snapping instantly -- this
+	# reads as the discrete "fragment finished, loop releasing" event.
+	factory_anchor_x += FRAGMENT_ADVANCE
+	
+	if anchor_tween:
+		anchor_tween.kill()
+	
+	var follow_y = position.y
+	var target_pos = Vector2(factory_anchor_x, follow_y)
+	
+	anchor_tween = create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	anchor_tween.tween_property(self, "position", target_pos, 0.4)
 
 func _get_target_base(exposed: Array):
 	if is_leading:
@@ -193,10 +256,23 @@ func _get_target_base(exposed: Array):
 		return null
 	else:
 		if current_fragment_target_index == -1:
-			for i in range(exposed.size() - 1, -1, -1):
+			# FRAGMENT-START FIX: previously this scanned from the absolute
+			# rightmost exposed base (closest to the helicase), which could be
+			# far ahead of where the polymerase is actually anchored -- causing
+			# it to tween far forward to grab a base near the fork, then drift
+			# back. Instead, start the new fragment from the base nearest to
+			# factory_anchor_x (the polymerase's actual position), since that's
+			# biologically where the next Okazaki fragment begins -- right where
+			# the previous one just finished, not wherever has newly unzipped.
+			var best_index = -1
+			var best_dist = INF
+			for i in range(exposed.size()):
 				if not exposed[i].is_bound and exposed[i].state == NitrogenBase.State.TEMPLATE:
-					current_fragment_target_index = i
-					break
+					var dist = abs(exposed[i].original_pos.x - factory_anchor_x)
+					if dist < best_dist:
+						best_dist = dist
+						best_index = i
+			current_fragment_target_index = best_index
 		
 		if current_fragment_target_index != -1 and current_fragment_target_index < exposed.size():
 			if not exposed[current_fragment_target_index].is_bound:
@@ -209,11 +285,85 @@ func _get_target_base(exposed: Array):
 					current_fragment_target_index -= 1
 				
 				current_fragment_target_index = -1
-				for i in range(exposed.size() - 1, -1, -1):
+				# Same anchor-relative fix as above: when a fragment is fully
+				# exhausted and we need to find the start of the NEXT one,
+				# search from factory_anchor_x outward rather than jumping to
+				# the absolute rightmost exposed base near the helicase.
+				var best_index = -1
+				var best_dist = INF
+				for i in range(exposed.size()):
 					if not exposed[i].is_bound and exposed[i].state == NitrogenBase.State.TEMPLATE:
-						current_fragment_target_index = i
-						return exposed[i]
+						var dist = abs(exposed[i].original_pos.x - factory_anchor_x)
+						if dist < best_dist:
+							best_dist = dist
+							best_index = i
+				if best_index != -1:
+					current_fragment_target_index = best_index
+					return exposed[best_index]
 	return null
+
+func _ensure_nucleotide_supply(needed_type: String):
+	# THROTTLE: this does a group scan, which is cheap but not free -- no
+	# need to run it more than ~5x/sec per polymerase, since "is a base
+	# nearby" doesn't meaningfully change frame-to-frame.
+	var frame = Engine.get_physics_frames()
+	if frame - _last_supply_check_frame < 6:
+		return
+	_last_supply_check_frame = frame
+
+	var free_bases = get_tree().get_nodes_in_group("free_nucleotides")
+	var rules = SimulationManager.current_rules
+	var radius = rules.binding_distance if rules else 80.0
+
+	# 1. Is a correct-type base already organically within binding range?
+	# If so, do nothing -- let natural Brownian motion handle it.
+	for base in free_bases:
+		if base.base_type == needed_type and not base.is_target:
+			if global_position.distance_to(base.global_position) < radius:
+				return
+
+	# 2. REDIRECT: find the nearest correct-type base anywhere in the pool
+	# and nudge it toward us instead of waiting on luck.
+	var nearest: NitrogenBase = null
+	var nearest_dist: float = INF
+	for base in free_bases:
+		if base.base_type == needed_type and not base.is_redirecting:
+			var d = global_position.distance_to(base.global_position)
+			if d < nearest_dist:
+				nearest_dist = d
+				nearest = base
+
+	if nearest:
+		nearest.start_redirect(global_position)
+		return
+
+	# 3. FALLBACK (rare): no correct-type base exists anywhere in the pool
+	# right now. Spawn one, hidden behind an existing wrong-type base so it
+	# doesn't visibly pop into existence.
+	_spawn_hidden_nucleotide(needed_type, free_bases)
+
+func _spawn_hidden_nucleotide(needed_type: String, free_bases: Array):
+	if not nitrogen_base_scene:
+		return
+
+	# Find a decoy: any existing free base (any type) to spawn behind.
+	# Prefer one reasonably close to us so the new base's approach reads
+	# naturally once it separates from the decoy.
+	var decoy_pos = global_position + Vector2(randf_range(-150, 150), randf_range(-150, 150))
+	var nearest_dist: float = INF
+	for base in free_bases:
+		var d = global_position.distance_to(base.global_position)
+		if d < nearest_dist:
+			nearest_dist = d
+			decoy_pos = base.global_position
+
+	var new_base = nitrogen_base_scene.instantiate()
+	new_base.base_type = needed_type
+	new_base.state = NitrogenBase.State.FREE
+	new_base.position = decoy_pos
+	new_base.add_to_group("sim_objects")
+	get_parent().add_child(new_base)
+	new_base.start_redirect(global_position)
 
 func _spawn_marker(marker_type: String, pos_x: float, pos_y: float):
 	var marker = nitrogen_base_scene.instantiate()

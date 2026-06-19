@@ -15,13 +15,13 @@ enum ComplexityLevel {
 @export var enable_helicase: bool = true
 @export var enable_leading_polymerase: bool = true
 @export var enable_lagging_polymerase: bool = true
-@export var enable_ligase: bool = true
+@export var enable_ligase: bool = false
 @export var spawn_free_bases: bool = true
 @export var show_all_free_bases: bool = false # NEW: Toggle for constant free base visibility
 
 @export_group("Environment")
 @export var temperature: float = 37.0 # Celsius
-@export var free_nucleotide_count: int = 200
+@export var free_nucleotide_count: int = 320
 @export var binding_distance: float = 80.0 # FIX: Restored so nitrogen_base.gd can check proximity
 
 @export_group("Screen Shake")
@@ -63,7 +63,7 @@ func apply_preset():
 			enable_helicase = true
 			enable_leading_polymerase = true
 			enable_lagging_polymerase = true
-			enable_ligase = true
+			enable_ligase = false #upalala
 			spawn_free_bases = true
 
 # Helper to convert Celsius to simulation speed using an exponential curve
