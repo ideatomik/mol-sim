@@ -89,7 +89,7 @@ var baseline_switch_car_index: int = -1 # which car triggered it, for the debug 
 # BACKBONE_SMOOTHING scales the estimated tangent at each point: lower =
 # gentle/tight curve hugging actual positions, higher = loose/bulgy curve.
 # Start gentle per the design discussion; easy to bump up to compare.
-const BACKBONE_SMOOTHING: float = 0.15
+const BACKBONE_SMOOTHING: float = 0.06 # V30: tightened from 0.15 -- the progress-space rewrite fixed the self-crossing knot, but the curve still rides visibly outside the true path through the bend (screenshots show a real gap between magenta and the black reference curve). Testing whether a tighter value closes that gap.
 const BACKBONE_SAMPLES_PER_SEGMENT: int = 12 # density of the baked curve between each pair of points
 const BACKBONE_OFFSET_DISTANCE: float = 12.0 # half the car's 24px size -- puts the line at the car's edge, not through its center
 
@@ -284,16 +284,24 @@ func _process(delta):
 			line_parts.append("%d:%.0f/%s" % [i, cars[i].position.y, CarTransferState.keys()[car_transfer_state[i]].substr(0, 1)])
 		print("[%s]   cars (idx:y/state): %s" % [Time.get_ticks_msec(), " ".join(line_parts)])
 
-	# V25: BACKBONE TEST -- purely additive, read-only. Gathers each car's
-	# CURRENT live position (same data the debug log above already reads),
-	# in array index order (0..23, matching fixed left-to-right spawn
-	# order), and draws a smooth curve through them. Never writes to any
-	# car, never touches helicase_x/factory_x/pulse state -- just observes
-	# and draws.
-	var car_positions: Array = []
+	# V25: BACKBONE TEST -- purely additive, read-only.
+	# V29: PROGRESS-SPACE REWRITE. Previous versions computed tangent
+	# direction/magnitude from raw screen-space (x,y) distances, which
+	# broke at the loop's bottom turn -- a single x-value can correspond
+	# to TWO different y-positions there (descending vs ascending side),
+	# making 2D distance an unreliable, ambiguous measure of true path
+	# distance. Each car's .progress is a genuinely one-dimensional,
+	# monotonic coordinate along the ACTUAL curve the cars ride -- no
+	# ambiguity, by construction. Now passing (progress, position) pairs;
+	# tangent magnitude is capped using PROGRESS differences, not 2D
+	# distance, while the position itself is still used for where to draw.
+	# Natural array order (cars[0]..cars[23]) already matches true
+	# progress order (confirmed: spawn order is correct, x-sorting was the
+	# actual mistake in the previous attempt) -- no sorting needed.
+	var car_data: Array = []
 	for car in cars:
-		car_positions.append(car.position)
-	backbone_line.points = _build_smooth_backbone(car_positions, BACKBONE_SMOOTHING, BACKBONE_OFFSET_DISTANCE)
+		car_data.append({"progress": car.progress, "position": car.position})
+	backbone_line.points = _build_smooth_backbone(car_data, BACKBONE_SMOOTHING, BACKBONE_OFFSET_DISTANCE)
 
 func _rebuild_rail():
 	var curve = Curve2D.new()
@@ -310,7 +318,27 @@ func _rebuild_rail():
 		Vector2(-handle_x, loop_depth * 0.5)
 	)
 	var mid_x = (factory_x + helicase_x) / 2.0
-	var mid_handle_x = max(1.0, (helicase_x - factory_x) * 0.25)
+	# V27: OMEGA SHAPE. Previously mid_handle_x was 0.25x the full gap
+	# width, giving the curve flat, purely-horizontal handles at the
+	# bottom point -- the curve dwelled "flat" longest exactly where
+	# several cars cluster, compressing their apparent spacing down to
+	# near-zero and causing a self-crossing pinch knot in the backbone's
+	# auto-tangent smoothing (confirmed: two cars were nearly stacked at
+	# the bottom in the screenshot). Widening this handle makes the curve
+	# flare OUT before settling into the bottom -- an omega (Omega)
+	# profile instead of a plain U -- spreading the bottom-most cars'
+	# arc-length across more horizontal screen space. This is a real
+	# change to the cars' actual travel path, not just a backbone-drawing
+	# tweak.
+	# CEILING WARNING: at GAP_WIDTH=168, a flare of 0.5 means the handle
+	# exactly reaches the adjacent anchor/helicase points (handle =
+	# GAP_WIDTH * 0.5 = half_gap) -- ANYTHING AT OR ABOVE 0.5 risks
+	# reintroducing the loop's OWN self-crossing artifact (the "cursive
+	# e" we fixed earlier this session), not just failing to fix the
+	# backbone issue. 0.4 keeps real margin below that ceiling while still
+	# being notably wider (1.6x) than the original 0.25.
+	const OMEGA_FLARE: float = 0.4
+	var mid_handle_x = max(1.0, (helicase_x - factory_x) * OMEGA_FLARE)
 	curve.add_point(
 		Vector2(mid_x, bulge_y),
 		Vector2(mid_handle_x, 0),
@@ -364,119 +392,88 @@ func _setup_synthesis_circle():
 	poly.color = Color(1.0, 0.85, 0.1)
 	synthesis_circle.add_child(poly)
 
-func _build_smooth_backbone(points: Array, smoothing: float, offset_distance: float) -> PackedVector2Array:
-	# V25/V26: pure function, no side effects, no reads of simulation state
-	# beyond the points array it's given. Catmull-Rom style auto-tangent,
-	# now distance-aware (see inside the loop below) to prevent overshoot/
-	# self-crossing when neighboring points are unevenly spaced (e.g.
-	# through the loop region).
-	if points.size() < 2:
-		return PackedVector2Array(points)
+func _build_smooth_backbone(car_data: Array, smoothing: float, offset_distance: float) -> PackedVector2Array:
+	# V29: PROGRESS-SPACE REWRITE. car_data is an array of
+	# {"progress": float, "position": Vector2} dicts, in true curve order
+	# (cars[0]..cars[23], confirmed to match real progress order). Tangent
+	# DIRECTION still comes from actual 2D positions (we need a real
+	# screen-space direction to draw), but tangent MAGNITUDE/capping now
+	# uses PROGRESS differences -- a genuinely one-dimensional, monotonic,
+	# unambiguous coordinate along the curve the cars actually ride. This
+	# avoids the screen-space ambiguity that broke the previous two
+	# attempts: at the loop's bottom turn, a single x-value can correspond
+	# to two different y-positions (descending vs ascending side), making
+	# 2D distance/x-order unreliable there. Progress has no such ambiguity.
+	if car_data.size() < 2:
+		var pts = PackedVector2Array()
+		for cd in car_data:
+			pts.append(cd["position"])
+		return pts
 
 	var curve = Curve2D.new()
-	var n = points.size()
+	var n = car_data.size()
 
 	var tightest_spacing = INF
 	var tightest_handle_len = 0.0
 	var tightest_index = -1
 
 	for i in range(n):
-		var p: Vector2 = points[i]
+		var p: Vector2 = car_data[i]["position"]
+		var prog: float = car_data[i]["progress"]
 
-		# Tangent estimation: direction from the previous point to the
-		# next point. DISTANCE-AWARE FIX: previously this scaled the raw
-		# (points[i+1] - points[i-1]) vector by a flat global constant
-		# (smoothing), with no relationship to how far apart the actual
-		# neighboring points were. When neighbors are far apart in
-		# screen-space (e.g. one car still flat, the next deep in the
-		# loop), that raw vector is large even though the real local
-		# segment lengths are short -- producing a handle that overshoots
-		# past the next point entirely, causing the curve to loop back on
-		# itself (the same "cursive e" self-crossing we diagnosed earlier
-		# for the loop's own Bezier curve, here showing up in this curve
-		# instead). Standard fix: scale the tangent DIRECTION by
-		# `smoothing`, but cap its MAGNITUDE relative to the shorter of
-		# the two adjacent segment lengths, so the handle can never
-		# extend further than roughly halfway to the nearest neighbor.
-		var tangent: Vector2
+		# PROGRESS-SPACE distances replace the old 2D distance_to() calls.
+		# abs() because progress can run either direction depending on
+		# which end of the curve is progress=0 -- only the MAGNITUDE of
+		# the gap matters for capping, not its sign.
 		var dist_prev = 0.0
 		var dist_next = 0.0
 		if i > 0:
-			dist_prev = p.distance_to(points[i - 1])
+			dist_prev = abs(prog - car_data[i - 1]["progress"])
 		if i < n - 1:
-			dist_next = p.distance_to(points[i + 1])
+			dist_next = abs(car_data[i + 1]["progress"] - prog)
 
+		# Tangent DIRECTION still from real 2D positions -- this is what
+		# actually gets drawn, so it has to reflect true screen-space
+		# direction, not an abstract progress-space one.
+		var tangent: Vector2
 		if i == 0:
-			tangent = (points[1] - p) if n > 1 else Vector2.ZERO
+			tangent = (car_data[1]["position"] - p) if n > 1 else Vector2.ZERO
 		elif i == n - 1:
-			tangent = (p - points[i - 1])
+			tangent = (p - car_data[i - 1]["position"])
 		else:
-			tangent = (points[i + 1] - points[i - 1])
+			tangent = (car_data[i + 1]["position"] - car_data[i - 1]["position"])
 
 		if tangent.length() > 0.0:
 			tangent = tangent.normalized()
 
-		# V27 FIX: ANGLE-AWARE SCALING. The distance cap alone wasn't
-		# enough -- confirmed by the screenshot: a small but real
-		# self-crossing "pinch knot" forms at the loop's bottom turn,
-		# where several points bend sharply over a short span. The
-		# distance cap limits handle LENGTH relative to spacing, but
-		# doesn't account for how SHARPLY the path turns at that point --
-		# a sharp corner needs an even smaller handle than a gentle curve
-		# at the same spacing, or the rounded Bezier segment swings past
-		# the actual corner and crosses itself. Computed as the angle
-		# between the incoming segment (p - prev) and outgoing segment
-		# (next - p): 180 degrees = perfectly straight (no extra
-		# shrinking needed), 0 degrees = a hairpin reversal (handle
-		# should shrink toward zero).
+		# Angle-aware scaling (V27, unchanged in spirit): sharper turns in
+		# actual screen-space direction still get smaller handles. This is
+		# still based on real positions since it's measuring visual
+		# sharpness, not a progress-space quantity.
 		var angle_factor = 1.0
 		if i > 0 and i < n - 1:
-			var incoming = (p - points[i - 1])
-			var outgoing = (points[i + 1] - p)
+			var incoming = (p - car_data[i - 1]["position"])
+			var outgoing = (car_data[i + 1]["position"] - p)
 			if incoming.length() > 0.0 and outgoing.length() > 0.0:
 				var cos_angle = incoming.normalized().dot(outgoing.normalized())
-				# cos_angle: 1.0 = straight ahead, -1.0 = full reversal.
-				# Remap so straight-ahead (1.0) keeps full handle length,
-				# and anything sharper scales down toward 0.
 				angle_factor = clamp((cos_angle + 1.0) / 2.0, 0.0, 1.0)
 
+		# THE KEY CHANGE: min_adjacent_dist is now in PROGRESS units, not
+		# screen pixels. Since progress and screen distance are roughly
+		# comparable in magnitude on the flat sections (both ~CAR_SPACING
+		# apart), this cap behaves similarly there, but stays correct and
+		# unambiguous through the loop where 2D distance would mislead.
 		var min_adjacent_dist = dist_prev if i == 0 else (dist_next if i == n - 1 else min(dist_prev, dist_next))
 		var handle = tangent * min(smoothing * min_adjacent_dist * 2.0, min_adjacent_dist * 0.5) * angle_factor
-		# Curve2D wants IN-handle (pointing backward) and OUT-handle
-		# (pointing forward) as offsets FROM the point, not absolute
-		# positions -- so in = -handle, out = +handle, giving a smooth
-		# pass-through tangent at each point.
 		curve.add_point(p, -handle, handle)
 
-		# DIAGNOSTIC: track whichever point has the tightest neighbor
-		# spacing (most likely spot for overshoot, e.g. deep in the loop),
-		# and that point's resulting handle length -- if the cap is
-		# working, handle length should never meaningfully exceed
-		# min_adjacent_dist * 0.5.
 		if min_adjacent_dist > 0.0 and min_adjacent_dist < tightest_spacing:
 			tightest_spacing = min_adjacent_dist
 			tightest_handle_len = handle.length()
 			tightest_index = i
 
-	# DIAGNOSTIC (new): check whether consecutive points are monotonic in
-	# x. cars[0] is leftmost (smallest spawn x), cars[23] is rightmost --
-	# so points[i+1].x SHOULD be >= points[i].x normally. The handle-length
-	# cap was confirmed working (ratio stays ~0.3 every frame), so the
-	# remaining twist must come from somewhere else -- a likely candidate
-	# is the curve's bottom-of-loop turn briefly making car[i+1] sit BEHIND
-	# car[i] in x (points[i+1].x < points[i].x), which a Catmull-Rom-style
-	# curve isn't built to handle gracefully regardless of handle length.
-	var order_violations: Array[String] = []
-	for i in range(n - 1):
-		if points[i + 1].x < points[i].x:
-			order_violations.append("%d->%d (dx=%.1f)" % [i, i + 1, points[i + 1].x - points[i].x])
-
 	if Engine.get_physics_frames() % 60 == 0:
-		if order_violations.size() > 0:
-			print("[%s]   BACKBONE ORDER DIAG | %d x-order violations (point[i+1].x < point[i].x -- went backward): %s" % [
-				Time.get_ticks_msec(), order_violations.size(), ", ".join(order_violations)
-			])
-		print("[%s]   BACKBONE DIAG | tightest spacing at car_index~%d: %.2f | handle_len: %.2f | ratio: %.3f (should be <= 0.5)" % [
+		print("[%s]   BACKBONE DIAG (progress-space) | tightest progress-spacing at car_index~%d: %.2f | handle_len: %.2f | ratio: %.3f (should be <= 0.5)" % [
 			Time.get_ticks_msec(), tightest_index, tightest_spacing, tightest_handle_len,
 			tightest_handle_len / tightest_spacing if tightest_spacing > 0.0 else 0.0
 		])
