@@ -1,24 +1,25 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v18
-# Adds VELOCITY EASE: smooths the factory_x velocity transition at the
-# SWEEPING -> REVERSING boundary (was snapping instantly from +sweep_speed
-# to -reverse_speed). Everything else unchanged from v17.
+# RAIL/TRAIN TEST v19+ (crossing summary diagnostic added)
 # ==========================================
 
 @onready var rail_path: Path2D = $RailPath
 @onready var rail_visual: Line2D = $RailVisual
 @onready var new_strand_line: Line2D = $NewStrandLine
 @onready var synthesis_circle: Node2D = $SynthesisCircle
+@onready var new_bottom_template_strand_position: Line2D = $NewBottomTemplateStrandPosition
 
 const CAR_SPACING: float = 60.0
 const NUM_CARS: int = 24
 const STRAIGHT_Y: float = 300.0
 const TRACK_LENGTH: float = 1920.0
 
+const NEW_BOTTOM_TEMPLATE_OFFSET: float = 90.0
+const NEW_BOTTOM_TEMPLATE_Y: float = STRAIGHT_Y + NEW_BOTTOM_TEMPLATE_OFFSET
+
 const LOOP_FLOOR_DEPTH: float = 15.0
-const MAX_LOOP_DEPTH: float = 90.0
+const MAX_LOOP_DEPTH: float = 180.0
 const GAP_WIDTH: float = 168.0
 
 const CAR_HEIGHT: float = 24.0
@@ -40,9 +41,6 @@ var phase: Phase = Phase.SWEEPING
 const REVERSE_SHRINK_DISTANCE: float = 200.0
 var reverse_speed: float = 90.0
 
-# V18: VELOCITY EASE -- smooths the factory_x velocity transition at the
-# SWEEPING -> REVERSING boundary, instead of snapping instantly from
-# +sweep_speed to -reverse_speed in a single frame.
 const REVERSE_EASE_DURATION: float = 0.5
 var reverse_ease_t: float = 0.0
 
@@ -66,6 +64,15 @@ const UNZIPPED_POPULATION_GROUP := "unzipped_population"
 var cars: Array[PathFollow2D] = []
 var car_original_x: Array[float] = []
 
+enum CarTransferState { WAITING, ARMED, TRANSFERRED }
+var car_transfer_state: Array[CarTransferState] = []
+
+# DIAGNOSTIC: per-car deepest y ever reached, to verify (without guessing)
+# whether every car's pull genuinely crosses NEW_BOTTOM_TEMPLATE_Y (90px)
+# at some point during the run. Printed in a summary once Phase.DONE.
+var car_max_y_reached: Array[float] = []
+var crossing_summary_printed: bool = false
+
 var new_strand_cars: Array[Node2D] = []
 var new_strand_car_x: Array[float] = []
 
@@ -81,6 +88,14 @@ func _ready():
 	_spawn_cars()
 	# _spawn_new_strand_cars()  # V11: commented out
 	_setup_synthesis_circle()
+
+	rail_visual.visible = true
+
+	new_bottom_template_strand_position.points = PackedVector2Array([
+		Vector2(0, NEW_BOTTOM_TEMPLATE_Y),
+		Vector2(TRACK_LENGTH, NEW_BOTTOM_TEMPLATE_Y)
+	])
+	new_bottom_template_strand_position.visible = true
 
 func _process(delta):
 	match phase:
@@ -106,35 +121,18 @@ func _process(delta):
 
 			population_left_edge = factory_x - pulse_offset
 
-			# V17 (adjusted): trigger now checks synthesis_circle's x
-			# (synthesis_x, the midpoint between factory_x and helicase_x)
-			# against the last car's x, instead of helicase_x directly.
-			# Recomputed here (not using the value from the top of
-			# _process) so it reflects THIS frame's updated helicase_x/
-			# factory_x, not last frame's. Since synthesis_x trails
-			# helicase_x by GAP_WIDTH/2, this fires LATER than the
-			# helicase_x-based trigger did.
 			var current_synthesis_x = (factory_x + helicase_x) / 2.0
 			var last_car_x = car_original_x[car_original_x.size() - 1]
 			if current_synthesis_x >= last_car_x:
 				phase = Phase.REVERSING
-				reverse_ease_t = 0.0 # start the velocity ease fresh
+				reverse_ease_t = 0.0
 		Phase.REVERSING:
-			# V18: ease factory_x's velocity smoothly from +sweep_speed
-			# (its rate during SWEEPING) down through zero to
-			# -reverse_speed, over REVERSE_EASE_DURATION, instead of
-			# snapping instantly between the two. Uses smoothstep so the
-			# transition itself eases in/out rather than being linear.
 			reverse_ease_t = min(reverse_ease_t + delta, REVERSE_EASE_DURATION)
 			var ease_progress = reverse_ease_t / REVERSE_EASE_DURATION
 			var eased_t = smoothstep(0.0, 1.0, ease_progress)
 			var current_velocity = lerp(sweep_speed, -reverse_speed, eased_t)
 			factory_x += current_velocity * delta
 
-			# loop_depth shrinks toward 0 as the gap widens past
-			# GAP_WIDTH, reaching exactly 0 once widened by
-			# REVERSE_SHRINK_DISTANCE -- "depth hits 0 when the loop's
-			# deepest point is at the same y as RailVisual."
 			var widened_by = (helicase_x - factory_x) - GAP_WIDTH
 			loop_depth = lerp(MAX_LOOP_DEPTH, 0.0, clamp(widened_by / REVERSE_SHRINK_DISTANCE, 0.0, 1.0))
 
@@ -142,14 +140,28 @@ func _process(delta):
 				loop_depth = 0.0
 				phase = Phase.DONE
 		Phase.DONE:
-			# V17 step 3: fade the yellow synthesis circle away, once,
-			# right as the loop finishes flattening. Reuses the
-			# synthesis_circle_faded one-shot guard already declared from
-			# v10's (now-disabled) fade trigger.
 			if not synthesis_circle_faded:
 				synthesis_circle_faded = true
 				var fade_tween = create_tween()
 				fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, FADE_DURATION)
+
+			# DIAGNOSTIC: one-shot summary of every car's deepest y reached
+			# vs. NEW_BOTTOM_TEMPLATE_Y (90px).
+			if not crossing_summary_printed:
+				crossing_summary_printed = true
+				print("=== CROSSING SUMMARY (car index: max_y_reached, crossed?) ===")
+				var crossed_count = 0
+				var missed_indices: Array[int] = []
+				for i in range(car_max_y_reached.size()):
+					var crossed = car_max_y_reached[i] >= NEW_BOTTOM_TEMPLATE_Y
+					if crossed:
+						crossed_count += 1
+					else:
+						missed_indices.append(i)
+					print("  car[%d]: max_y=%.1f crossed=%s" % [i, car_max_y_reached[i], crossed])
+				print("=== TOTAL: %d/%d cars crossed NEW_BOTTOM_TEMPLATE_Y (y>=%.1f). Missed indices: %s ===" % [
+					crossed_count, car_max_y_reached.size(), NEW_BOTTOM_TEMPLATE_Y, missed_indices
+				])
 
 	_rebuild_rail()
 
@@ -159,6 +171,23 @@ func _process(delta):
 
 	for i in range(cars.size()):
 		cars[i].progress = TRACK_LENGTH - car_original_x[i]
+
+	var armed_threshold_y = STRAIGHT_Y + MAX_LOOP_DEPTH
+	for i in range(cars.size()):
+		var car_y = cars[i].position.y
+
+		if car_y > car_max_y_reached[i]:
+			car_max_y_reached[i] = car_y
+
+		match car_transfer_state[i]:
+			CarTransferState.WAITING:
+				if car_y >= armed_threshold_y:
+					car_transfer_state[i] = CarTransferState.ARMED
+			CarTransferState.ARMED:
+				if car_y < NEW_BOTTOM_TEMPLATE_Y:
+					car_transfer_state[i] = CarTransferState.TRANSFERRED
+			CarTransferState.TRANSFERRED:
+				pass
 
 	for i in range(cars.size()):
 		var car = cars[i]
@@ -192,6 +221,18 @@ func _process(delta):
 				first_car.progress, first_car.position,
 				last_car.progress, last_car.position
 			])
+
+		var waiting_count = 0
+		var armed_count = 0
+		var transferred_count = 0
+		for state in car_transfer_state:
+			match state:
+				CarTransferState.WAITING: waiting_count += 1
+				CarTransferState.ARMED: armed_count += 1
+				CarTransferState.TRANSFERRED: transferred_count += 1
+		print("[%s]   transfer states: waiting=%d armed=%d transferred=%d" % [
+			Time.get_ticks_msec(), waiting_count, armed_count, transferred_count
+		])
 
 func _rebuild_rail():
 	var curve = Curve2D.new()
@@ -275,6 +316,8 @@ func _spawn_cars():
 		car_original_x.append(x)
 		car.progress = TRACK_LENGTH - x
 		cars.append(car)
+		car_transfer_state.append(CarTransferState.WAITING)
+		car_max_y_reached.append(STRAIGHT_Y)
 
 func _spawn_new_strand_cars():
 	for i in range(NUM_CARS):
