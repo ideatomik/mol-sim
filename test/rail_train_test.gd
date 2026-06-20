@@ -1,11 +1,10 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v15
-# Same mechanics as v14 (round 2 fix), plus new debug output for the
-# first/last car's actual rendered position vs. their fixed progress --
-# to investigate the reported "train shrinking from the right" behavior
-# during the pulse.
+# RAIL/TRAIN TEST v18
+# Adds VELOCITY EASE: smooths the factory_x velocity transition at the
+# SWEEPING -> REVERSING boundary (was snapping instantly from +sweep_speed
+# to -reverse_speed). Everything else unchanged from v17.
 # ==========================================
 
 @onready var rail_path: Path2D = $RailPath
@@ -40,6 +39,12 @@ var phase: Phase = Phase.SWEEPING
 
 const REVERSE_SHRINK_DISTANCE: float = 200.0
 var reverse_speed: float = 90.0
+
+# V18: VELOCITY EASE -- smooths the factory_x velocity transition at the
+# SWEEPING -> REVERSING boundary, instead of snapping instantly from
+# +sweep_speed to -reverse_speed in a single frame.
+const REVERSE_EASE_DURATION: float = 0.5
+var reverse_ease_t: float = 0.0
 
 const PULSE_CAR_COUNT: int = 6
 const PULSE_WIDTH: float = PULSE_CAR_COUNT * CAR_SPACING
@@ -101,12 +106,35 @@ func _process(delta):
 
 			population_left_edge = factory_x - pulse_offset
 
-			if helicase_x >= TRACK_LENGTH:
-				helicase_x = TRACK_LENGTH
+			# V17 (adjusted): trigger now checks synthesis_circle's x
+			# (synthesis_x, the midpoint between factory_x and helicase_x)
+			# against the last car's x, instead of helicase_x directly.
+			# Recomputed here (not using the value from the top of
+			# _process) so it reflects THIS frame's updated helicase_x/
+			# factory_x, not last frame's. Since synthesis_x trails
+			# helicase_x by GAP_WIDTH/2, this fires LATER than the
+			# helicase_x-based trigger did.
+			var current_synthesis_x = (factory_x + helicase_x) / 2.0
+			var last_car_x = car_original_x[car_original_x.size() - 1]
+			if current_synthesis_x >= last_car_x:
 				phase = Phase.REVERSING
+				reverse_ease_t = 0.0 # start the velocity ease fresh
 		Phase.REVERSING:
-			factory_x -= reverse_speed * delta
+			# V18: ease factory_x's velocity smoothly from +sweep_speed
+			# (its rate during SWEEPING) down through zero to
+			# -reverse_speed, over REVERSE_EASE_DURATION, instead of
+			# snapping instantly between the two. Uses smoothstep so the
+			# transition itself eases in/out rather than being linear.
+			reverse_ease_t = min(reverse_ease_t + delta, REVERSE_EASE_DURATION)
+			var ease_progress = reverse_ease_t / REVERSE_EASE_DURATION
+			var eased_t = smoothstep(0.0, 1.0, ease_progress)
+			var current_velocity = lerp(sweep_speed, -reverse_speed, eased_t)
+			factory_x += current_velocity * delta
 
+			# loop_depth shrinks toward 0 as the gap widens past
+			# GAP_WIDTH, reaching exactly 0 once widened by
+			# REVERSE_SHRINK_DISTANCE -- "depth hits 0 when the loop's
+			# deepest point is at the same y as RailVisual."
 			var widened_by = (helicase_x - factory_x) - GAP_WIDTH
 			loop_depth = lerp(MAX_LOOP_DEPTH, 0.0, clamp(widened_by / REVERSE_SHRINK_DISTANCE, 0.0, 1.0))
 
@@ -114,7 +142,14 @@ func _process(delta):
 				loop_depth = 0.0
 				phase = Phase.DONE
 		Phase.DONE:
-			pass
+			# V17 step 3: fade the yellow synthesis circle away, once,
+			# right as the loop finishes flattening. Reuses the
+			# synthesis_circle_faded one-shot guard already declared from
+			# v10's (now-disabled) fade trigger.
+			if not synthesis_circle_faded:
+				synthesis_circle_faded = true
+				var fade_tween = create_tween()
+				fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, FADE_DURATION)
 
 	_rebuild_rail()
 
@@ -123,7 +158,7 @@ func _process(delta):
 	synthesis_circle.position = Vector2(synthesis_x, SYNTHESIS_CIRCLE_Y)
 
 	for i in range(cars.size()):
-		cars[i].progress = car_original_x[i]
+		cars[i].progress = TRACK_LENGTH - car_original_x[i]
 
 	for i in range(cars.size()):
 		var car = cars[i]
@@ -149,10 +184,6 @@ func _process(delta):
 			loop_length, loop_count, unzipped_count
 		])
 
-		# DEBUG: first and last car's ACTUAL rendered position (not their
-		# fixed original_x/progress) -- to check whether the train is
-		# genuinely shrinking from one side, or whether progress (which
-		# never changes) is being misread as position.
 		if cars.size() > 0:
 			var first_car = cars[0]
 			var last_car = cars[cars.size() - 1]
@@ -165,49 +196,49 @@ func _process(delta):
 func _rebuild_rail():
 	var curve = Curve2D.new()
 
-	curve.add_point(Vector2(0, STRAIGHT_Y))
-	curve.add_point(Vector2(factory_x, STRAIGHT_Y))
+	curve.add_point(Vector2(TRACK_LENGTH, STRAIGHT_Y))
+	curve.add_point(Vector2(helicase_x, STRAIGHT_Y))
 
 	var bulge_y = STRAIGHT_Y + loop_depth
 	var handle_x = max(40.0, loop_depth * 0.6)
 
 	curve.add_point(
-		Vector2(factory_x, STRAIGHT_Y),
+		Vector2(helicase_x, STRAIGHT_Y),
 		Vector2.ZERO,
-		Vector2(handle_x, loop_depth * 0.5)
+		Vector2(-handle_x, loop_depth * 0.5)
 	)
 	var mid_x = (factory_x + helicase_x) / 2.0
 	var mid_handle_x = max(1.0, (helicase_x - factory_x) * 0.25)
 	curve.add_point(
 		Vector2(mid_x, bulge_y),
-		Vector2(-mid_handle_x, 0),
-		Vector2(mid_handle_x, 0)
+		Vector2(mid_handle_x, 0),
+		Vector2(-mid_handle_x, 0)
 	)
 	curve.add_point(
-		Vector2(helicase_x, STRAIGHT_Y),
-		Vector2(-handle_x, loop_depth * 0.5),
+		Vector2(factory_x, STRAIGHT_Y),
+		Vector2(handle_x, loop_depth * 0.5),
 		Vector2.ZERO
 	)
 
 	var loop_only_curve = Curve2D.new()
 	loop_only_curve.add_point(
-		Vector2(factory_x, STRAIGHT_Y),
+		Vector2(helicase_x, STRAIGHT_Y),
 		Vector2.ZERO,
-		Vector2(handle_x, loop_depth * 0.5)
+		Vector2(-handle_x, loop_depth * 0.5)
 	)
 	loop_only_curve.add_point(
 		Vector2(mid_x, bulge_y),
-		Vector2(-mid_handle_x, 0),
-		Vector2(mid_handle_x, 0)
+		Vector2(mid_handle_x, 0),
+		Vector2(-mid_handle_x, 0)
 	)
 	loop_only_curve.add_point(
-		Vector2(helicase_x, STRAIGHT_Y),
-		Vector2(-handle_x, loop_depth * 0.5),
+		Vector2(factory_x, STRAIGHT_Y),
+		Vector2(handle_x, loop_depth * 0.5),
 		Vector2.ZERO
 	)
 	loop_length = loop_only_curve.get_baked_length()
 
-	curve.add_point(Vector2(TRACK_LENGTH, STRAIGHT_Y))
+	curve.add_point(Vector2(0, STRAIGHT_Y))
 
 	rail_path.curve = curve
 	rail_visual.points = curve.get_baked_points()
@@ -242,7 +273,7 @@ func _spawn_cars():
 
 		var x = row_start_x + i * CAR_SPACING
 		car_original_x.append(x)
-		car.progress = x
+		car.progress = TRACK_LENGTH - x
 		cars.append(car)
 
 func _spawn_new_strand_cars():
