@@ -1,7 +1,14 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v19+ (crossing summary diagnostic added)
+# RAIL/TRAIN TEST v22
+# BASELINE SWITCH: instead of verifying every car independently crosses
+# NEW_BOTTOM_TEMPLATE_Y across multiple runs, we only need the FIRST car to
+# cross it once. That single crossing flips a global, one-time switch:
+# from that moment on, EVERY car's "finished" resting position becomes
+# NEW_BOTTOM_TEMPLATE_Y instead of STRAIGHT_Y -- no car, once pulled
+# through the loop, ever returns to RailVisual again. RailVisual still
+# holds cars the loop hasn't reached yet, exactly as before.
 # ==========================================
 
 @onready var rail_path: Path2D = $RailPath
@@ -19,7 +26,7 @@ const NEW_BOTTOM_TEMPLATE_OFFSET: float = 90.0
 const NEW_BOTTOM_TEMPLATE_Y: float = STRAIGHT_Y + NEW_BOTTOM_TEMPLATE_OFFSET
 
 const LOOP_FLOOR_DEPTH: float = 15.0
-const MAX_LOOP_DEPTH: float = 180.0
+const MAX_LOOP_DEPTH: float = 220.0
 const GAP_WIDTH: float = 168.0
 
 const CAR_HEIGHT: float = 24.0
@@ -51,6 +58,8 @@ var pulse_speed: float = 0.0
 
 enum PulseState { GROWING, SHRINKING, DONE }
 var pulse_state: PulseState = PulseState.GROWING
+
+const LAST_CAR_BUFFER: float = PULSE_WIDTH
 var pulse_offset: float = 0.0
 
 var population_left_edge: float = 0.0
@@ -66,15 +75,10 @@ var car_original_x: Array[float] = []
 
 enum CarTransferState { WAITING, ARMED, TRANSFERRED }
 var car_transfer_state: Array[CarTransferState] = []
-
-# DIAGNOSTIC: per-car deepest y ever reached, to verify (without guessing)
-# whether every car's pull genuinely crosses NEW_BOTTOM_TEMPLATE_Y (90px)
-# at some point during the run. Printed in a summary once Phase.DONE.
 var car_max_y_reached: Array[float] = []
-var crossing_summary_printed: bool = false
 
-var new_strand_cars: Array[Node2D] = []
-var new_strand_car_x: Array[float] = []
+var baseline_switched: bool = false
+var baseline_switch_car_index: int = -1
 
 func _ready():
 	helicase_x = GAP_WIDTH
@@ -86,7 +90,6 @@ func _ready():
 
 	_rebuild_rail()
 	_spawn_cars()
-	# _spawn_new_strand_cars()  # V11: commented out
 	_setup_synthesis_circle()
 
 	rail_visual.visible = true
@@ -96,6 +99,8 @@ func _ready():
 		Vector2(TRACK_LENGTH, NEW_BOTTOM_TEMPLATE_Y)
 	])
 	new_bottom_template_strand_position.visible = true
+
+	print("=== RUN START === baseline_switched:%s" % baseline_switched)
 
 func _process(delta):
 	match phase:
@@ -123,7 +128,7 @@ func _process(delta):
 
 			var current_synthesis_x = (factory_x + helicase_x) / 2.0
 			var last_car_x = car_original_x[car_original_x.size() - 1]
-			if current_synthesis_x >= last_car_x:
+			if current_synthesis_x >= last_car_x + LAST_CAR_BUFFER:
 				phase = Phase.REVERSING
 				reverse_ease_t = 0.0
 		Phase.REVERSING:
@@ -145,47 +150,34 @@ func _process(delta):
 				var fade_tween = create_tween()
 				fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, FADE_DURATION)
 
-			# DIAGNOSTIC: one-shot summary of every car's deepest y reached
-			# vs. NEW_BOTTOM_TEMPLATE_Y (90px).
-			if not crossing_summary_printed:
-				crossing_summary_printed = true
-				print("=== CROSSING SUMMARY (car index: max_y_reached, crossed?) ===")
-				var crossed_count = 0
-				var missed_indices: Array[int] = []
-				for i in range(car_max_y_reached.size()):
-					var crossed = car_max_y_reached[i] >= NEW_BOTTOM_TEMPLATE_Y
-					if crossed:
-						crossed_count += 1
-					else:
-						missed_indices.append(i)
-					print("  car[%d]: max_y=%.1f crossed=%s" % [i, car_max_y_reached[i], crossed])
-				print("=== TOTAL: %d/%d cars crossed NEW_BOTTOM_TEMPLATE_Y (y>=%.1f). Missed indices: %s ===" % [
-					crossed_count, car_max_y_reached.size(), NEW_BOTTOM_TEMPLATE_Y, missed_indices
-				])
-
 	_rebuild_rail()
 
 	var synthesis_x = (factory_x + helicase_x) / 2.0
-
 	synthesis_circle.position = Vector2(synthesis_x, SYNTHESIS_CIRCLE_Y)
 
 	for i in range(cars.size()):
 		cars[i].progress = TRACK_LENGTH - car_original_x[i]
 
-	var armed_threshold_y = STRAIGHT_Y + MAX_LOOP_DEPTH
 	for i in range(cars.size()):
 		var car_y = cars[i].position.y
 
 		if car_y > car_max_y_reached[i]:
 			car_max_y_reached[i] = car_y
 
+		if not baseline_switched and car_y >= NEW_BOTTOM_TEMPLATE_Y:
+			baseline_switched = true
+			baseline_switch_car_index = i
+			print(">>> BASELINE SWITCH TRIGGERED by car[%d] at y=%.1f (t=%s) <<<" % [i, car_y, Time.get_ticks_msec()])
+
 		match car_transfer_state[i]:
 			CarTransferState.WAITING:
-				if car_y >= armed_threshold_y:
+				if car_y >= STRAIGHT_Y + MAX_LOOP_DEPTH:
 					car_transfer_state[i] = CarTransferState.ARMED
+					print("[t=%s] car[%d] ARMED (y=%.1f)" % [Time.get_ticks_msec(), i, car_y])
 			CarTransferState.ARMED:
 				if car_y < NEW_BOTTOM_TEMPLATE_Y:
 					car_transfer_state[i] = CarTransferState.TRANSFERRED
+					print("[t=%s] car[%d] TRANSFERRED (y=%.1f)" % [Time.get_ticks_msec(), i, car_y])
 			CarTransferState.TRANSFERRED:
 				pass
 
@@ -208,31 +200,15 @@ func _process(delta):
 	if Engine.get_physics_frames() % 60 == 0:
 		var loop_count = get_tree().get_nodes_in_group(LOOP_POPULATION_GROUP).size()
 		var unzipped_count = get_tree().get_nodes_in_group(UNZIPPED_POPULATION_GROUP).size()
-		print("[%s] phase:%s | factory_x:%.1f helicase_x:%.1f loop_depth:%.1f | loop_length:%.1f | loop_population:%d unzipped_population:%d" % [
+		print("[%s] phase:%s | factory_x:%.1f helicase_x:%.1f loop_depth:%.1f | baseline_switched:%s (car %d) | loop_population:%d unzipped_population:%d" % [
 			Time.get_ticks_msec(), Phase.keys()[phase], factory_x, helicase_x, loop_depth,
-			loop_length, loop_count, unzipped_count
+			baseline_switched, baseline_switch_car_index, loop_count, unzipped_count
 		])
 
-		if cars.size() > 0:
-			var first_car = cars[0]
-			var last_car = cars[cars.size() - 1]
-			print("[%s]   first_car: progress=%.1f position=%s | last_car: progress=%.1f position=%s" % [
-				Time.get_ticks_msec(),
-				first_car.progress, first_car.position,
-				last_car.progress, last_car.position
-			])
-
-		var waiting_count = 0
-		var armed_count = 0
-		var transferred_count = 0
-		for state in car_transfer_state:
-			match state:
-				CarTransferState.WAITING: waiting_count += 1
-				CarTransferState.ARMED: armed_count += 1
-				CarTransferState.TRANSFERRED: transferred_count += 1
-		print("[%s]   transfer states: waiting=%d armed=%d transferred=%d" % [
-			Time.get_ticks_msec(), waiting_count, armed_count, transferred_count
-		])
+		var line_parts: Array[String] = []
+		for i in range(cars.size()):
+			line_parts.append("%d:%.0f/%s" % [i, cars[i].position.y, CarTransferState.keys()[car_transfer_state[i]].substr(0, 1)])
+		print("[%s]   cars (idx:y/state): %s" % [Time.get_ticks_msec(), " ".join(line_parts)])
 
 func _rebuild_rail():
 	var curve = Curve2D.new()
@@ -255,8 +231,11 @@ func _rebuild_rail():
 		Vector2(mid_handle_x, 0),
 		Vector2(-mid_handle_x, 0)
 	)
+
+	var anchor_rest_y = NEW_BOTTOM_TEMPLATE_Y if baseline_switched else STRAIGHT_Y
+
 	curve.add_point(
-		Vector2(factory_x, STRAIGHT_Y),
+		Vector2(factory_x, anchor_rest_y),
 		Vector2(handle_x, loop_depth * 0.5),
 		Vector2.ZERO
 	)
@@ -273,13 +252,13 @@ func _rebuild_rail():
 		Vector2(-mid_handle_x, 0)
 	)
 	loop_only_curve.add_point(
-		Vector2(factory_x, STRAIGHT_Y),
+		Vector2(factory_x, anchor_rest_y),
 		Vector2(handle_x, loop_depth * 0.5),
 		Vector2.ZERO
 	)
 	loop_length = loop_only_curve.get_baked_length()
 
-	curve.add_point(Vector2(0, STRAIGHT_Y))
+	curve.add_point(Vector2(0, anchor_rest_y))
 
 	rail_path.curve = curve
 	rail_visual.points = curve.get_baked_points()
@@ -318,21 +297,3 @@ func _spawn_cars():
 		cars.append(car)
 		car_transfer_state.append(CarTransferState.WAITING)
 		car_max_y_reached.append(STRAIGHT_Y)
-
-func _spawn_new_strand_cars():
-	for i in range(NUM_CARS):
-		var car = Node2D.new()
-		car.visible = false
-
-		var visual = ColorRect.new()
-		visual.size = Vector2(24, 24)
-		visual.position = Vector2(-12, -12)
-		visual.color = Color(0.5, 0.2, 0.9)
-		car.add_child(visual)
-
-		add_child(car)
-
-		var x = i * CAR_SPACING
-		new_strand_car_x.append(x)
-		car.position = Vector2(x, NEW_STRAND_Y)
-		new_strand_cars.append(car)
