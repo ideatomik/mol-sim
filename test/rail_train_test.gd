@@ -1,14 +1,20 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v22
-# BASELINE SWITCH: instead of verifying every car independently crosses
-# NEW_BOTTOM_TEMPLATE_Y across multiple runs, we only need the FIRST car to
-# cross it once. That single crossing flips a global, one-time switch:
-# from that moment on, EVERY car's "finished" resting position becomes
-# NEW_BOTTOM_TEMPLATE_Y instead of STRAIGHT_Y -- no car, once pulled
-# through the loop, ever returns to RailVisual again. RailVisual still
-# holds cars the loop hasn't reached yet, exactly as before.
+# RAIL/TRAIN TEST v31
+# Reverted the omega-flare loop geometry change (back to the original
+# mid_handle_x = 0.25x multiplier) -- that was a loop-geometry edit made
+# specifically to chase the backbone's self-crossing problem, and it's
+# being undone now that we're rebuilding the backbone from scratch with a
+# simpler approach. Loop mechanic (baseline switch, FINISHING_LAST_PULSE)
+# is otherwise unchanged from its known-good state.
+#
+# Backbone: REMOVED the Curve2D/Catmull-Rom auto-tangent implementation
+# entirely (V25-V30). Starting over with a plain polyline -- straight
+# Line2D segments directly between car positions, no curve math, no
+# tangent estimation, no handle capping. Accepts the "jagged" look in
+# exchange for guaranteed correctness (no self-crossing is possible with a
+# straight polyline through points in a fixed, known order).
 # ==========================================
 
 @onready var rail_path: Path2D = $RailPath
@@ -31,6 +37,7 @@ const MAX_LOOP_DEPTH: float = 220.0
 const GAP_WIDTH: float = 168.0
 
 const CAR_HEIGHT: float = 24.0
+const BACKBONE_OFFSET_DISTANCE: float = 12.0 # half the car's 24px size -- puts the line at the car's edge, not through its center
 const NEW_STRAND_Y: float = STRAIGHT_Y + MAX_LOOP_DEPTH + CAR_HEIGHT
 
 const SYNTHESIS_CIRCLE_RADIUS: float = 16.0
@@ -67,31 +74,12 @@ const UNZIPPED_POPULATION_GROUP := "unzipped_population"
 var cars: Array[PathFollow2D] = []
 var car_original_x: Array[float] = []
 
-# V19 step 4 (kept): per-car two-stage transfer state, still useful as a
-# per-car diagnostic even though the actual baseline switch (below) is now
-# a single global flag, not per-car.
 enum CarTransferState { WAITING, ARMED, TRANSFERRED }
 var car_transfer_state: Array[CarTransferState] = []
 var car_max_y_reached: Array[float] = []
 
-# V22: BASELINE SWITCH. Global, one-time flag. False = cars rest at
-# STRAIGHT_Y (RailVisual) once released from the loop, same as before.
-# True = cars rest at NEW_BOTTOM_TEMPLATE_Y instead, PERMANENTLY, for
-# every car released from this point on (including cars already resting
-# at STRAIGHT_Y from before the switch -- they get pulled down to the new
-# baseline the next time the loop reaches them, not retroactively snapped).
 var baseline_switched: bool = false
-var baseline_switch_car_index: int = -1 # which car triggered it, for the debug log
-
-# V25: BACKBONE TEST (purely additive, read-only observer of car
-# positions -- never writes to any existing simulation state). Catmull-Rom
-# style auto-tangent smoothing through the cars' current live positions.
-# BACKBONE_SMOOTHING scales the estimated tangent at each point: lower =
-# gentle/tight curve hugging actual positions, higher = loose/bulgy curve.
-# Start gentle per the design discussion; easy to bump up to compare.
-const BACKBONE_SMOOTHING: float = 0.06 # V30: tightened from 0.15 -- the progress-space rewrite fixed the self-crossing knot, but the curve still rides visibly outside the true path through the bend (screenshots show a real gap between magenta and the black reference curve). Testing whether a tighter value closes that gap.
-const BACKBONE_SAMPLES_PER_SEGMENT: int = 12 # density of the baked curve between each pair of points
-const BACKBONE_OFFSET_DISTANCE: float = 12.0 # half the car's 24px size -- puts the line at the car's edge, not through its center
+var baseline_switch_car_index: int = -1
 
 func _ready():
 	helicase_x = GAP_WIDTH
@@ -113,18 +101,15 @@ func _ready():
 	])
 	new_bottom_template_strand_position.visible = true
 
-	# V25 FIX: set explicitly in code rather than relying solely on the
-	# node's default_color/width properties set externally -- guaranteed
-	# magenta, 8px, regardless of what the node's saved properties are.
 	backbone_line.default_color = Color(1.0, 0.0, 1.0, 1.0)
 	backbone_line.width = 8.0
-
-	# V26: render order -- cars should draw ON TOP of the backbone line,
-	# not be hidden behind it. z_index is explicit and doesn't depend on
-	# scene tree sibling order (which would be fragile/easy to break
-	# later). Cars are children of rail_path (default z_index 0);
-	# negative z_index puts the backbone behind them reliably.
 	backbone_line.z_index = -1
+	# QoL: round points instead of square -- joint_mode rounds where
+	# segments meet (every interior car-to-car joint), cap_mode rounds the
+	# very first and last endpoints of the whole line.
+	backbone_line.joint_mode = Line2D.LINE_JOINT_ROUND
+	backbone_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
 
 	print("=== RUN START === baseline_switched:%s" % baseline_switched)
 
@@ -152,28 +137,10 @@ func _process(delta):
 
 			population_left_edge = factory_x - pulse_offset
 
-			# V22 FIX (round 3): instead of waiting for every car to be
-			# fully settled (which only happens after the LAST pulse cycle
-			# finishes, during which x-translation was still advancing the
-			# whole time -- the actual "pulls the train right" bug), the
-			# x-translation now freezes as soon as every car has been
-			# UNZIPPED (factory_x has passed every car's original_x) -- the
-			# moment there's no more new material to reach. Checked
-			# directly against factory_x (same definition as
-			# UNZIPPED_POPULATION_GROUP uses) rather than reading the group
-			# itself, which only gets updated later this same frame and
-			# would otherwise be one frame stale. The pulse itself keeps
-			# running/finishing naturally in the next phase.
 			var last_car_x = car_original_x[car_original_x.size() - 1]
 			if factory_x > last_car_x:
 				phase = Phase.FINISHING_LAST_PULSE
 		Phase.FINISHING_LAST_PULSE:
-			# x-translation is FROZEN here -- helicase_x/factory_x do not
-			# move. Only the pulse (depth) keeps animating, exactly as
-			# before, until it completes one full cycle and returns to
-			# pulse_offset == 0 (back at PulseState.GROWING with offset 0,
-			# i.e. a fresh cycle boundary) -- that's when every remaining
-			# car has had its chance to be pulled through and settle.
 			match pulse_state:
 				PulseState.GROWING:
 					pulse_offset = min(pulse_offset + pulse_speed * delta, PULSE_WIDTH)
@@ -183,10 +150,6 @@ func _process(delta):
 					pulse_offset = max(pulse_offset - pulse_speed * delta, 0.0)
 					if pulse_offset <= 0.0:
 						pulse_state = PulseState.GROWING
-						# Pulse completed a full cycle while frozen -- check
-						# if everything's settled now; if not, let it run
-						# one more cycle (handled by staying in this phase
-						# and looping GROWING again next frame).
 				PulseState.DONE:
 					pulse_offset = 0.0
 
@@ -202,15 +165,20 @@ func _process(delta):
 						all_settled = false
 						break
 			if all_settled:
-				# FIX: previously transitioned to Phase.REVERSING here,
-				# which then ran for 10+ seconds (its own slow eased
-				# velocity + REVERSE_SHRINK_DISTANCE widening) for no real
-				# purpose -- every car was already settled on
-				# NewBottomTemplateStrandPosition, so flattening the curve
-				# back to a straight line afterward accomplished nothing
-				# visible. Going straight to DONE once the last pulse
-				# settles is simpler and correct: there's nothing left to
-				# animate.
+				# FIX: loop_depth was whatever value the pulse cycle
+				# happened to be at the instant all cars passed the
+				# position check -- could be anywhere from LOOP_FLOOR_DEPTH
+				# (15) up, not necessarily 0. Since nothing in Phase.DONE
+				# ever touches loop_depth again, that residual value got
+				# frozen into RailVisual's curve forever, leaving a small
+				# permanent bulge near the trailing end (visible as the
+				# black curve remaining, with the last car's backbone
+				# offset dipping toward it since the car's actual position
+				# was still very slightly off STRAIGHT_Y/NEW_BOTTOM_
+				# TEMPLATE_Y because of that residual curve). Snapping to
+				# exactly 0 here guarantees a perfectly flat curve once we
+				# stop animating it.
+				loop_depth = 0.0
 				phase = Phase.DONE
 		Phase.DONE:
 			if not synthesis_circle_faded:
@@ -226,16 +194,12 @@ func _process(delta):
 	for i in range(cars.size()):
 		cars[i].progress = TRACK_LENGTH - car_original_x[i]
 
-	# V22: BASELINE SWITCH CHECK + per-car transfer state, merged into one
-	# pass since both depend on each car's current y.
 	for i in range(cars.size()):
 		var car_y = cars[i].position.y
 
 		if car_y > car_max_y_reached[i]:
 			car_max_y_reached[i] = car_y
 
-		# Trigger the global switch the FIRST time ANY car crosses --
-		# one-shot, never re-checked after baseline_switched becomes true.
 		if not baseline_switched and car_y >= NEW_BOTTOM_TEMPLATE_Y:
 			baseline_switched = true
 			baseline_switch_car_index = i
@@ -256,7 +220,15 @@ func _process(delta):
 	for i in range(cars.size()):
 		var car = cars[i]
 		var x = car_original_x[i]
-		var in_loop = x >= population_left_edge and x <= helicase_x
+		# FIX: once Phase.DONE, the loop mechanic has concluded and
+		# population_left_edge/helicase_x are frozen at whatever values
+		# they last held -- if a car's FIXED spawn x happens to still fall
+		# within that frozen window, it stays classified as "in the loop"
+		# PERMANENTLY, even though nothing is animating it anymore (this
+		# is exactly what kept car[23] -- and loop_population:2 overall --
+		# stuck forever in the log). Once DONE, nothing should ever be
+		# considered "in the loop".
+		var in_loop = (phase != Phase.DONE) and x >= population_left_edge and x <= helicase_x
 		var unzipped = x < factory_x
 
 		if in_loop and not car.is_in_group(LOOP_POPULATION_GROUP):
@@ -277,33 +249,96 @@ func _process(delta):
 			baseline_switched, baseline_switch_car_index, loop_count, unzipped_count
 		])
 
-		# V22 DEBUG: every car's current y and transfer state, so we can
-		# watch the whole population at a glance instead of just first/last.
 		var line_parts: Array[String] = []
 		for i in range(cars.size()):
 			line_parts.append("%d:%.0f/%s" % [i, cars[i].position.y, CarTransferState.keys()[car_transfer_state[i]].substr(0, 1)])
 		print("[%s]   cars (idx:y/state): %s" % [Time.get_ticks_msec(), " ".join(line_parts)])
 
-	# V25: BACKBONE TEST -- purely additive, read-only.
-	# V29: PROGRESS-SPACE REWRITE. Previous versions computed tangent
-	# direction/magnitude from raw screen-space (x,y) distances, which
-	# broke at the loop's bottom turn -- a single x-value can correspond
-	# to TWO different y-positions there (descending vs ascending side),
-	# making 2D distance an unreliable, ambiguous measure of true path
-	# distance. Each car's .progress is a genuinely one-dimensional,
-	# monotonic coordinate along the ACTUAL curve the cars ride -- no
-	# ambiguity, by construction. Now passing (progress, position) pairs;
-	# tangent magnitude is capped using PROGRESS differences, not 2D
-	# distance, while the position itself is still used for where to draw.
-	# Natural array order (cars[0]..cars[23]) already matches true
-	# progress order (confirmed: spawn order is correct, x-sorting was the
-	# actual mistake in the previous attempt) -- no sorting needed.
-	var car_data: Array = []
-	for car in cars:
-		car_data.append({"progress": car.progress, "position": car.position})
-	backbone_line.points = _build_smooth_backbone(car_data, BACKBONE_SMOOTHING, BACKBONE_OFFSET_DISTANCE)
+		# DIAGNOSTIC: which cars exactly are in loop_population, and the
+		# LAST car's full state -- to find out why it's stuck (y=363,
+		# never reaching 390) and why loop_population stays at 2 forever
+		# even after Phase.DONE, when nothing should still be "in the loop".
+		var loop_members: Array[int] = []
+		for i in range(cars.size()):
+			if cars[i].is_in_group(LOOP_POPULATION_GROUP):
+				loop_members.append(i)
+		var last_i = cars.size() - 1
+		print("[%s]   LOOP_POPULATION members: %s | last_car[%d]: progress=%.1f position=%s original_x=%.1f | population_left_edge=%.1f helicase_x=%.1f (in_loop_range=%s)" % [
+			Time.get_ticks_msec(), loop_members, last_i,
+			cars[last_i].progress, cars[last_i].position, car_original_x[last_i],
+			population_left_edge, helicase_x,
+			car_original_x[last_i] >= population_left_edge and car_original_x[last_i] <= helicase_x
+		])
+
+	# BACKBONE: plain polyline through PER-CAR OFFSET positions, in fixed
+	# spawn-array order (cars[0]..cars[23]). Still no curve math, no
+	# tangent estimation -- a straight polyline through points in a known,
+	# fixed order cannot self-cross at those joints.
+	#
+	# OFFSET DIRECTION: reference_side is the y-band between RailVisual
+	# (STRAIGHT_Y=300) and NewBottomTemplateStrandPosition
+	# (NEW_BOTTOM_TEMPLATE_Y=390). The precise inside/outside rule only
+	# applies on the FLAT SECTIONS, where a car is actually resting at
+	# STRAIGHT_Y or NEW_BOTTOM_TEMPLATE_Y:
+	#   - On RailVisual (not yet transferred, resting at ~STRAIGHT_Y):
+	#     offset AWAY from reference_side -- smaller y than STRAIGHT_Y.
+	#   - On NewBottomTemplateStrandPosition (transferred, resting at
+	#     ~NEW_BOTTOM_TEMPLATE_Y): offset INSIDE reference_side -- pulled
+	#     UP from 390, landing between 300 and 390.
+	# INSIDE THE LOOP (any other y, confirmed this rule doesn't need to
+	# apply there): just one consistent direction, toward the loop's own
+	# bulge (same direction depth already grows, i.e. toward higher y) --
+	# simplest choice, avoids the backbone crossing over the cars
+	# mid-curve.
+	var backbone_points = PackedVector2Array()
+	for i in range(cars.size()):
+		var car = cars[i]
+		var on_flat_section = abs(car.position.y - STRAIGHT_Y) < 1.0 or abs(car.position.y - NEW_BOTTOM_TEMPLATE_Y) < 1.0
+		var y_delta: float
+		if on_flat_section:
+			# NOTE: both flat-section cases resolve to the same numeric
+			# delta (-BACKBONE_OFFSET_DISTANCE), but for DIFFERENT reasons
+			# -- this is intentional, not a copy-paste mistake. Pre-
+			# transfer (resting at ~300): subtracting moves the backbone
+			# to ~288, smaller than 300, correctly AWAY from the 300-390
+			# band. Post-transfer (resting at ~390): subtracting moves the
+			# backbone to ~378, correctly INSIDE the 300-390 band (between
+			# the two lines). Both rules are satisfied by the same
+			# operation purely because of how STRAIGHT_Y and
+			# NEW_BOTTOM_TEMPLATE_Y relate to each other -- kept as an
+			# explicit if/else (rather than collapsing to one line) so the
+			# two distinct rules stay legible and independently editable
+			# if the geometry ever changes.
+			y_delta = -BACKBONE_OFFSET_DISTANCE
+		else:
+			y_delta = BACKBONE_OFFSET_DISTANCE # inside the loop: toward the bulge, consistent direction
+		backbone_points.append(Vector2(car.position.x, car.position.y + y_delta))
+	backbone_line.points = backbone_points
 
 func _rebuild_rail():
+	# FIX: once Phase.DONE, there is no more transition happening -- every
+	# car has already settled at NEW_BOTTOM_TEMPLATE_Y. The normal
+	# construction below ALWAYS includes a real step between the bulge
+	# point (y=STRAIGHT_Y when loop_depth=0) and the anchor point
+	# (y=anchor_rest_y=NEW_BOTTOM_TEMPLATE_Y once baseline_switched) --
+	# that step is correct WHILE the loop is active (it's literally the
+	# transition geometry), but has no reason to exist once DONE. A car
+	# whose fixed .progress happens to sample a point inside that lingering
+	# step segment gets stuck at an in-between y forever (confirmed: car[23]
+	# stuck at y=362.66, neither 300 nor 390), even though loop_depth
+	# itself was already correctly snapped to 0. The real fix is to stop
+	# building ANY step/transition geometry once DONE -- just one flat
+	# line at the correct resting height, full stop.
+	if phase == Phase.DONE:
+		var curve = Curve2D.new()
+		var rest_y = NEW_BOTTOM_TEMPLATE_Y if baseline_switched else STRAIGHT_Y
+		curve.add_point(Vector2(TRACK_LENGTH, rest_y))
+		curve.add_point(Vector2(0, rest_y))
+		loop_length = 0.0
+		rail_path.curve = curve
+		rail_visual.points = curve.get_baked_points()
+		return
+
 	var curve = Curve2D.new()
 
 	curve.add_point(Vector2(TRACK_LENGTH, STRAIGHT_Y))
@@ -318,38 +353,16 @@ func _rebuild_rail():
 		Vector2(-handle_x, loop_depth * 0.5)
 	)
 	var mid_x = (factory_x + helicase_x) / 2.0
-	# V27: OMEGA SHAPE. Previously mid_handle_x was 0.25x the full gap
-	# width, giving the curve flat, purely-horizontal handles at the
-	# bottom point -- the curve dwelled "flat" longest exactly where
-	# several cars cluster, compressing their apparent spacing down to
-	# near-zero and causing a self-crossing pinch knot in the backbone's
-	# auto-tangent smoothing (confirmed: two cars were nearly stacked at
-	# the bottom in the screenshot). Widening this handle makes the curve
-	# flare OUT before settling into the bottom -- an omega (Omega)
-	# profile instead of a plain U -- spreading the bottom-most cars'
-	# arc-length across more horizontal screen space. This is a real
-	# change to the cars' actual travel path, not just a backbone-drawing
-	# tweak.
-	# CEILING WARNING: at GAP_WIDTH=168, a flare of 0.5 means the handle
-	# exactly reaches the adjacent anchor/helicase points (handle =
-	# GAP_WIDTH * 0.5 = half_gap) -- ANYTHING AT OR ABOVE 0.5 risks
-	# reintroducing the loop's OWN self-crossing artifact (the "cursive
-	# e" we fixed earlier this session), not just failing to fix the
-	# backbone issue. 0.4 keeps real margin below that ceiling while still
-	# being notably wider (1.6x) than the original 0.25.
-	const OMEGA_FLARE: float = 0.4
-	var mid_handle_x = max(1.0, (helicase_x - factory_x) * OMEGA_FLARE)
+	# Reverted to the original 0.25x multiplier (omega-flare experiment
+	# undone, per decision to roll the loop geometry back to its
+	# known-good pre-backbone-chase state).
+	var mid_handle_x = max(1.0, (helicase_x - factory_x) * 0.25)
 	curve.add_point(
 		Vector2(mid_x, bulge_y),
 		Vector2(mid_handle_x, 0),
 		Vector2(-mid_handle_x, 0)
 	)
 
-	# V22: the curve's ANCHOR-SIDE endpoint (where released cars come to
-	# rest) switches from STRAIGHT_Y to NEW_BOTTOM_TEMPLATE_Y once
-	# baseline_switched is true -- this is what actually makes "no car
-	# returns to RailVisual" true geometrically, not just a position
-	# override after the fact.
 	var anchor_rest_y = NEW_BOTTOM_TEMPLATE_Y if baseline_switched else STRAIGHT_Y
 
 	curve.add_point(
@@ -391,120 +404,6 @@ func _setup_synthesis_circle():
 	poly.polygon = points
 	poly.color = Color(1.0, 0.85, 0.1)
 	synthesis_circle.add_child(poly)
-
-func _build_smooth_backbone(car_data: Array, smoothing: float, offset_distance: float) -> PackedVector2Array:
-	# V29: PROGRESS-SPACE REWRITE. car_data is an array of
-	# {"progress": float, "position": Vector2} dicts, in true curve order
-	# (cars[0]..cars[23], confirmed to match real progress order). Tangent
-	# DIRECTION still comes from actual 2D positions (we need a real
-	# screen-space direction to draw), but tangent MAGNITUDE/capping now
-	# uses PROGRESS differences -- a genuinely one-dimensional, monotonic,
-	# unambiguous coordinate along the curve the cars actually ride. This
-	# avoids the screen-space ambiguity that broke the previous two
-	# attempts: at the loop's bottom turn, a single x-value can correspond
-	# to two different y-positions (descending vs ascending side), making
-	# 2D distance/x-order unreliable there. Progress has no such ambiguity.
-	if car_data.size() < 2:
-		var pts = PackedVector2Array()
-		for cd in car_data:
-			pts.append(cd["position"])
-		return pts
-
-	var curve = Curve2D.new()
-	var n = car_data.size()
-
-	var tightest_spacing = INF
-	var tightest_handle_len = 0.0
-	var tightest_index = -1
-
-	for i in range(n):
-		var p: Vector2 = car_data[i]["position"]
-		var prog: float = car_data[i]["progress"]
-
-		# PROGRESS-SPACE distances replace the old 2D distance_to() calls.
-		# abs() because progress can run either direction depending on
-		# which end of the curve is progress=0 -- only the MAGNITUDE of
-		# the gap matters for capping, not its sign.
-		var dist_prev = 0.0
-		var dist_next = 0.0
-		if i > 0:
-			dist_prev = abs(prog - car_data[i - 1]["progress"])
-		if i < n - 1:
-			dist_next = abs(car_data[i + 1]["progress"] - prog)
-
-		# Tangent DIRECTION still from real 2D positions -- this is what
-		# actually gets drawn, so it has to reflect true screen-space
-		# direction, not an abstract progress-space one.
-		var tangent: Vector2
-		if i == 0:
-			tangent = (car_data[1]["position"] - p) if n > 1 else Vector2.ZERO
-		elif i == n - 1:
-			tangent = (p - car_data[i - 1]["position"])
-		else:
-			tangent = (car_data[i + 1]["position"] - car_data[i - 1]["position"])
-
-		if tangent.length() > 0.0:
-			tangent = tangent.normalized()
-
-		# Angle-aware scaling (V27, unchanged in spirit): sharper turns in
-		# actual screen-space direction still get smaller handles. This is
-		# still based on real positions since it's measuring visual
-		# sharpness, not a progress-space quantity.
-		var angle_factor = 1.0
-		if i > 0 and i < n - 1:
-			var incoming = (p - car_data[i - 1]["position"])
-			var outgoing = (car_data[i + 1]["position"] - p)
-			if incoming.length() > 0.0 and outgoing.length() > 0.0:
-				var cos_angle = incoming.normalized().dot(outgoing.normalized())
-				angle_factor = clamp((cos_angle + 1.0) / 2.0, 0.0, 1.0)
-
-		# THE KEY CHANGE: min_adjacent_dist is now in PROGRESS units, not
-		# screen pixels. Since progress and screen distance are roughly
-		# comparable in magnitude on the flat sections (both ~CAR_SPACING
-		# apart), this cap behaves similarly there, but stays correct and
-		# unambiguous through the loop where 2D distance would mislead.
-		var min_adjacent_dist = dist_prev if i == 0 else (dist_next if i == n - 1 else min(dist_prev, dist_next))
-		var handle = tangent * min(smoothing * min_adjacent_dist * 2.0, min_adjacent_dist * 0.5) * angle_factor
-		curve.add_point(p, -handle, handle)
-
-		if min_adjacent_dist > 0.0 and min_adjacent_dist < tightest_spacing:
-			tightest_spacing = min_adjacent_dist
-			tightest_handle_len = handle.length()
-			tightest_index = i
-
-	if Engine.get_physics_frames() % 60 == 0:
-		print("[%s]   BACKBONE DIAG (progress-space) | tightest progress-spacing at car_index~%d: %.2f | handle_len: %.2f | ratio: %.3f (should be <= 0.5)" % [
-			Time.get_ticks_msec(), tightest_index, tightest_spacing, tightest_handle_len,
-			tightest_handle_len / tightest_spacing if tightest_spacing > 0.0 else 0.0
-		])
-
-	# Bake at a fixed density per segment, not Godot's default tolerance-
-	# based baking -- gives predictable smoothness regardless of how far
-	# apart points happen to be (matters since car spacing can vary
-	# visually as they move through the loop).
-	curve.bake_interval = 1.0 # fine baked resolution; we resample explicitly below anyway
-	var total_samples = max(2, (n - 1) * BACKBONE_SAMPLES_PER_SEGMENT)
-	var result = PackedVector2Array()
-	var curve_len = curve.get_baked_length()
-	for s in range(total_samples + 1):
-		var dist = (float(s) / float(total_samples)) * curve_len
-
-		# V25 FIX: offset perpendicular to the curve's LOCAL tangent at
-		# this point (rotation-aware sampling), not a flat vertical shift
-		# -- a flat shift would look wrong through the curved loop section
-		# (the offset needs to rotate with the curve, same principle as
-		# loop_normal_angle in the real simulation). "Above the cars"
-		# means toward lower y; same ambiguous-sign issue we solved before
-		# (a fixed +90deg rotation can point either way depending on
-		# tangent direction), so explicitly pick whichever perpendicular
-		# candidate has the smaller (more negative) y component.
-		var sample_t = curve.sample_baked_with_rotation(dist)
-		var tangent_angle = sample_t.get_rotation()
-		var candidate_a = Vector2.RIGHT.rotated(tangent_angle + PI / 2.0)
-		var candidate_b = Vector2.RIGHT.rotated(tangent_angle - PI / 2.0)
-		var normal = candidate_a if candidate_a.y < candidate_b.y else candidate_b
-		result.append(sample_t.origin + normal * offset_distance)
-	return result
 
 func _spawn_cars():
 	var row_span = (NUM_CARS - 1) * CAR_SPACING
