@@ -1,23 +1,16 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v8
-# Exact spec, nothing extra:
-# 1. Horizontal track, full screen width, static.
-# 2. 24 cars, evenly spaced, visible across the whole track from the start.
-# 3. The sweep (the loop) starts at the left, moves right at a steady pace
-#    -- this is helicase_x advancing alone.
-# 4. While the sweep moves, the cars oscillate left/right (visual aid only,
-#    not meant to represent real sim behavior -- just lets us watch cars
-#    repeatedly pass through the loop).
-# 5. Once helicase_x reaches the end of the track, the sweep phase ends.
-#    Then factory_x closes the gap toward helicase_x until the loop
-#    collapses into a flat line.
+# RAIL/TRAIN TEST v10
+# Adds SYNTHESIS CIRCLE: yellow circle marking the active synthesis point,
+# traveling with the sweep, fading out once the last new-strand car appears.
+# Everything else is unchanged from v9.
 # ==========================================
 
 @onready var rail_path: Path2D = $RailPath
 @onready var rail_visual: Line2D = $RailVisual
 @onready var new_strand_line: Line2D = $NewStrandLine
+@onready var synthesis_circle: Node2D = $SynthesisCircle
 
 const CAR_SPACING: float = 60.0
 const NUM_CARS: int = 24
@@ -28,12 +21,19 @@ const LOOP_FLOOR_DEPTH: float = 15.0
 const MAX_LOOP_DEPTH: float = 90.0
 const GAP_WIDTH: float = 168.0 # fixed gap between factory_x and helicase_x during the sweep phase
 
-# NEW STRAND REFERENCE LINE: simple static horizontal line, offset down
-# from the loop's max depth by one car-height -- "as if the pen tip sat
-# CAR_HEIGHT pixels below the deepest point of the curve." Drawn once,
-# never updated; not derived from any car or curve, just a fixed reference.
 const CAR_HEIGHT: float = 24.0
 const NEW_STRAND_Y: float = STRAIGHT_Y + MAX_LOOP_DEPTH + CAR_HEIGHT
+
+# SYNTHESIS CIRCLE: yellow circle marking the active synthesis point.
+# Spawned at the loop's max depth (the deepest point the curve reaches),
+# x = synthesis_x (same midpoint value driving the new-strand line/cars).
+# Travels with the sweep automatically since it just reads synthesis_x
+# every frame -- no separate speed logic. Fades out once the last
+# new-strand car has appeared (one-shot trigger, not re-checked after).
+const SYNTHESIS_CIRCLE_RADIUS: float = 16.0
+const SYNTHESIS_CIRCLE_Y: float = STRAIGHT_Y + MAX_LOOP_DEPTH
+const FADE_DURATION: float = 0.6
+var synthesis_circle_faded: bool = false
 
 var helicase_x: float = 0.0
 var factory_x: float = 0.0
@@ -48,19 +48,8 @@ var loop_depth: float = LOOP_FLOOR_DEPTH
 var cars: Array[PathFollow2D] = []
 var car_original_x: Array[float] = []
 
-# NEW-STRAND CARS: same spacing as the template cars, sitting flat on
-# NewStrandLine. No Path2D/PathFollow2D needed -- this line never curves,
-# so plain Node2D positioning is simpler and correct. Each car becomes
-# visible once factory_x (the growing line's leading edge) reaches its
-# fixed x -- "appears at the synthesis point as it passes."
 var new_strand_cars: Array[Node2D] = []
 var new_strand_car_x: Array[float] = []
-
-# Oscillation: cars move back and forth together, purely for repeated
-# observation during the sweep phase.
-const OSCILLATION_RANGE: float = 600.0
-const OSCILLATION_SPEED: float = 0.6 # radians/sec
-var oscillation_t: float = 0.0
 
 func _ready():
 	helicase_x = GAP_WIDTH
@@ -68,20 +57,18 @@ func _ready():
 	_rebuild_rail()
 	_spawn_cars()
 	_spawn_new_strand_cars()
+	_setup_synthesis_circle()
 
 func _process(delta):
 	match phase:
 		Phase.SWEEPING:
 			helicase_x += sweep_speed * delta
 			factory_x = helicase_x - GAP_WIDTH
-			loop_depth = MAX_LOOP_DEPTH # constant depth during the sweep -- this test isn't about depth growth, just the sweep + oscillation + collapse
+			loop_depth = MAX_LOOP_DEPTH
 			if helicase_x >= TRACK_LENGTH:
 				helicase_x = TRACK_LENGTH
 				phase = Phase.COLLAPSING
 		Phase.COLLAPSING:
-			# Close the gap: factory_x advances toward the now-fixed
-			# helicase_x until they meet, which is what makes the loop
-			# visually straighten out into a flat line.
 			factory_x += collapse_speed * delta
 			if factory_x >= helicase_x:
 				factory_x = helicase_x
@@ -89,42 +76,37 @@ func _process(delta):
 		Phase.DONE:
 			pass
 
-	# Depth interpolates to 0 as the gap closes during collapse, so the
-	# curve visibly straightens out instead of staying a deep U with zero
-	# width (which would be a degenerate/invisible loop, not a clean
-	# straight line).
 	if phase == Phase.COLLAPSING or phase == Phase.DONE:
 		var gap = helicase_x - factory_x
 		loop_depth = lerp(LOOP_FLOOR_DEPTH, MAX_LOOP_DEPTH, clamp(gap / GAP_WIDTH, 0.0, 1.0))
 
 	_rebuild_rail()
 
-	# GROWING LINE: the new-strand reference line's right edge extends in
-	# real time, tracking factory_x (the synthesis point) -- not a static
-	# one-shot draw anymore. Reads as "the trail left behind as the
-	# machine passes overhead," growing from 0 width up to full track
-	# width as factory_x advances through both phases (sweep and collapse).
+	var synthesis_x = (factory_x + helicase_x) / 2.0
+
 	new_strand_line.points = PackedVector2Array([
 		Vector2(0, NEW_STRAND_Y),
-		Vector2(factory_x, NEW_STRAND_Y)
+		Vector2(synthesis_x, NEW_STRAND_Y)
 	])
 
-	# Reveal new-strand cars as factory_x sweeps past their fixed x --
-	# same driver as the line's growth, just a visibility toggle instead
-	# of extending a points array. No movement once revealed.
 	for i in range(new_strand_cars.size()):
-		new_strand_cars[i].visible = factory_x >= new_strand_car_x[i]
+		new_strand_cars[i].visible = synthesis_x >= new_strand_car_x[i]
 
-	# Oscillate cars only during the sweep phase -- once collapsing starts,
-	# let them settle so the collapse itself is easy to watch cleanly.
-	if phase == Phase.SWEEPING:
-		oscillation_t += delta
-		var offset = sin(oscillation_t * OSCILLATION_SPEED) * OSCILLATION_RANGE
-		for i in range(cars.size()):
-			cars[i].progress = clamp(car_original_x[i] + offset, 0.0, TRACK_LENGTH)
-	else:
-		for i in range(cars.size()):
-			cars[i].progress = car_original_x[i]
+	# SYNTHESIS CIRCLE: travels with the sweep by simply reading
+	# synthesis_x every frame -- no separate speed logic needed, it's
+	# "part of the sweep at that exact point" by construction.
+	synthesis_circle.position = Vector2(synthesis_x, SYNTHESIS_CIRCLE_Y)
+
+	# FADE TRIGGER: once the LAST new-strand car has appeared, fade the
+	# circle out. One-shot.
+	if not synthesis_circle_faded and new_strand_car_x.size() > 0:
+		if synthesis_x >= new_strand_car_x[new_strand_car_x.size() - 1]:
+			synthesis_circle_faded = true
+			var fade_tween = create_tween()
+			fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, FADE_DURATION)
+
+	for i in range(cars.size()):
+		cars[i].progress = car_original_x[i]
 
 func _rebuild_rail():
 	var curve = Curve2D.new()
@@ -158,6 +140,17 @@ func _rebuild_rail():
 	rail_path.curve = curve
 	rail_visual.points = curve.get_baked_points()
 
+func _setup_synthesis_circle():
+	var poly = Polygon2D.new()
+	var points = PackedVector2Array()
+	const SEGMENTS = 32
+	for i in range(SEGMENTS):
+		var angle = (float(i) / SEGMENTS) * TAU
+		points.append(Vector2(cos(angle), sin(angle)) * SYNTHESIS_CIRCLE_RADIUS)
+	poly.polygon = points
+	poly.color = Color(1.0, 0.85, 0.1)
+	synthesis_circle.add_child(poly)
+
 func _spawn_cars():
 	for i in range(NUM_CARS):
 		var car = PathFollow2D.new()
@@ -180,12 +173,12 @@ func _spawn_cars():
 func _spawn_new_strand_cars():
 	for i in range(NUM_CARS):
 		var car = Node2D.new()
-		car.visible = false # revealed in _process once factory_x reaches this car's x
+		car.visible = false
 
 		var visual = ColorRect.new()
 		visual.size = Vector2(24, 24)
 		visual.position = Vector2(-12, -12)
-		visual.color = Color(0.5, 0.2, 0.9) # matches NewStrandLine's purple
+		visual.color = Color(0.5, 0.2, 0.9)
 		car.add_child(visual)
 
 		add_child(car)
