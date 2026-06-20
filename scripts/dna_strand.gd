@@ -200,9 +200,30 @@ func update_peel(helicase_x: float):
 # anchored at the lagging polymerase on one end and the helicase
 # on the other.
 # ==========================================
-const LOOP_MIN_DEPTH: float = 250.0
-const LOOP_WIDTH_FOR_DEPTH: float = 80.0 # Mirrors PEEL_WIDTH-ish horizontal span used in the depth formula
+const LOOP_FLOOR_DEPTH: float = 15.0 # Tiny nonzero floor only -- avoids a fully-degenerate flat curve, NOT a "loop must look big" minimum (see depth calc below)
 const BASE_SPACING: float = 35.0
+
+func _apply_finished_position(base: NitrogenBase, wobble_for: Callable):
+	# Shared by regular finished bases AND markers (5'/3'), so both get the
+	# same animated push-release behavior instead of markers using their own
+	# simpler, buggy snap-to-original_pos path that never participated in
+	# the trombone motion at all.
+	var w = wobble_for.call(base)
+	var target_pos = base.original_pos + w
+
+	if not base.was_on_loop:
+		base.is_unzipped = true
+		base.is_on_loop = false
+		base.position = target_pos
+	else:
+		base.is_unzipped = true
+		base.is_on_loop = false
+		if base.push_tween:
+			base.push_tween.kill()
+		base.push_tween = base.create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		base.push_tween.tween_property(base, "position", target_pos, 0.35)
+
+	base.was_on_loop = false
 
 func _update_peel_with_loop(helicase_x: float):
 	var t = Time.get_ticks_msec() / 1000.0
@@ -225,9 +246,26 @@ func _update_peel_with_loop(helicase_x: float):
 		_simple_peel_fallback(helicase_x, wobble_for)
 		return
 
-	var anchor_x: float = lagging_poly.factory_anchor_x if lagging_poly.factory_anchor_initialized else helicase_x
+	# GEOMETRY FIX: use loop_left_edge_x (continuously advances per-bind),
+	# not factory_anchor_x (the polymerase sprite's own position, which only
+	# jumps every 6 bases). Using the sprite's position as the loop's
+	# geometric boundary meant the left side of the loop stayed pinned
+	# between jumps while the helicase kept moving every frame -- all the
+	# stretch needed to accommodate that had nowhere to go except into
+	# exaggerating the fork end. loop_left_edge_x tracks actual synthesis
+	# progress smoothly instead.
+	var anchor_x: float = lagging_poly.loop_left_edge_x if lagging_poly.loop_left_edge_initialized else helicase_x
 
 	# --- 1. Categorize bases ---
+	# CATEGORIZATION FIX: this used to also route any is_bound base straight
+	# to `finished` regardless of position, which meant nearly every base in
+	# the loop region got pulled out of the loop the instant it finished
+	# binding -- leaving `loop_bases` with only the 1-2 still-unbound bases
+	# at any moment, no matter how wide the actual anchor-to-helicase gap
+	# was. Categorization must be purely positional: which region a base is
+	# in is about geometry (anchor_x / helicase_x), not binding state.
+	# Binding state still affects color/wobble elsewhere, just not which
+	# bucket a base's position is computed from.
 	var zipped: Array[NitrogenBase] = []
 	var loop_bases: Array[NitrogenBase] = []
 	var finished: Array[NitrogenBase] = []
@@ -240,7 +278,7 @@ func _update_peel_with_loop(helicase_x: float):
 		else:
 			loop_bases.append(base)
 
-# DIAGNOSTIC: throttled loop-health print, same 2s cadence as polymerase.gd's
+	# DIAGNOSTIC: throttled loop-health print, same 2s cadence as polymerase.gd's
 	# POLY DEBUG. Reports category counts plus the loop's actual bounding box,
 	# so we can tell from logs alone whether the loop is engaging at all and
 	# whether it's actually spreading out into a curve vs collapsing flat.
@@ -278,27 +316,7 @@ func _update_peel_with_loop(helicase_x: float):
 	# the same frame as the anchor jump, made the release invisible (the
 	# base just silently teleported to a position that hadn't been drawn yet).
 	for base in finished:
-		var w = wobble_for.call(base)
-		var target_pos = base.original_pos + w
-
-		if not base.was_on_loop:
-			# Already finished last frame (or always was) -- keep current
-			# simple behavior, no need to re-trigger a tween every frame.
-			base.is_unzipped = true
-			base.is_on_loop = false
-			base.position = target_pos
-		else:
-			# JUST transitioned from loop -> finished this frame: kick off
-			# the push tween from wherever it currently is (its last loop
-			# curve position) to its flat resting position.
-			base.is_unzipped = true
-			base.is_on_loop = false
-			if base.push_tween:
-				base.push_tween.kill()
-			base.push_tween = base.create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-			base.push_tween.tween_property(base, "position", target_pos, 0.35)
-
-		base.was_on_loop = false
+		_apply_finished_position(base, wobble_for)
 
 	# --- 4. Loop bases: sampled along a Curve2D from anchor -> helicase ---
 	var poly_y = lagging_poly.global_position.y
@@ -306,27 +324,43 @@ func _update_peel_with_loop(helicase_x: float):
 	var anchor_point = Vector2(anchor_x, poly_y)
 
 	var n = loop_bases.size()
-	if n > 0:
-		# DEPTH FIX: previously depth was a rough guess that didn't account
-		# for how far apart anchor_point and fork_point actually are, so the
-		# curve's real arc length often didn't match n * BASE_SPACING at all
-		# -- bases got stretched or bunched to fill whatever length the
-		# curve happened to have. This solves depth analytically (treating
-		# each side of the U as roughly a straight diagonal leg) so the
-		# curve's arc length comes out close to the bases' natural spacing.
-		# Cheap (closed-form), not exact (real Bezier arc length differs
-		# slightly from the two-straight-legs approximation), but much
-		# closer than before without repeatedly rebuilding the curve.
-		var target_len = n * BASE_SPACING
+	# CURVE SCOPE FIX: build the curve whenever there's a real anchor-to-fork
+	# span, not only when n > 0 -- the left_marker can be "in the loop span"
+	# even when zero regular bases currently are (e.g. right at a fragment
+	# boundary), and needs a valid curve to sample onto. Declared here so
+	# it's available to both the base-sampling loop below and the marker
+	# section afterward.
+	var curve: Curve2D = null
+	var depth = LOOP_FLOOR_DEPTH
+	if anchor_x < helicase_x:
+		# DEPTH FIX (v2): the previous version clamped depth to a hard
+		# LOOP_MIN_DEPTH (250px) floor whenever n*BASE_SPACING wasn't
+		# already bigger than the straight-line anchor-to-helicase
+		# distance -- which is almost ALWAYS true early in a fragment cycle
+		# (few bases synthesized yet, but the helicase has already pulled
+		# the gap wide open). That forced a deep 250px-tall curve to be
+		# built and then only sparsely populated by the few bases that
+		# actually existed, leaving a long bare stretch near the fork --
+		# exactly the overshoot/stretching artifact we kept seeing.
+		#
+		# Correct behavior: when there aren't yet enough bases to need a
+		# real loop, the loop should be SHALLOW (close to a flat diagonal),
+		# not forced deep. Depth grows smoothly as n increases and the
+		# bases genuinely need more arc length than the straight-line
+		# distance provides. LOOP_FLOOR_DEPTH is just a tiny nonzero floor
+		# to avoid a fully-degenerate flat curve (which breaks tangent/
+		# normal math), not a "this loop must look big" floor.
+		var target_len = max(n * BASE_SPACING, BASE_SPACING)
 		var half_width = abs(helicase_x - anchor_x) / 2.0
 		var half_target = target_len / 2.0
-		var depth = LOOP_MIN_DEPTH
 		if half_target > half_width:
-			depth = max(LOOP_MIN_DEPTH, sqrt(half_target * half_target - half_width * half_width))
+			depth = max(LOOP_FLOOR_DEPTH, sqrt(half_target * half_target - half_width * half_width))
+		else:
+			depth = LOOP_FLOOR_DEPTH
 		# Loop bulges downward for the bottom strand (direction = +1).
 		var bulge_y = poly_y + depth
 
-		var curve = Curve2D.new()
+		curve = Curve2D.new()
 		# Point A: at the polymerase (loop "entry", where finished strand resumes)
 		curve.add_point(anchor_point, Vector2.ZERO, Vector2(60, depth * 0.5))
 		# Point B: bottom of the U
@@ -335,7 +369,7 @@ func _update_peel_with_loop(helicase_x: float):
 		# Point C: at the helicase (loop "exit", freshly unzipped template)
 		curve.add_point(fork_point, Vector2(-60, depth * 0.5), Vector2.ZERO)
 
-# DIAGNOSTIC: same cadence, geometry inputs that fed the curve. If
+		# DIAGNOSTIC: same cadence, geometry inputs that fed the curve. If
 		# anchor_point and fork_point are nearly identical, or depth stays
 		# pinned at LOOP_MIN_DEPTH while n grows, that points at the curve
 		# construction itself rather than how bases are sampled along it.
@@ -344,6 +378,7 @@ func _update_peel_with_loop(helicase_x: float):
 				Time.get_ticks_msec(), n, depth, anchor_point, Vector2(mid_x, bulge_y), fork_point, curve.get_baked_length()
 			])
 
+	if n > 0 and curve != null:
 		var curve_len = curve.get_baked_length()
 		# Loop bases are ordered left-to-right (anchor side -> helicase side) in `bases`,
 		# since that's how build_sequence() populated the array.
@@ -351,6 +386,7 @@ func _update_peel_with_loop(helicase_x: float):
 			var base = loop_bases[i]
 			base.is_unzipped = true
 			base.is_on_loop = true
+			base.was_on_loop = true
 			# SPACING FIX: previously this distributed bases evenly across
 			# whatever the curve's actual baked length happened to be
 			# ((i+0.5)/n * curve_len), which decoupled spacing entirely from
@@ -384,16 +420,45 @@ func _update_peel_with_loop(helicase_x: float):
 			base.loop_normal_angle = (tangent_angle + PI / 2.0) if candidate_a.y > candidate_b.y else (tangent_angle - PI / 2.0)
 
 	# --- 5. Build backbone points in strand order: finished -> loop -> zipped ---
+	# MARKER LINE FIX: markers (5'/3') are NOT part of the backbone path --
+	# they're independent floating indicators that track a position near the
+	# first/last real base, not actual strand segments. Previously they were
+	# appended into `points`, the same PackedVector2Array used for
+	# backbone.points -- since Line2D draws one continuous connected line
+	# through every point in order, that made a real visible line segment
+	# stretch from the last regular base all the way out to the marker
+	# (which can be far away, e.g. mid-loop-transition), reading as if the
+	# marker were structurally anchoring the strand. Markers still track
+	# their position below (so they visually follow the trombone motion
+	# correctly), they just never get added to the backbone's point list.
 	var points: PackedVector2Array = []
 	var tangential = BASE_RADIUS # bottom strand offset sign
 
 	if left_marker:
-		left_marker.is_on_loop = false
-		if left_marker.original_pos.x < anchor_x:
+		if left_marker.original_pos.x > helicase_x:
+			# Still inside the unopened helix -- no movement.
+			left_marker.is_unzipped = false
+			left_marker.is_on_loop = false
+			left_marker.was_on_loop = false
+			left_marker.position = left_marker.original_pos
+		elif left_marker.original_pos.x < anchor_x:
+			# Past the loop's left edge -- finished, with the same animated
+			# push-release transition as regular finished bases (previously
+			# this snapped instantly and never participated in the trombone
+			# motion at all, which is what caused it to look like a fixed
+			# anchor instead of being pulled along).
+			_apply_finished_position(left_marker, wobble_for)
+		else:
+			# Still within the active loop span -- extend the curve to
+			# cover the marker too, same wobble-on-curve treatment as
+			# regular loop bases (placed right after the curve's anchor
+			# point, since the marker is the leftmost element).
 			left_marker.is_unzipped = true
+			left_marker.is_on_loop = true
+			left_marker.was_on_loop = true
+			var sample_t = curve.sample_baked_with_rotation(0.0)
 			var w = wobble_for.call(left_marker)
-			left_marker.position = left_marker.original_pos + w
-		points.append(Vector2(left_marker.position.x, left_marker.position.y + tangential))
+			left_marker.position = sample_t.origin + w
 
 	for base in finished:
 		points.append(Vector2(base.position.x, base.position.y + tangential))
@@ -406,12 +471,10 @@ func _update_peel_with_loop(helicase_x: float):
 		if right_marker.original_pos.x > helicase_x:
 			right_marker.is_unzipped = false
 			right_marker.position = right_marker.original_pos
-			points.append(Vector2(right_marker.position.x, right_marker.position.y + tangential))
 		else:
 			right_marker.is_unzipped = true
 			var w = wobble_for.call(right_marker)
 			right_marker.position = right_marker.original_pos + w
-			points.append(Vector2(right_marker.position.x, right_marker.position.y + tangential))
 
 	backbone.points = points
 	queue_redraw()

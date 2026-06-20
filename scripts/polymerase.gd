@@ -17,8 +17,18 @@ var current_fragment_target_index: int = -1
 # continuously chasing the helicase (which is what the leading polymerase does).
 var factory_anchor_x: float = 0.0
 var factory_anchor_initialized: bool = false
-var _last_supply_check_frame: int = -1
 var anchor_tween: Tween
+var _last_supply_check_frame: int = -1
+
+# LOOP LEFT EDGE: distinct from factory_anchor_x (which is where the
+# polymerase SPRITE sits, jumping forward only every 6 bases). This tracks
+# where the loop's actual geometric left boundary is -- it advances by one
+# BASE_SPACING step on EVERY individual successful bind, since synthesis
+# (and thus "how much template has been consumed into the loop") happens
+# continuously, not just at fragment boundaries. The curve math in
+# dna_strand.gd anchors to this instead of factory_anchor_x.
+var loop_left_edge_x: float = 0.0
+var loop_left_edge_initialized: bool = false
 
 const LABEL_W: float = 110.0
 const LABEL_H: float = 30.0
@@ -83,6 +93,10 @@ func _physics_process(delta):
 	if not is_leading and not factory_anchor_initialized and helicase:
 		factory_anchor_x = helicase_x - FACTORY_OFFSET
 		factory_anchor_initialized = true
+		# Loop's left edge starts at the same place the polymerase does --
+		# nothing's been synthesized yet, so there's no "consumed" template.
+		loop_left_edge_x = factory_anchor_x
+		loop_left_edge_initialized = true
 
 	if is_processing or is_detaching:
 		return
@@ -100,7 +114,7 @@ func _physics_process(delta):
 			# leaving the polymerase to wait on pure Brownian luck.
 			var needed_type = _get_complement(target_base.base_type)
 			_ensure_nucleotide_supply(needed_type)
-			
+
 			if current_target != target_base:
 				if current_target != null:
 					current_target.is_target = false
@@ -125,6 +139,22 @@ func _physics_process(delta):
 					_trigger_detachment()
 					return 
 				
+				# POST-DETACH Y FIX: once the helicase starts detaching, it
+				# tweens its own position.y upward (drift-away animation) --
+				# but this code was still reading helicase.position.y live
+				# every frame to compute follow_y, so the polymerase kept
+				# chasing the helicase's y as it drifted off, instead of
+				# detaching itself promptly. Freeze follow_y at the last
+				# good value once the helicase is no longer a valid
+				# reference point. (helicase.position.x >= end_x above
+				# already triggers our own detachment in the common case,
+				# but this branch only runs when target_base == null --
+				# this check covers the gap for whichever frame order
+				# leaves us here with a still-valid target_base.)
+				if helicase.is_detaching:
+					_trigger_detachment()
+					return
+
 				var follow_y = helicase_y + (-120.0 if template_strand.is_top_strand else 120.0)
 
 				if is_leading:
@@ -212,11 +242,22 @@ func _on_binding_complete(nucleotide, target_base, snap_pos):
 	_trigger_camera_shake(rules.shake_approve_strength if rules else 0.25, rules.shake_approve_decay if rules else 10.0)
 	
 	if template_strand.is_top_strand:
-		if target_base == template_strand.bases[0]: _spawn_marker("5'", snap_pos.x - 35.0, snap_pos.y)
-		if target_base == template_strand.bases[-1]: _spawn_marker("3'", snap_pos.x + 35.0, snap_pos.y)
+		if target_base == template_strand.bases[0]: _spawn_marker("5'", snap_pos.x - 35.0, snap_pos.y, target_base)
+		if target_base == template_strand.bases[-1]: _spawn_marker("3'", snap_pos.x + 35.0, snap_pos.y, target_base)
 	else:
-		if target_base == template_strand.bases[-1]: _spawn_marker("5'", snap_pos.x + 35.0, snap_pos.y)
-		if target_base == template_strand.bases[0]: _spawn_marker("3'", snap_pos.x - 35.0, snap_pos.y)
+		if target_base == template_strand.bases[-1]: _spawn_marker("5'", snap_pos.x + 35.0, snap_pos.y, target_base)
+		if target_base == template_strand.bases[0]: _spawn_marker("3'", snap_pos.x - 35.0, snap_pos.y, target_base)
+
+	# LOOP LEFT EDGE: advance by one BASE_SPACING on every individual bind
+	# (continuous), not just every 6th base. This is what makes the loop's
+	# near end actually get pulled in by synthesis, rather than staying
+	# pinned at a fixed point between the rarer fragment-jump events.
+	if not is_leading:
+		loop_left_edge_x += DnaStrand.BASE_SPACING
+		# Never let the tracked edge run ahead of the polymerase's own
+		# physical anchor -- it should trail behind/at factory_anchor_x,
+		# not overtake it (that would mean "more consumed than exists").
+		loop_left_edge_x = min(loop_left_edge_x, factory_anchor_x + FRAGMENT_ADVANCE)
 		
 	bases_bound_in_fragment += 1
 	if not is_leading and bases_bound_in_fragment >= 6:
@@ -304,8 +345,9 @@ func _get_target_base(exposed: Array):
 
 func _ensure_nucleotide_supply(needed_type: String):
 	# THROTTLE: this does a group scan, which is cheap but not free -- no
-	# need to run it more than ~5x/sec per polymerase, since "is a base
-	# nearby" doesn't meaningfully change frame-to-frame.
+	# need to run it more than ~10x/sec per polymerase, since "is a base
+	# nearby" doesn't meaningfully change frame-to-frame. Lowered from 12 to
+	# 6 frames (was ~5x/sec) for faster response after a stall.
 	var frame = Engine.get_physics_frames()
 	if frame - _last_supply_check_frame < 6:
 		return
@@ -365,16 +407,36 @@ func _spawn_hidden_nucleotide(needed_type: String, free_bases: Array):
 	get_parent().add_child(new_base)
 	new_base.start_redirect(global_position)
 
-func _spawn_marker(marker_type: String, pos_x: float, pos_y: float):
+func _spawn_marker(marker_type: String, pos_x: float, pos_y: float, partner: NitrogenBase = null):
 	var marker = nitrogen_base_scene.instantiate()
 	marker.base_type = marker_type
-	marker.state = NitrogenBase.State.TEMPLATE
-	marker.make_template()
-	marker.freeze = true
-	marker.linear_velocity = Vector2.ZERO
-	marker.angular_velocity = 0.0
 	marker.position = Vector2(pos_x, pos_y)
 	marker.original_pos = marker.position
+
+	if partner:
+		# LIVE TRACKING FIX: previously this marker was state=TEMPLATE,
+		# frozen, with a position set once at spawn time and never updated
+		# again -- so as the template base (and its loop) moved through the
+		# trombone motion afterward, the marker stayed behind at its
+		# original flat-strand position. Setting state=BOUND with
+		# partner_base wired up means this marker flows through the exact
+		# same live position-tracking already built for every other
+		# new-strand base in new_strand_backbone.gd's
+		# _update_active_fragment_positions() (derives position from
+		# partner.position + curve-normal offset when on the loop) -- no
+		# new tracking logic needed, just correct state/partner wiring.
+		marker.state = NitrogenBase.State.BOUND
+		marker.partner_base = partner
+		marker.make_bound()
+	else:
+		# Fallback (shouldn't normally happen): no partner given, behave
+		# like the old static marker.
+		marker.state = NitrogenBase.State.TEMPLATE
+		marker.make_template()
+		marker.freeze = true
+		marker.linear_velocity = Vector2.ZERO
+		marker.angular_velocity = 0.0
+
 	marker._apply_appearance()
 	marker.queue_redraw()
 	

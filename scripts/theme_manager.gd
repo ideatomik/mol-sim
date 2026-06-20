@@ -34,8 +34,8 @@ var marker_font_color: Color
 # ==========================================
 var dark_backbone_color: Color = Color(0.6, 0.6, 0.6, 0.9)
 var dark_arrow_color: Color = Color(0.9, 0.9, 0.9, 0.8)
-var dark_bond_normal_color: Color = Color(1.0, 1.0, 1.0, 0.5)
-var dark_bond_dimmed_color: Color = Color(1.0, 1.0, 1.0, 0.1)
+var dark_bond_normal_color: Color = Color(0.0, 0.871, 0.871, 0.502)
+var dark_bond_dimmed_color: Color = Color(0.0, 0.871, 0.871, 0.149)
 var dark_bond_highlight_color: Color = Color(1.0, 1.0, 1.0, 1.0)
 var dark_bg_color: Color = Color(0.1, 0.1, 0.15, 1.0)
 var dark_marker_circle_color: Color = Color(0.2, 0.2, 0.3, 1.0) # Dark blue/gray
@@ -58,7 +58,7 @@ var light_marker_font_color: Color = Color(0.1, 0.1, 0.2, 1.0)   # Dark blue/bla
 # ==========================================
 var backbone_width: float = 8.0
 var arrow_scale: float = 0.9
-var bond_thickness: float = 1 # hydrogen bonds
+var bond_thickness: float = 0.5 # hydrogen bonds
 
 # ==========================================
 # SCREEN SHAKE
