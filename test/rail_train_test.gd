@@ -1,14 +1,11 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v22
-# BASELINE SWITCH: instead of verifying every car independently crosses
-# NEW_BOTTOM_TEMPLATE_Y across multiple runs, we only need the FIRST car to
-# cross it once. That single crossing flips a global, one-time switch:
-# from that moment on, EVERY car's "finished" resting position becomes
-# NEW_BOTTOM_TEMPLATE_Y instead of STRAIGHT_Y -- no car, once pulled
-# through the loop, ever returns to RailVisual again. RailVisual still
-# holds cars the loop hasn't reached yet, exactly as before.
+# RAIL/TRAIN TEST v24
+# Removed Phase.REVERSING entirely -- it was unnecessary (ran for 10+
+# seconds widening the curve back to flat for no visible purpose, since
+# every car was already settled). Now goes straight from
+# FINISHING_LAST_PULSE to DONE once the last pulse settles.
 # ==========================================
 
 @onready var rail_path: Path2D = $RailPath
@@ -42,14 +39,8 @@ var factory_x: float = 0.0
 var sweep_speed: float = 90.0
 var collapse_speed: float = 90.0
 
-enum Phase { SWEEPING, REVERSING, DONE }
+enum Phase { SWEEPING, FINISHING_LAST_PULSE, DONE }
 var phase: Phase = Phase.SWEEPING
-
-const REVERSE_SHRINK_DISTANCE: float = 200.0
-var reverse_speed: float = 90.0
-
-const REVERSE_EASE_DURATION: float = 0.5
-var reverse_ease_t: float = 0.0
 
 const PULSE_CAR_COUNT: int = 6
 const PULSE_WIDTH: float = PULSE_CAR_COUNT * CAR_SPACING
@@ -59,7 +50,6 @@ var pulse_speed: float = 0.0
 enum PulseState { GROWING, SHRINKING, DONE }
 var pulse_state: PulseState = PulseState.GROWING
 
-const LAST_CAR_BUFFER: float = PULSE_WIDTH
 var pulse_offset: float = 0.0
 
 var population_left_edge: float = 0.0
@@ -126,23 +116,34 @@ func _process(delta):
 
 			population_left_edge = factory_x - pulse_offset
 
-			var current_synthesis_x = (factory_x + helicase_x) / 2.0
 			var last_car_x = car_original_x[car_original_x.size() - 1]
-			if current_synthesis_x >= last_car_x + LAST_CAR_BUFFER:
-				phase = Phase.REVERSING
-				reverse_ease_t = 0.0
-		Phase.REVERSING:
-			reverse_ease_t = min(reverse_ease_t + delta, REVERSE_EASE_DURATION)
-			var ease_progress = reverse_ease_t / REVERSE_EASE_DURATION
-			var eased_t = smoothstep(0.0, 1.0, ease_progress)
-			var current_velocity = lerp(sweep_speed, -reverse_speed, eased_t)
-			factory_x += current_velocity * delta
+			if factory_x > last_car_x:
+				phase = Phase.FINISHING_LAST_PULSE
+		Phase.FINISHING_LAST_PULSE:
+			match pulse_state:
+				PulseState.GROWING:
+					pulse_offset = min(pulse_offset + pulse_speed * delta, PULSE_WIDTH)
+					if pulse_offset >= PULSE_WIDTH:
+						pulse_state = PulseState.SHRINKING
+				PulseState.SHRINKING:
+					pulse_offset = max(pulse_offset - pulse_speed * delta, 0.0)
+					if pulse_offset <= 0.0:
+						pulse_state = PulseState.GROWING
+				PulseState.DONE:
+					pulse_offset = 0.0
 
-			var widened_by = (helicase_x - factory_x) - GAP_WIDTH
-			loop_depth = lerp(MAX_LOOP_DEPTH, 0.0, clamp(widened_by / REVERSE_SHRINK_DISTANCE, 0.0, 1.0))
+			var pulse_ratio2 = pulse_offset / PULSE_WIDTH
+			loop_depth = lerp(LOOP_FLOOR_DEPTH, MAX_LOOP_DEPTH, pulse_ratio2)
 
-			if loop_depth <= 0.0:
-				loop_depth = 0.0
+			population_left_edge = factory_x - pulse_offset
+
+			var all_settled = baseline_switched
+			if all_settled:
+				for i in range(cars.size()):
+					if abs(cars[i].position.y - NEW_BOTTOM_TEMPLATE_Y) > 2.0:
+						all_settled = false
+						break
+			if all_settled:
 				phase = Phase.DONE
 		Phase.DONE:
 			if not synthesis_circle_faded:
