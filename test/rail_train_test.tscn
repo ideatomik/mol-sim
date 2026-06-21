@@ -4,12 +4,15 @@
 
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_ubnsg")
+backbone_color = Color(1, 0.9882353, 0.4745098, 1)
+backbone_line_width = 10.0
+backbone_offset_distance = 14.0
 
 [node name="RailPath" type="Path2D" parent="." unique_id=1800472999]
 
 [node name="RailVisual" type="Line2D" parent="." unique_id=498789482]
 width = 2.0
-default_color = Color(0, 0, 0, 1)
+default_color = Color(0, 0, 0, 0)
 
 [node name="NewStrandLine" type="Line2D" parent="." unique_id=1075958164]
 width = 3.0
@@ -19,7 +22,7 @@ default_color = Color(0, 0, 0, 1)
 
 [node name="NewBottomTemplateStrandPosition" type="Line2D" parent="." unique_id=1670290036]
 width = 3.0
-default_color = Color(0, 0, 0, 1)
+default_color = Color(0, 0, 0, 0)
 
 [node name="BackboneLine" type="Line2D" parent="." unique_id=1274713731]
 width = 8.0

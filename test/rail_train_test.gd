@@ -25,42 +25,71 @@ extends Node2D
 @onready var new_synthesized_strand_position: Line2D = $NewSynthesizedStrandPosition
 @onready var backbone_line: Line2D = $BackboneLine
 
-const CAR_SPACING: float = 60.0
-const NUM_CARS: int = 24
-const STRAIGHT_Y: float = 300.0
-const TRACK_LENGTH: float = 1920.0
+# ==========================================
+# INSPECTOR-EXPOSED TUNABLES
+# Every color, size, thickness, and speed value lives here, grouped by
+# purpose, so future tweaks happen in the Inspector instead of hunting
+# through code. Anything purely structural/logical (group name strings,
+# enums) stays as a plain const further below, since those aren't meant
+# to be tuned.
+# ==========================================
 
-const NEW_BOTTOM_TEMPLATE_OFFSET: float = 90.0
-const NEW_BOTTOM_TEMPLATE_Y: float = STRAIGHT_Y + NEW_BOTTOM_TEMPLATE_OFFSET
-# As far below NewBottomTemplateStrandPosition as that line is below
-# RailVisual -- same NEW_BOTTOM_TEMPLATE_OFFSET applied a second time.
-const NEW_SYNTHESIZED_STRAND_Y: float = NEW_BOTTOM_TEMPLATE_Y + NEW_BOTTOM_TEMPLATE_OFFSET
+@export_group("Track Layout")
+@export var car_spacing: float = 60.0
+@export var num_cars: int = 24
+@export var straight_y: float = 300.0
+@export var track_length: float = 1920.0
+@export var new_bottom_template_offset: float = 90.0 # gap between RailVisual and NewBottomTemplateStrandPosition (and again to NewSynthesizedStrandPosition)
 
-const LOOP_FLOOR_DEPTH: float = 15.0
-const MAX_LOOP_DEPTH: float = 220.0
-const GAP_WIDTH: float = 168.0
+@export_group("Loop Geometry")
+@export var loop_floor_depth: float = 15.0
+@export var max_loop_depth: float = 220.0
+@export var gap_width: float = 168.0
 
-const CAR_HEIGHT: float = 24.0
-const BACKBONE_OFFSET_DISTANCE: float = 12.0 # half the car's 24px size -- puts the line at the car's edge, not through its center
-const BACKBONE_LINE_WIDTH: float = 8.0 # also used directly in _ready() when setting backbone_line.width, kept as a named constant so the bond marks can reference the same value
-const BOND_MARK_WIDTH: float = 14.0 # horizontal size of each placeholder ">" mark -- tune to taste
-const NEW_STRAND_Y: float = STRAIGHT_Y + MAX_LOOP_DEPTH + CAR_HEIGHT
+@export_group("Speeds & Timing")
+@export var sweep_speed: float = 90.0
+@export var pulse_car_count: int = 6
+@export var fade_duration: float = 0.6
 
-const SYNTHESIS_CIRCLE_RADIUS: float = 16.0
-const SYNTHESIS_CIRCLE_Y: float = STRAIGHT_Y + MAX_LOOP_DEPTH
-const FADE_DURATION: float = 0.6
+@export_group("Car Visuals")
+@export var car_size: Vector2 = Vector2(24, 24)
+@export var car_color_even: Color = Color(0.2, 0.6, 0.9)
+@export var car_color_odd: Color = Color(0.9, 0.6, 0.2)
+
+@export_group("Backbone")
+@export var backbone_color: Color = Color(1.0, 0.0, 1.0, 1.0)
+@export var backbone_line_width: float = 8.0
+@export var backbone_offset_distance: float = 12.0 # half the car's size by default -- puts the line at the car's edge, not through its center
+@export var backbone_offset_smoothing_speed: float = 10.0 # how fast the backbone's per-car y offset lerps toward its target -- higher = snappier, lower = smoother/slower. Set very high (e.g. 1000) to effectively disable smoothing.
+
+@export_group("Bond Marks")
+@export var bond_mark_width: float = 14.0
+@export var bond_mark_black_color: Color = Color(0.0, 0.0, 0.0, 1.0)
+@export var bond_mark_back_inset: float = 6.3 # how far the magenta diamond's back point sits inward from the black diamond's -- this distance IS the visible ">" sliver's depth (was "w * 0.45"; now an absolute value so it doesn't silently rescale if bond_mark_width changes)
+
+@export_group("Synthesis Circle")
+@export var synthesis_circle_color: Color = Color(1.0, 0.85, 0.1)
+@export var synthesis_circle_radius: float = 16.0
+
+# ==========================================
+# DERIVED VALUES (computed once in _ready() from the exports above) and
+# internal state -- not meant to be tuned directly.
+# ==========================================
+
+var new_bottom_template_y: float = 0.0
+var new_synthesized_strand_y: float = 0.0
+var new_strand_y: float = 0.0
+var synthesis_circle_y: float = 0.0
+var pulse_width: float = 0.0
+
 var synthesis_circle_faded: bool = false
 
 var helicase_x: float = 0.0
 var factory_x: float = 0.0
-var sweep_speed: float = 90.0
-var collapse_speed: float = 90.0
 
 enum Phase { SWEEPING, FINISHING_LAST_PULSE, DONE }
 var phase: Phase = Phase.SWEEPING
 
-const PULSE_CAR_COUNT: int = 6
-const PULSE_WIDTH: float = PULSE_CAR_COUNT * CAR_SPACING
 var pulse_time_budget: float = 0.0
 var pulse_speed: float = 0.0
 
@@ -71,7 +100,7 @@ var pulse_offset: float = 0.0
 
 var population_left_edge: float = 0.0
 
-var loop_depth: float = LOOP_FLOOR_DEPTH
+var loop_depth: float = 0.0
 
 var loop_length: float = 0.0
 const LOOP_POPULATION_GROUP := "loop_population"
@@ -84,6 +113,16 @@ enum CarTransferState { WAITING, ARMED, TRANSFERRED }
 var car_transfer_state: Array[CarTransferState] = []
 var car_max_y_reached: Array[float] = []
 
+# BACKBONE FLICKER FIX: per-car smoothed y_delta, lerped toward whatever
+# the classification (on_rail_visual / on_new_bottom / in-loop) currently
+# targets, instead of snapping instantly. A car hovering right at one of
+# the < 1.0 classification thresholds can flip between two OPPOSITE-SIGN
+# deltas frame to frame (e.g. +12 on RailVisual vs -12 on
+# NewBottomTemplateStrandPosition), which reads as flicker. Smoothing the
+# applied delta (not the classification itself) keeps the visual
+# transition gradual without touching the classification logic.
+var car_backbone_delta: Array[float] = []
+
 var baseline_switched: bool = false
 var baseline_switch_car_index: int = -1
 
@@ -93,12 +132,20 @@ var baseline_switch_car_index: int = -1
 var bond_marks: Array[Node2D] = []
 
 func _ready():
-	helicase_x = GAP_WIDTH
-	factory_x = 0.0
-	loop_depth = MAX_LOOP_DEPTH
+	# Compute derived values from the exported tunables FIRST -- everything
+	# below this point (curve building, car spawning, etc.) depends on them.
+	new_bottom_template_y = straight_y + new_bottom_template_offset
+	new_synthesized_strand_y = new_bottom_template_y + new_bottom_template_offset
+	new_strand_y = straight_y + max_loop_depth + car_size.y
+	synthesis_circle_y = straight_y + max_loop_depth
+	pulse_width = pulse_car_count * car_spacing
 
-	pulse_time_budget = PULSE_WIDTH / sweep_speed
-	pulse_speed = (2.0 * PULSE_WIDTH) / pulse_time_budget
+	helicase_x = gap_width
+	factory_x = 0.0
+	loop_depth = max_loop_depth
+
+	pulse_time_budget = pulse_width / sweep_speed
+	pulse_speed = (2.0 * pulse_width) / pulse_time_budget
 
 	_rebuild_rail()
 	_spawn_cars()
@@ -107,8 +154,8 @@ func _ready():
 	rail_visual.visible = true
 
 	new_bottom_template_strand_position.points = PackedVector2Array([
-		Vector2(0, NEW_BOTTOM_TEMPLATE_Y),
-		Vector2(TRACK_LENGTH, NEW_BOTTOM_TEMPLATE_Y)
+		Vector2(0, new_bottom_template_y),
+		Vector2(track_length, new_bottom_template_y)
 	])
 	new_bottom_template_strand_position.visible = true
 
@@ -116,13 +163,13 @@ func _ready():
 	# synthesis_x (the yellow circle's x) is at the very first frame --
 	# updated every frame after this in _process to keep tracking it.
 	new_synthesized_strand_position.points = PackedVector2Array([
-		Vector2(0, NEW_SYNTHESIZED_STRAND_Y),
-		Vector2((factory_x + helicase_x) / 2.0, NEW_SYNTHESIZED_STRAND_Y)
+		Vector2(0, new_synthesized_strand_y),
+		Vector2((factory_x + helicase_x) / 2.0, new_synthesized_strand_y)
 	])
 	new_synthesized_strand_position.visible = true
 
-	backbone_line.default_color = Color(1.0, 0.0, 1.0, 1.0)
-	backbone_line.width = BACKBONE_LINE_WIDTH
+	backbone_line.default_color = backbone_color
+	backbone_line.width = backbone_line_width
 	backbone_line.z_index = -1
 	# QoL: round points instead of square -- joint_mode rounds where
 	# segments meet (every interior car-to-car joint), cap_mode rounds the
@@ -138,12 +185,12 @@ func _process(delta):
 		Phase.SWEEPING:
 			helicase_x += sweep_speed * delta
 
-			factory_x = helicase_x - GAP_WIDTH
+			factory_x = helicase_x - gap_width
 
 			match pulse_state:
 				PulseState.GROWING:
-					pulse_offset = min(pulse_offset + pulse_speed * delta, PULSE_WIDTH)
-					if pulse_offset >= PULSE_WIDTH:
+					pulse_offset = min(pulse_offset + pulse_speed * delta, pulse_width)
+					if pulse_offset >= pulse_width:
 						pulse_state = PulseState.SHRINKING
 				PulseState.SHRINKING:
 					pulse_offset = max(pulse_offset - pulse_speed * delta, 0.0)
@@ -152,8 +199,8 @@ func _process(delta):
 				PulseState.DONE:
 					pulse_offset = 0.0
 
-			var pulse_ratio = pulse_offset / PULSE_WIDTH
-			loop_depth = lerp(LOOP_FLOOR_DEPTH, MAX_LOOP_DEPTH, pulse_ratio)
+			var pulse_ratio = pulse_offset / pulse_width
+			loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio)
 
 			population_left_edge = factory_x - pulse_offset
 
@@ -163,8 +210,8 @@ func _process(delta):
 		Phase.FINISHING_LAST_PULSE:
 			match pulse_state:
 				PulseState.GROWING:
-					pulse_offset = min(pulse_offset + pulse_speed * delta, PULSE_WIDTH)
-					if pulse_offset >= PULSE_WIDTH:
+					pulse_offset = min(pulse_offset + pulse_speed * delta, pulse_width)
+					if pulse_offset >= pulse_width:
 						pulse_state = PulseState.SHRINKING
 				PulseState.SHRINKING:
 					pulse_offset = max(pulse_offset - pulse_speed * delta, 0.0)
@@ -173,28 +220,28 @@ func _process(delta):
 				PulseState.DONE:
 					pulse_offset = 0.0
 
-			var pulse_ratio2 = pulse_offset / PULSE_WIDTH
-			loop_depth = lerp(LOOP_FLOOR_DEPTH, MAX_LOOP_DEPTH, pulse_ratio2)
+			var pulse_ratio2 = pulse_offset / pulse_width
+			loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio2)
 
 			population_left_edge = factory_x - pulse_offset
 
 			var all_settled = baseline_switched
 			if all_settled:
 				for i in range(cars.size()):
-					if abs(cars[i].position.y - NEW_BOTTOM_TEMPLATE_Y) > 2.0:
+					if abs(cars[i].position.y - new_bottom_template_y) > 2.0:
 						all_settled = false
 						break
 			if all_settled:
 				# FIX: loop_depth was whatever value the pulse cycle
 				# happened to be at the instant all cars passed the
-				# position check -- could be anywhere from LOOP_FLOOR_DEPTH
+				# position check -- could be anywhere from loop_floor_depth
 				# (15) up, not necessarily 0. Since nothing in Phase.DONE
 				# ever touches loop_depth again, that residual value got
 				# frozen into RailVisual's curve forever, leaving a small
 				# permanent bulge near the trailing end (visible as the
 				# black curve remaining, with the last car's backbone
 				# offset dipping toward it since the car's actual position
-				# was still very slightly off STRAIGHT_Y/NEW_BOTTOM_
+				# was still very slightly off straight_y/NEW_BOTTOM_
 				# TEMPLATE_Y because of that residual curve). Snapping to
 				# exactly 0 here guarantees a perfectly flat curve once we
 				# stop animating it.
@@ -204,12 +251,12 @@ func _process(delta):
 			if not synthesis_circle_faded:
 				synthesis_circle_faded = true
 				var fade_tween = create_tween()
-				fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, FADE_DURATION)
+				fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, fade_duration)
 
 	_rebuild_rail()
 
 	var synthesis_x = (factory_x + helicase_x) / 2.0
-	synthesis_circle.position = Vector2(synthesis_x, SYNTHESIS_CIRCLE_Y)
+	synthesis_circle.position = Vector2(synthesis_x, synthesis_circle_y)
 
 	# NewSynthesizedStrandPosition: starts at the left edge of the track,
 	# right edge follows synthesis_x (the same x driving the yellow
@@ -220,12 +267,12 @@ func _process(delta):
 	# naturally freezes at wherever the circle was when it faded, same as
 	# everything else settles at DONE.
 	new_synthesized_strand_position.points = PackedVector2Array([
-		Vector2(0, NEW_SYNTHESIZED_STRAND_Y),
-		Vector2(synthesis_x, NEW_SYNTHESIZED_STRAND_Y)
+		Vector2(0, new_synthesized_strand_y),
+		Vector2(synthesis_x, new_synthesized_strand_y)
 	])
 
 	for i in range(cars.size()):
-		cars[i].progress = TRACK_LENGTH - car_original_x[i]
+		cars[i].progress = track_length - car_original_x[i]
 
 	for i in range(cars.size()):
 		var car_y = cars[i].position.y
@@ -233,18 +280,18 @@ func _process(delta):
 		if car_y > car_max_y_reached[i]:
 			car_max_y_reached[i] = car_y
 
-		if not baseline_switched and car_y >= NEW_BOTTOM_TEMPLATE_Y:
+		if not baseline_switched and car_y >= new_bottom_template_y:
 			baseline_switched = true
 			baseline_switch_car_index = i
 			print(">>> BASELINE SWITCH TRIGGERED by car[%d] at y=%.1f (t=%s) <<<" % [i, car_y, Time.get_ticks_msec()])
 
 		match car_transfer_state[i]:
 			CarTransferState.WAITING:
-				if car_y >= STRAIGHT_Y + MAX_LOOP_DEPTH:
+				if car_y >= straight_y + max_loop_depth:
 					car_transfer_state[i] = CarTransferState.ARMED
 					print("[t=%s] car[%d] ARMED (y=%.1f)" % [Time.get_ticks_msec(), i, car_y])
 			CarTransferState.ARMED:
-				if car_y < NEW_BOTTOM_TEMPLATE_Y:
+				if car_y < new_bottom_template_y:
 					car_transfer_state[i] = CarTransferState.TRANSFERRED
 					print("[t=%s] car[%d] TRANSFERRED (y=%.1f)" % [Time.get_ticks_msec(), i, car_y])
 			CarTransferState.TRANSFERRED:
@@ -309,10 +356,10 @@ func _process(delta):
 	# fixed order cannot self-cross at those joints.
 	#
 	# OFFSET DIRECTION (corrected per explicit instruction):
-	#   - On RailVisual (not yet transferred, resting at ~STRAIGHT_Y=300):
+	#   - On RailVisual (not yet transferred, resting at ~straight_y=300):
 	#     backbone BELOW the cars -- LARGER y than the car.
 	#   - On NewBottomTemplateStrandPosition (transferred, resting at
-	#     ~NEW_BOTTOM_TEMPLATE_Y=390): backbone ABOVE the cars -- SMALLER y
+	#     ~new_bottom_template_y=390): backbone ABOVE the cars -- SMALLER y
 	#     than the car.
 	# These two cases now have GENUINELY OPPOSITE signs (previously they
 	# coincidentally matched under the old "away from/inside reference_side"
@@ -322,16 +369,21 @@ func _process(delta):
 	var backbone_points = PackedVector2Array()
 	for i in range(cars.size()):
 		var car = cars[i]
-		var on_rail_visual = abs(car.position.y - STRAIGHT_Y) < 1.0
-		var on_new_bottom = abs(car.position.y - NEW_BOTTOM_TEMPLATE_Y) < 1.0
-		var y_delta: float
+		var on_rail_visual = abs(car.position.y - straight_y) < 1.0
+		var on_new_bottom = abs(car.position.y - new_bottom_template_y) < 1.0
+		var target_delta: float
 		if on_rail_visual:
-			y_delta = BACKBONE_OFFSET_DISTANCE # below the car
+			target_delta = backbone_offset_distance # below the car
 		elif on_new_bottom:
-			y_delta = -BACKBONE_OFFSET_DISTANCE # above the car
+			target_delta = -backbone_offset_distance # above the car
 		else:
-			y_delta = BACKBONE_OFFSET_DISTANCE # inside the loop: toward the bulge, consistent direction (position doesn't matter here)
-		backbone_points.append(Vector2(car.position.x, car.position.y + y_delta))
+			target_delta = backbone_offset_distance # inside the loop: toward the bulge, consistent direction (position doesn't matter here)
+
+		# FLICKER FIX: lerp the actually-applied delta toward target_delta
+		# instead of snapping to it instantly -- smooths the visible
+		# transition when classification flips rapidly near a threshold.
+		car_backbone_delta[i] = lerp(car_backbone_delta[i], target_delta, clamp(backbone_offset_smoothing_speed * delta, 0.0, 1.0))
+		backbone_points.append(Vector2(car.position.x, car.position.y + car_backbone_delta[i]))
 
 	# REJECTED APPROACH (kept as a comment for reference, see retry below):
 	# inserting a notch point at every segment midpoint, offset
@@ -384,8 +436,8 @@ func _create_bond_mark_sprite() -> Node2D:
 	# single precisely-wound outline shape. Much simpler to get right than
 	# a 6-point self-winding polygon.
 	var holder = Node2D.new()
-	var h = BACKBONE_LINE_WIDTH / 2.0
-	var w = BOND_MARK_WIDTH
+	var h = backbone_line_width / 2.0
+	var w = bond_mark_width
 
 	# Bottom: black diamond, full size. 4 points: tip (right), top, back
 	# (left), bottom.
@@ -396,7 +448,7 @@ func _create_bond_mark_sprite() -> Node2D:
 		Vector2(-w / 2.0, 0),    # back
 		Vector2(0, h),           # bottom
 	])
-	black_diamond.color = Color(0.0, 0.0, 0.0, 1.0)
+	black_diamond.color = bond_mark_black_color
 	holder.add_child(black_diamond)
 
 	# Top: magenta diamond, built with EXPLICIT, independently-placed
@@ -410,7 +462,7 @@ func _create_bond_mark_sprite() -> Node2D:
 	# pulled inward -- guaranteeing black is hidden everywhere except a
 	# deliberate gap at the back, which is what actually produces a clean
 	# one-sided ">" sliver instead of a thin outline all around.
-	var back_inset = w * 0.45 # how far the magenta back point sits inward from the black diamond's own back point -- this distance IS the visible ">" sliver's depth
+	var back_inset = bond_mark_back_inset
 	var magenta_diamond = Polygon2D.new()
 	magenta_diamond.polygon = PackedVector2Array([
 		Vector2(w / 2.0, 0),                  # tip: matches black's tip exactly, fully covers it
@@ -418,7 +470,7 @@ func _create_bond_mark_sprite() -> Node2D:
 		Vector2(-w / 2.0 + back_inset, 0),    # back: pulled inward from black's back point -- this gap is the visible sliver
 		Vector2(0, h),                            # bottom: matches black's bottom exactly, fully covers it
 	])
-	magenta_diamond.color = Color(1.0, 0.0, 1.0, 1.0) # same as backbone_line.default_color
+	magenta_diamond.color = backbone_color # matches the backbone line's own color
 	holder.add_child(magenta_diamond)
 
 	holder.z_index = 1 # above the backbone line
@@ -427,10 +479,10 @@ func _create_bond_mark_sprite() -> Node2D:
 
 func _rebuild_rail():
 	# FIX: once Phase.DONE, there is no more transition happening -- every
-	# car has already settled at NEW_BOTTOM_TEMPLATE_Y. The normal
+	# car has already settled at new_bottom_template_y. The normal
 	# construction below ALWAYS includes a real step between the bulge
-	# point (y=STRAIGHT_Y when loop_depth=0) and the anchor point
-	# (y=anchor_rest_y=NEW_BOTTOM_TEMPLATE_Y once baseline_switched) --
+	# point (y=straight_y when loop_depth=0) and the anchor point
+	# (y=anchor_rest_y=new_bottom_template_y once baseline_switched) --
 	# that step is correct WHILE the loop is active (it's literally the
 	# transition geometry), but has no reason to exist once DONE. A car
 	# whose fixed .progress happens to sample a point inside that lingering
@@ -441,8 +493,8 @@ func _rebuild_rail():
 	# line at the correct resting height, full stop.
 	if phase == Phase.DONE:
 		var flat_curve = Curve2D.new()
-		var rest_y = NEW_BOTTOM_TEMPLATE_Y if baseline_switched else STRAIGHT_Y
-		flat_curve.add_point(Vector2(TRACK_LENGTH, rest_y))
+		var rest_y = new_bottom_template_y if baseline_switched else straight_y
+		flat_curve.add_point(Vector2(track_length, rest_y))
 		flat_curve.add_point(Vector2(0, rest_y))
 		loop_length = 0.0
 		rail_path.curve = flat_curve
@@ -451,14 +503,14 @@ func _rebuild_rail():
 
 	var curve = Curve2D.new()
 
-	curve.add_point(Vector2(TRACK_LENGTH, STRAIGHT_Y))
-	curve.add_point(Vector2(helicase_x, STRAIGHT_Y))
+	curve.add_point(Vector2(track_length, straight_y))
+	curve.add_point(Vector2(helicase_x, straight_y))
 
-	var bulge_y = STRAIGHT_Y + loop_depth
+	var bulge_y = straight_y + loop_depth
 	var handle_x = max(40.0, loop_depth * 0.6)
 
 	curve.add_point(
-		Vector2(helicase_x, STRAIGHT_Y),
+		Vector2(helicase_x, straight_y),
 		Vector2.ZERO,
 		Vector2(-handle_x, loop_depth * 0.5)
 	)
@@ -473,7 +525,7 @@ func _rebuild_rail():
 		Vector2(-mid_handle_x, 0)
 	)
 
-	var anchor_rest_y = NEW_BOTTOM_TEMPLATE_Y if baseline_switched else STRAIGHT_Y
+	var anchor_rest_y = new_bottom_template_y if baseline_switched else straight_y
 
 	curve.add_point(
 		Vector2(factory_x, anchor_rest_y),
@@ -483,7 +535,7 @@ func _rebuild_rail():
 
 	var loop_only_curve = Curve2D.new()
 	loop_only_curve.add_point(
-		Vector2(helicase_x, STRAIGHT_Y),
+		Vector2(helicase_x, straight_y),
 		Vector2.ZERO,
 		Vector2(-handle_x, loop_depth * 0.5)
 	)
@@ -510,31 +562,32 @@ func _setup_synthesis_circle():
 	const SEGMENTS = 32
 	for i in range(SEGMENTS):
 		var angle = (float(i) / SEGMENTS) * TAU
-		points.append(Vector2(cos(angle), sin(angle)) * SYNTHESIS_CIRCLE_RADIUS)
+		points.append(Vector2(cos(angle), sin(angle)) * synthesis_circle_radius)
 	poly.polygon = points
-	poly.color = Color(1.0, 0.85, 0.1)
+	poly.color = synthesis_circle_color
 	synthesis_circle.add_child(poly)
 
 func _spawn_cars():
-	var row_span = (NUM_CARS - 1) * CAR_SPACING
-	var row_start_x = (TRACK_LENGTH - row_span) / 2.0
+	var row_span = (num_cars - 1) * car_spacing
+	var row_start_x = (track_length - row_span) / 2.0
 
-	for i in range(NUM_CARS):
+	for i in range(num_cars):
 		var car = PathFollow2D.new()
 		car.rotates = false
 		car.loop = false
 
 		var visual = ColorRect.new()
-		visual.size = Vector2(24, 24)
-		visual.position = Vector2(-12, -12)
-		visual.color = Color(0.2, 0.6, 0.9) if i % 2 == 0 else Color(0.9, 0.6, 0.2)
+		visual.size = car_size
+		visual.position = Vector2(-car_size.x / 2.0, -car_size.y / 2.0)
+		visual.color = car_color_even if i % 2 == 0 else car_color_odd
 		car.add_child(visual)
 
 		rail_path.add_child(car)
 
-		var x = row_start_x + i * CAR_SPACING
+		var x = row_start_x + i * car_spacing
 		car_original_x.append(x)
-		car.progress = TRACK_LENGTH - x
+		car.progress = track_length - x
 		cars.append(car)
 		car_transfer_state.append(CarTransferState.WAITING)
-		car_max_y_reached.append(STRAIGHT_Y)
+		car_max_y_reached.append(straight_y)
+		car_backbone_delta.append(backbone_offset_distance) # starts matching the RailVisual case, since that's where cars begin
