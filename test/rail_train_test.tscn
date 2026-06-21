@@ -12,7 +12,7 @@ backbone_offset_distance = 14.0
 
 [node name="RailVisual" type="Line2D" parent="." unique_id=498789482]
 width = 2.0
-default_color = Color(0, 0, 0, 0)
+default_color = Color(0, 1, 0, 1)
 
 [node name="NewStrandLine" type="Line2D" parent="." unique_id=1075958164]
 width = 3.0
@@ -22,7 +22,7 @@ default_color = Color(0, 0, 0, 1)
 
 [node name="NewBottomTemplateStrandPosition" type="Line2D" parent="." unique_id=1670290036]
 width = 3.0
-default_color = Color(0, 0, 0, 0)
+default_color = Color(0, 1, 0, 1)
 
 [node name="BackboneLine" type="Line2D" parent="." unique_id=1274713731]
 width = 8.0

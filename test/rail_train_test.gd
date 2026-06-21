@@ -50,6 +50,7 @@ extends Node2D
 @export var sweep_speed: float = 90.0
 @export var pulse_car_count: int = 6
 @export var fade_duration: float = 0.6
+@export var settling_duration: float = 0.5 # how long the curve eases flat instead of snapping instantly at the end of the run -- fixes the "teleport" when transitioning to DONE
 
 @export_group("Car Visuals")
 @export var car_size: Vector2 = Vector2(24, 24)
@@ -87,7 +88,7 @@ var synthesis_circle_faded: bool = false
 var helicase_x: float = 0.0
 var factory_x: float = 0.0
 
-enum Phase { SWEEPING, FINISHING_LAST_PULSE, DONE }
+enum Phase { SWEEPING, FINISHING_LAST_PULSE, SETTLING, DONE }
 var phase: Phase = Phase.SWEEPING
 
 var pulse_time_budget: float = 0.0
@@ -125,6 +126,23 @@ var car_backbone_delta: Array[float] = []
 
 var baseline_switched: bool = false
 var baseline_switch_car_index: int = -1
+
+# SETTLING PHASE: eases the curve flat over settling_duration instead of
+# snapping instantly. settling_t tracks progress (0 to settling_duration);
+# the *_start values capture loop_depth/factory_x/helicase_x at the moment
+# settling begins, so we can lerp FROM the actual current geometry TO the
+# final flat target, rather than from some arbitrary fixed starting point.
+var settling_t: float = 0.0
+var settling_loop_depth_start: float = 0.0
+# Blends the WHOLE curve's y-coordinates toward the final flat target
+# (new_bottom_template_y everywhere) as SETTLING progresses -- 0 during
+# normal operation/SWEEPING/FINISHING_LAST_PULSE, eases to 1 by the end of
+# SETTLING. Needed because loop_depth alone reaching 0 doesn't make the
+# curve match Phase.DONE's flat construction: the anchor_rest_y step
+# (straight_y -> new_bottom_template_y) is independent of loop_depth and
+# was never eased, causing a real ~27px single-frame jump at the
+# SETTLING->DONE boundary (confirmed by frame-by-frame log).
+var settle_blend: float = 0.0
 
 # PHOSPHODIESTER BOND MARKS: one Node2D (holding a Polygon2D placeholder
 # ">" shape) per bond/segment, created lazily in _update_bond_marks(),
@@ -232,22 +250,39 @@ func _process(delta):
 						all_settled = false
 						break
 			if all_settled:
-				# FIX: loop_depth was whatever value the pulse cycle
-				# happened to be at the instant all cars passed the
-				# position check -- could be anywhere from loop_floor_depth
-				# (15) up, not necessarily 0. Since nothing in Phase.DONE
-				# ever touches loop_depth again, that residual value got
-				# frozen into RailVisual's curve forever, leaving a small
-				# permanent bulge near the trailing end (visible as the
-				# black curve remaining, with the last car's backbone
-				# offset dipping toward it since the car's actual position
-				# was still very slightly off straight_y/NEW_BOTTOM_
-				# TEMPLATE_Y because of that residual curve). Snapping to
-				# exactly 0 here guarantees a perfectly flat curve once we
-				# stop animating it.
+				# FIX (superseded by SETTLING phase below): previously
+				# snapped loop_depth = 0.0 and jumped straight to
+				# Phase.DONE here -- which fixed the residual-bulge bug,
+				# but produced its own "teleport": every car's position
+				# (sampled via PathFollow2D against the curve) could jump
+				# in a single frame from wherever it was on the still-
+				# curved geometry to its exact final flat-line spot,
+				# especially visible as the whole train appearing to snap
+				# to the screen's center. Now eases through a brief
+				# SETTLING phase instead of snapping directly.
+				settling_t = 0.0
+				settling_loop_depth_start = loop_depth
+				phase = Phase.SETTLING
+		Phase.SETTLING:
+			# Eases loop_depth from its captured starting value toward 0,
+			# AND settle_blend from 0 toward 1, both over settling_duration
+			# using the same eased_t. settle_blend is what actually fixes
+			# the SETTLING->DONE jump: it blends every curve y-coordinate
+			# in _rebuild_rail() toward new_bottom_template_y, so by t=1.0
+			# the eased curve already matches what Phase.DONE's flat
+			# construction would produce -- making the handoff seamless.
+			settling_t += delta
+			var t = clamp(settling_t / settling_duration, 0.0, 1.0)
+			var eased_t = smoothstep(0.0, 1.0, t)
+			loop_depth = lerp(settling_loop_depth_start, 0.0, eased_t)
+			settle_blend = eased_t
+
+			if t >= 1.0:
 				loop_depth = 0.0
+				settle_blend = 1.0
 				phase = Phase.DONE
 		Phase.DONE:
+			settle_blend = 1.0 # stays fully blended once DONE
 			if not synthesis_circle_faded:
 				synthesis_circle_faded = true
 				var fade_tween = create_tween()
@@ -273,6 +308,18 @@ func _process(delta):
 
 	for i in range(cars.size()):
 		cars[i].progress = track_length - car_original_x[i]
+
+	# DIAGNOSTIC: unthrottled, fine-grained tracker for the LAST car
+	# specifically, active only during the transition window
+	# (FINISHING_LAST_PULSE / SETTLING / DONE) where the reported snap
+	# happens -- to pinpoint exactly which frame/phase-boundary it occurs
+	# at, since the throttled once-per-second debug print can't resolve a
+	# single-frame discontinuity.
+	if phase == Phase.FINISHING_LAST_PULSE or phase == Phase.SETTLING or phase == Phase.DONE:
+		var last_idx = cars.size() - 1
+		print("[TRANSITION t=%s] phase:%s loop_depth:%.2f | last_car y=%.3f progress=%.1f" % [
+			Time.get_ticks_msec(), Phase.keys()[phase], loop_depth, cars[last_idx].position.y, cars[last_idx].progress
+		])
 
 	for i in range(cars.size()):
 		var car_y = cars[i].position.y
@@ -503,14 +550,24 @@ func _rebuild_rail():
 
 	var curve = Curve2D.new()
 
-	curve.add_point(Vector2(track_length, straight_y))
-	curve.add_point(Vector2(helicase_x, straight_y))
+	# SETTLE BLEND: every y-coordinate below uses blended_straight_y
+	# instead of straight_y directly, and anchor_rest_y is computed from
+	# it too -- both ease toward new_bottom_template_y as settle_blend
+	# goes 0->1 during SETTLING. This is what makes the curve's shape
+	# converge to EXACTLY match Phase.DONE's flat construction by the time
+	# the phase transition happens, eliminating the single-frame jump
+	# (confirmed ~27px) that occurred when only loop_depth was eased but
+	# the straight_y/anchor_rest_y step was left completely untouched.
+	var blended_straight_y = lerp(straight_y, new_bottom_template_y, settle_blend) if baseline_switched else straight_y
 
-	var bulge_y = straight_y + loop_depth
+	curve.add_point(Vector2(track_length, blended_straight_y))
+	curve.add_point(Vector2(helicase_x, blended_straight_y))
+
+	var bulge_y = blended_straight_y + loop_depth
 	var handle_x = max(40.0, loop_depth * 0.6)
 
 	curve.add_point(
-		Vector2(helicase_x, straight_y),
+		Vector2(helicase_x, blended_straight_y),
 		Vector2.ZERO,
 		Vector2(-handle_x, loop_depth * 0.5)
 	)
@@ -525,7 +582,7 @@ func _rebuild_rail():
 		Vector2(-mid_handle_x, 0)
 	)
 
-	var anchor_rest_y = new_bottom_template_y if baseline_switched else straight_y
+	var anchor_rest_y = new_bottom_template_y if baseline_switched else blended_straight_y
 
 	curve.add_point(
 		Vector2(factory_x, anchor_rest_y),
@@ -535,7 +592,7 @@ func _rebuild_rail():
 
 	var loop_only_curve = Curve2D.new()
 	loop_only_curve.add_point(
-		Vector2(helicase_x, straight_y),
+		Vector2(helicase_x, blended_straight_y),
 		Vector2.ZERO,
 		Vector2(-handle_x, loop_depth * 0.5)
 	)
