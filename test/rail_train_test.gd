@@ -1,20 +1,19 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v31
-# Reverted the omega-flare loop geometry change (back to the original
-# mid_handle_x = 0.25x multiplier) -- that was a loop-geometry edit made
-# specifically to chase the backbone's self-crossing problem, and it's
-# being undone now that we're rebuilding the backbone from scratch with a
-# simpler approach. Loop mechanic (baseline switch, FINISHING_LAST_PULSE)
-# is otherwise unchanged from its known-good state.
-#
-# Backbone: REMOVED the Curve2D/Catmull-Rom auto-tangent implementation
-# entirely (V25-V30). Starting over with a plain polyline -- straight
-# Line2D segments directly between car positions, no curve math, no
-# tangent estimation, no handle capping. Accepts the "jagged" look in
-# exchange for guaranteed correctness (no self-crossing is possible with a
-# straight polyline through points in a fixed, known order).
+# RAIL/TRAIN TEST v36
+# FIXED a real "permanent skip" bug: the ARMED check compared
+# INSTANTANEOUS car_y against a fixed threshold, but the pulse is a
+# triangle wave with a fixed period (pulse_car_count car-widths) -- cars
+# whose transit through the loop happened to align with the shallower
+# portion of a cycle could NEVER satisfy that check, no matter how long
+# the simulation ran. Confirmed empirically: cars 0, 1, 6, 7, 12, 13, 18,
+# 19 never triggered ARMED at all, a predictable "2 skipped every 6 cars"
+# pattern matching pulse_car_count exactly. Now checks car_max_y_reached
+# (each car's TRUE historical peak, already tracked but previously
+# unused for this) instead of the instantaneous value -- guarantees every
+# car eventually qualifies once its real peak clears the threshold,
+# regardless of pulse timing.
 # ==========================================
 
 @onready var rail_path: Path2D = $RailPath
@@ -42,13 +41,24 @@ extends Node2D
 @export var new_bottom_template_offset: float = 90.0 # gap between RailVisual and NewBottomTemplateStrandPosition (and again to NewSynthesizedStrandPosition)
 
 @export_group("Loop Geometry")
+## How deep the trombone loop bulges at its SHALLOWEST point during a pulse cycle (in pixels, below the flat track). The pulse never goes fully flat -- this is the floor it bounces back to before growing again.
 @export var loop_floor_depth: float = 15.0
+## How deep the trombone loop bulges at its DEEPEST point during a pulse cycle (in pixels, below the flat track). This is the peak of each pulse's depth oscillation.
 @export var max_loop_depth: float = 220.0
+## The fixed horizontal distance (in pixels) the loop spans between its two anchor points (helicase_x and factory_x) while actively sweeping. Also used as the reference width when scaling the loop's bulge handles.
 @export var gap_width: float = 168.0
+## UNUSED -- leftover from an earlier 5-point "neck" experiment that was abandoned. Has no effect on the current 3-point loop construction. Safe to ignore or remove.
+@export var neck_depth_fraction: float = 0.15
+## How wide the loop's bottom (waist) bulges, as a fraction of gap_width, when loop_depth is near its SHALLOWEST (loop_floor_depth) -- the loop is flatter here, so it's safe to flare wider without the curve crossing itself.
+@export var waist_flare_shallow: float = 0.45
+## How wide the loop's bottom (waist) bulges, as a fraction of gap_width, when loop_depth is near its DEEPEST (max_loop_depth) -- kept narrower here, since a wide flare at maximum depth risks the curve's handles overshooting and crossing itself.
+@export var waist_flare_deep: float = 0.22
+## Fraction of max_loop_depth a car's y must reach to count as "genuinely pulled deep into the loop" (the ARMED state, a prerequisite for the magenta TRANSFERRED color trigger). NOT 1.0: only a car whose .progress happens to sample the curve's exact geometric midpoint ever reaches the full theoretical max_loop_depth -- most cars peak somewhat short of it, so a 1.0 threshold (520px) was confirmed unreachable in practice (no car ever triggered ARMED). 0.7 (~454px) is comfortably within what real cars actually reach.
+@export var armed_depth_fraction: float = 0.7
 
 @export_group("Speeds & Timing")
 @export var sweep_speed: float = 90.0
-@export var pulse_car_count: int = 6
+@export var pulse_car_count: int = 5
 @export var fade_duration: float = 0.6
 @export var settling_duration: float = 0.5 # how long the curve eases flat instead of snapping instantly at the end of the run -- fixes the "teleport" when transitioning to DONE
 
@@ -56,6 +66,10 @@ extends Node2D
 @export var car_size: Vector2 = Vector2(24, 24)
 @export var car_color_even: Color = Color(0.2, 0.6, 0.9)
 @export var car_color_odd: Color = Color(0.9, 0.6, 0.2)
+## CURRENTLY UNUSED -- was previously triggered when a car's fixed spawn x passed factory_x (unzipped_population group), but that trigger fired prematurely for cars that hadn't actually been visually pulled through the loop yet (it compared spawn position, not real position). Removed in favor of car_color_sequence_complete, which triggers on the genuinely correct CarTransferState.ARMED -> TRANSFERRED transition instead.
+@export var car_color_unzipped: Color = Color(0.0, 1.0, 1.0, 1.0) # full cyan
+## Color a car switches to permanently once it completes the genuine ARMED->TRANSFERRED transition: pulled deep into the loop (reaching straight_y+max_loop_depth), then pushed onto NewBottomTemplateStrandPosition -- the real, position-based "passed through the polymerase" event. Overrides any other car color from that point on.
+@export var car_color_sequence_complete: Color = Color(1.0, 0.0, 1.0, 1.0) # full magenta
 
 @export_group("Backbone")
 @export var backbone_color: Color = Color(1.0, 0.0, 1.0, 1.0)
@@ -108,6 +122,7 @@ const LOOP_POPULATION_GROUP := "loop_population"
 const UNZIPPED_POPULATION_GROUP := "unzipped_population"
 
 var cars: Array[PathFollow2D] = []
+var car_visuals: Array[ColorRect] = [] # parallel to cars[], for direct color changes (e.g. cyan once unzipped) without searching the scene tree each frame
 var car_original_x: Array[float] = []
 
 enum CarTransferState { WAITING, ARMED, TRANSFERRED }
@@ -250,16 +265,6 @@ func _process(delta):
 						all_settled = false
 						break
 			if all_settled:
-				# FIX (superseded by SETTLING phase below): previously
-				# snapped loop_depth = 0.0 and jumped straight to
-				# Phase.DONE here -- which fixed the residual-bulge bug,
-				# but produced its own "teleport": every car's position
-				# (sampled via PathFollow2D against the curve) could jump
-				# in a single frame from wherever it was on the still-
-				# curved geometry to its exact final flat-line spot,
-				# especially visible as the whole train appearing to snap
-				# to the screen's center. Now eases through a brief
-				# SETTLING phase instead of snapping directly.
 				settling_t = 0.0
 				settling_loop_depth_start = loop_depth
 				phase = Phase.SETTLING
@@ -290,36 +295,21 @@ func _process(delta):
 
 	_rebuild_rail()
 
-	var synthesis_x = (factory_x + helicase_x) / 2.0
-	synthesis_circle.position = Vector2(synthesis_x, synthesis_circle_y)
+	# synthesis_circle tracks the loop's LEFTMOST anchor (factory_x) in x,
+	# with y FIXED at new_bottom_template_y (not depth-dependent) -- per
+	# explicit instruction, distinct from synthesis_circle_y (which is
+	# derived from max_loop_depth and no longer used here).
+	synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
 
-	# NewSynthesizedStrandPosition: starts at the left edge of the track,
-	# right edge follows synthesis_x (the same x driving the yellow
-	# circle) every frame. Once Phase.DONE, synthesis_circle fades out and
-	# this stops being updated here too (the loop_depth==0 DONE-phase
-	# early return in _rebuild_rail still runs every frame, but nothing
-	# currently re-touches synthesis_x in that branch) -- so the line
-	# naturally freezes at wherever the circle was when it faded, same as
-	# everything else settles at DONE.
+	# NewSynthesizedStrandPosition keeps tracking the midpoint, unchanged.
+	var new_strand_tracking_x = (factory_x + helicase_x) / 2.0
 	new_synthesized_strand_position.points = PackedVector2Array([
 		Vector2(0, new_synthesized_strand_y),
-		Vector2(synthesis_x, new_synthesized_strand_y)
+		Vector2(new_strand_tracking_x, new_synthesized_strand_y)
 	])
 
 	for i in range(cars.size()):
 		cars[i].progress = track_length - car_original_x[i]
-
-	# DIAGNOSTIC: unthrottled, fine-grained tracker for the LAST car
-	# specifically, active only during the transition window
-	# (FINISHING_LAST_PULSE / SETTLING / DONE) where the reported snap
-	# happens -- to pinpoint exactly which frame/phase-boundary it occurs
-	# at, since the throttled once-per-second debug print can't resolve a
-	# single-frame discontinuity.
-	if phase == Phase.FINISHING_LAST_PULSE or phase == Phase.SETTLING or phase == Phase.DONE:
-		var last_idx = cars.size() - 1
-		print("[TRANSITION t=%s] phase:%s loop_depth:%.2f | last_car y=%.3f progress=%.1f" % [
-			Time.get_ticks_msec(), Phase.keys()[phase], loop_depth, cars[last_idx].position.y, cars[last_idx].progress
-		])
 
 	for i in range(cars.size()):
 		var car_y = cars[i].position.y
@@ -334,12 +324,27 @@ func _process(delta):
 
 		match car_transfer_state[i]:
 			CarTransferState.WAITING:
-				if car_y >= straight_y + max_loop_depth:
+				# FIX: was checking instantaneous car_y, which only
+				# catches a car if it happens to be deep enough in THIS
+				# exact frame. Since the pulse is a triangle wave with a
+				# fixed period (pulse_car_count car-widths), cars whose
+				# transit through the loop happened to land during the
+				# shallower portion of a cycle could NEVER satisfy an
+				# instantaneous check, no matter how long the run went on
+				# -- confirmed empirically: cars 0,1,6,7,12,13,18,19 never
+				# triggered ARMED at all, a predictable 2-out-of-6 pattern
+				# matching pulse_car_count. car_max_y_reached[i] (updated
+				# just above, every frame, unconditionally) is each car's
+				# TRUE historical peak depth -- checking THAT instead
+				# guarantees every car eventually qualifies once its real
+				# peak (whenever it occurred) clears the threshold.
+				if car_max_y_reached[i] >= straight_y + max_loop_depth * armed_depth_fraction:
 					car_transfer_state[i] = CarTransferState.ARMED
-					print("[t=%s] car[%d] ARMED (y=%.1f)" % [Time.get_ticks_msec(), i, car_y])
+					print("[t=%s] car[%d] ARMED (max_y_reached=%.1f)" % [Time.get_ticks_msec(), i, car_max_y_reached[i]])
 			CarTransferState.ARMED:
 				if car_y < new_bottom_template_y:
 					car_transfer_state[i] = CarTransferState.TRANSFERRED
+					car_visuals[i].color = car_color_sequence_complete
 					print("[t=%s] car[%d] TRANSFERRED (y=%.1f)" % [Time.get_ticks_msec(), i, car_y])
 			CarTransferState.TRANSFERRED:
 				pass
@@ -347,14 +352,6 @@ func _process(delta):
 	for i in range(cars.size()):
 		var car = cars[i]
 		var x = car_original_x[i]
-		# FIX: once Phase.DONE, the loop mechanic has concluded and
-		# population_left_edge/helicase_x are frozen at whatever values
-		# they last held -- if a car's FIXED spawn x happens to still fall
-		# within that frozen window, it stays classified as "in the loop"
-		# PERMANENTLY, even though nothing is animating it anymore (this
-		# is exactly what kept car[23] -- and loop_population:2 overall --
-		# stuck forever in the log). Once DONE, nothing should ever be
-		# considered "in the loop".
 		var in_loop = (phase != Phase.DONE) and x >= population_left_edge and x <= helicase_x
 		var unzipped = x < factory_x
 
@@ -368,51 +365,6 @@ func _process(delta):
 		elif not unzipped and car.is_in_group(UNZIPPED_POPULATION_GROUP):
 			car.remove_from_group(UNZIPPED_POPULATION_GROUP)
 
-	if Engine.get_physics_frames() % 60 == 0:
-		var loop_count = get_tree().get_nodes_in_group(LOOP_POPULATION_GROUP).size()
-		var unzipped_count = get_tree().get_nodes_in_group(UNZIPPED_POPULATION_GROUP).size()
-		print("[%s] phase:%s | factory_x:%.1f helicase_x:%.1f loop_depth:%.1f | baseline_switched:%s (car %d) | loop_population:%d unzipped_population:%d" % [
-			Time.get_ticks_msec(), Phase.keys()[phase], factory_x, helicase_x, loop_depth,
-			baseline_switched, baseline_switch_car_index, loop_count, unzipped_count
-		])
-
-		var line_parts: Array[String] = []
-		for i in range(cars.size()):
-			line_parts.append("%d:%.0f/%s" % [i, cars[i].position.y, CarTransferState.keys()[car_transfer_state[i]].substr(0, 1)])
-		print("[%s]   cars (idx:y/state): %s" % [Time.get_ticks_msec(), " ".join(line_parts)])
-
-		# DIAGNOSTIC: which cars exactly are in loop_population, and the
-		# LAST car's full state -- to find out why it's stuck (y=363,
-		# never reaching 390) and why loop_population stays at 2 forever
-		# even after Phase.DONE, when nothing should still be "in the loop".
-		var loop_members: Array[int] = []
-		for i in range(cars.size()):
-			if cars[i].is_in_group(LOOP_POPULATION_GROUP):
-				loop_members.append(i)
-		var last_i = cars.size() - 1
-		print("[%s]   LOOP_POPULATION members: %s | last_car[%d]: progress=%.1f position=%s original_x=%.1f | population_left_edge=%.1f helicase_x=%.1f (in_loop_range=%s)" % [
-			Time.get_ticks_msec(), loop_members, last_i,
-			cars[last_i].progress, cars[last_i].position, car_original_x[last_i],
-			population_left_edge, helicase_x,
-			car_original_x[last_i] >= population_left_edge and car_original_x[last_i] <= helicase_x
-		])
-
-	# BACKBONE: plain polyline through PER-CAR OFFSET positions, in fixed
-	# spawn-array order (cars[0]..cars[23]). Still no curve math, no
-	# tangent estimation -- a straight polyline through points in a known,
-	# fixed order cannot self-cross at those joints.
-	#
-	# OFFSET DIRECTION (corrected per explicit instruction):
-	#   - On RailVisual (not yet transferred, resting at ~straight_y=300):
-	#     backbone BELOW the cars -- LARGER y than the car.
-	#   - On NewBottomTemplateStrandPosition (transferred, resting at
-	#     ~new_bottom_template_y=390): backbone ABOVE the cars -- SMALLER y
-	#     than the car.
-	# These two cases now have GENUINELY OPPOSITE signs (previously they
-	# coincidentally matched under the old "away from/inside reference_side"
-	# framing, which was the wrong rule).
-	# INSIDE THE LOOP: position doesn't matter (confirmed) -- kept the
-	# existing simple consistent direction (toward the bulge).
 	var backbone_points = PackedVector2Array()
 	for i in range(cars.size()):
 		var car = cars[i]
@@ -426,31 +378,14 @@ func _process(delta):
 		else:
 			target_delta = backbone_offset_distance # inside the loop: toward the bulge, consistent direction (position doesn't matter here)
 
-		# FLICKER FIX: lerp the actually-applied delta toward target_delta
-		# instead of snapping to it instantly -- smooths the visible
-		# transition when classification flips rapidly near a threshold.
 		car_backbone_delta[i] = lerp(car_backbone_delta[i], target_delta, clamp(backbone_offset_smoothing_speed * delta, 0.0, 1.0))
 		backbone_points.append(Vector2(car.position.x, car.position.y + car_backbone_delta[i]))
 
-	# REJECTED APPROACH (kept as a comment for reference, see retry below):
-	# inserting a notch point at every segment midpoint, offset
-	# perpendicular -- this read as a continuous zig-zag/sawtooth wave
-	# rather than discrete ">" marks, since every single segment got
-	# notched in the same fixed direction. Confirmed wrong by screenshot.
 	backbone_line.points = backbone_points
 
-	# PHOSPHODIESTER BOND MARKS, v2: separate small Polygon2D sprites (one
-	# per bond), positioned at each segment's midpoint and ROTATED to match
-	# that segment's local tangent direction -- placeholder for an eventual
-	# real vector asset. Each mark's height matches BACKBONE line width, so
-	# it reads as sized-to-fit rather than arbitrary.
 	_update_bond_marks(backbone_points)
 
 func _update_bond_marks(points: PackedVector2Array):
-	# Ensures bond_marks has exactly (points.size() - 1) Polygon2D children
-	# -- one per segment/bond -- creating or removing as the car count
-	# changes (it doesn't in this test, but written generally). Each one
-	# repositioned/rotated every frame to track its segment.
 	var needed = max(0, points.size() - 1)
 	while bond_marks.size() < needed:
 		bond_marks.append(_create_bond_mark_sprite())
@@ -472,22 +407,10 @@ func _update_bond_marks(points: PackedVector2Array):
 			mark.visible = false
 
 func _create_bond_mark_sprite() -> Node2D:
-	# PLACEHOLDER v3: TWO LAYERED SOLID DIAMONDS, not a single outline
-	# polygon -- the actual intended technique (clarified after v2's
-	# hexagon-outline approach never rendered anything visible). A larger
-	# BLACK diamond sits underneath; a smaller MAGENTA diamond (same color
-	# as the backbone) sits on top, shifted slightly toward the tip (+X)
-	# direction. The magenta diamond covers most of the black one, leaving
-	# only a small ">"-shaped sliver of black exposed around the back/left
-	# edges -- the chevron mark comes from LAYERING/OCCLUSION, not from a
-	# single precisely-wound outline shape. Much simpler to get right than
-	# a 6-point self-winding polygon.
 	var holder = Node2D.new()
 	var h = backbone_line_width / 2.0
 	var w = bond_mark_width
 
-	# Bottom: black diamond, full size. 4 points: tip (right), top, back
-	# (left), bottom.
 	var black_diamond = Polygon2D.new()
 	black_diamond.polygon = PackedVector2Array([
 		Vector2(w / 2.0, 0),    # tip
@@ -498,46 +421,22 @@ func _create_bond_mark_sprite() -> Node2D:
 	black_diamond.color = bond_mark_black_color
 	holder.add_child(black_diamond)
 
-	# Top: magenta diamond, built with EXPLICIT, independently-placed
-	# points -- not a uniform shrink+shift of the black diamond's shape.
-	# A uniform shrink-then-partial-shift doesn't guarantee any one edge
-	# fully covers: confirmed by screenshot, black bled through on ALL
-	# sides (including the tip) because the shift wasn't large enough to
-	# compensate for the shrink there too. Instead: the magenta tip and
-	# top/bottom points are placed to fully cover (extend to or past) the
-	# black diamond's corresponding points, while ONLY the back point is
-	# pulled inward -- guaranteeing black is hidden everywhere except a
-	# deliberate gap at the back, which is what actually produces a clean
-	# one-sided ">" sliver instead of a thin outline all around.
 	var back_inset = bond_mark_back_inset
 	var magenta_diamond = Polygon2D.new()
 	magenta_diamond.polygon = PackedVector2Array([
-		Vector2(w / 2.0, 0),                  # tip: matches black's tip exactly, fully covers it
-		Vector2(0, -h),                          # top: matches black's top exactly, fully covers it
-		Vector2(-w / 2.0 + back_inset, 0),    # back: pulled inward from black's back point -- this gap is the visible sliver
-		Vector2(0, h),                            # bottom: matches black's bottom exactly, fully covers it
+		Vector2(w / 2.0, 0),
+		Vector2(0, -h),
+		Vector2(-w / 2.0 + back_inset, 0),
+		Vector2(0, h),
 	])
-	magenta_diamond.color = backbone_color # matches the backbone line's own color
+	magenta_diamond.color = backbone_color
 	holder.add_child(magenta_diamond)
 
-	holder.z_index = 1 # above the backbone line
+	holder.z_index = 1
 	add_child(holder)
 	return holder
 
 func _rebuild_rail():
-	# FIX: once Phase.DONE, there is no more transition happening -- every
-	# car has already settled at new_bottom_template_y. The normal
-	# construction below ALWAYS includes a real step between the bulge
-	# point (y=straight_y when loop_depth=0) and the anchor point
-	# (y=anchor_rest_y=new_bottom_template_y once baseline_switched) --
-	# that step is correct WHILE the loop is active (it's literally the
-	# transition geometry), but has no reason to exist once DONE. A car
-	# whose fixed .progress happens to sample a point inside that lingering
-	# step segment gets stuck at an in-between y forever (confirmed: car[23]
-	# stuck at y=362.66, neither 300 nor 390), even though loop_depth
-	# itself was already correctly snapped to 0. The real fix is to stop
-	# building ANY step/transition geometry once DONE -- just one flat
-	# line at the correct resting height, full stop.
 	if phase == Phase.DONE:
 		var flat_curve = Curve2D.new()
 		var rest_y = new_bottom_template_y if baseline_switched else straight_y
@@ -550,14 +449,6 @@ func _rebuild_rail():
 
 	var curve = Curve2D.new()
 
-	# SETTLE BLEND: every y-coordinate below uses blended_straight_y
-	# instead of straight_y directly, and anchor_rest_y is computed from
-	# it too -- both ease toward new_bottom_template_y as settle_blend
-	# goes 0->1 during SETTLING. This is what makes the curve's shape
-	# converge to EXACTLY match Phase.DONE's flat construction by the time
-	# the phase transition happens, eliminating the single-frame jump
-	# (confirmed ~27px) that occurred when only loop_depth was eased but
-	# the straight_y/anchor_rest_y step was left completely untouched.
 	var blended_straight_y = lerp(straight_y, new_bottom_template_y, settle_blend) if baseline_switched else straight_y
 
 	curve.add_point(Vector2(track_length, blended_straight_y))
@@ -572,10 +463,12 @@ func _rebuild_rail():
 		Vector2(-handle_x, loop_depth * 0.5)
 	)
 	var mid_x = (factory_x + helicase_x) / 2.0
-	# Reverted to the original 0.25x multiplier (omega-flare experiment
-	# undone, per decision to roll the loop geometry back to its
-	# known-good pre-backbone-chase state).
-	var mid_handle_x = max(1.0, (helicase_x - factory_x) * 0.25)
+	var depth_ratio = loop_depth / gap_width
+	var max_depth_ratio = max_loop_depth / gap_width
+	var flare_t = clamp(depth_ratio / max_depth_ratio, 0.0, 1.0) if max_depth_ratio > 0.0 else 0.0
+	var omega_flare = lerp(waist_flare_shallow, waist_flare_deep, flare_t)
+	var mid_handle_x = max(1.0, (helicase_x - factory_x) * omega_flare)
+
 	curve.add_point(
 		Vector2(mid_x, bulge_y),
 		Vector2(mid_handle_x, 0),
@@ -638,6 +531,7 @@ func _spawn_cars():
 		visual.position = Vector2(-car_size.x / 2.0, -car_size.y / 2.0)
 		visual.color = car_color_even if i % 2 == 0 else car_color_odd
 		car.add_child(visual)
+		car_visuals.append(visual)
 
 		rail_path.add_child(car)
 

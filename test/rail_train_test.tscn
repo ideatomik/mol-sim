@@ -4,7 +4,7 @@
 
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_ubnsg")
-backbone_color = Color(1, 0.9882353, 0.4745098, 1)
+backbone_color = Color(1, 0, 0.4745098, 1)
 backbone_line_width = 10.0
 backbone_offset_distance = 14.0
 
