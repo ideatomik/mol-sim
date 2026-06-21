@@ -4,6 +4,8 @@
 
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_ubnsg")
+sweep_speed = 60.0
+pulse_car_count = 5
 backbone_color = Color(1, 0, 0.4745098, 1)
 backbone_line_width = 10.0
 backbone_offset_distance = 14.0
@@ -19,6 +21,10 @@ width = 3.0
 default_color = Color(0, 0, 0, 1)
 
 [node name="SynthesisCircle" type="Node2D" parent="." unique_id=550376968]
+
+[node name="SynthesisArea" type="Area2D" parent="SynthesisCircle" unique_id=143041538]
+
+[node name="SynthesisCollisionShape" type="CollisionShape2D" parent="SynthesisCircle/SynthesisArea" unique_id=1640759733]
 
 [node name="NewBottomTemplateStrandPosition" type="Line2D" parent="." unique_id=1670290036]
 width = 3.0

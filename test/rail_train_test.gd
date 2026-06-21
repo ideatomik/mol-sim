@@ -1,25 +1,42 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v36
-# FIXED a real "permanent skip" bug: the ARMED check compared
-# INSTANTANEOUS car_y against a fixed threshold, but the pulse is a
-# triangle wave with a fixed period (pulse_car_count car-widths) -- cars
-# whose transit through the loop happened to align with the shallower
-# portion of a cycle could NEVER satisfy that check, no matter how long
-# the simulation ran. Confirmed empirically: cars 0, 1, 6, 7, 12, 13, 18,
-# 19 never triggered ARMED at all, a predictable "2 skipped every 6 cars"
-# pattern matching pulse_car_count exactly. Now checks car_max_y_reached
-# (each car's TRUE historical peak, already tracked but previously
-# unused for this) instead of the instantaneous value -- guarantees every
-# car eventually qualifies once its real peak clears the threshold,
-# regardless of pulse timing.
+# RAIL/TRAIN TEST v37
+# ARCHITECTURE CHANGE: replaced manual x-comparison proxies with real
+# Godot collision detection (Area2D/CollisionShape2D) for the
+# synthesis-circle-crossing event, since every prior approach (depth
+# threshold, max_y_reached, x < factory_x) was an inferred proxy that
+# could desync from the actual visual event depending on pulse timing.
+# - SynthesisArea (Area2D + CircleShape2D matching synthesis_circle_radius)
+#   added as a child of SynthesisCircle.
+# - Each car gets its own Area2D + RectangleShape2D (matching car_size),
+#   named "CarArea_%d", added in _spawn_cars().
+# - _on_synthesis_area_entered() fires on genuine geometric overlap and
+#   drives BOTH the unzipped_population group membership AND a new
+#   DIRECTIONAL two-stage state machine (SynthesisCrossState: NONE ->
+#   PRIMED -> COMPLETED). A car must cross the circle TWICE to complete:
+#   once while moving DEEPER into the loop (y increasing, PRIMED), once
+#   while moving BACK OUT toward the strand (y decreasing, COMPLETED).
+#   Direction is read from the car's OWN y movement frame-to-frame
+#   (car_previous_y), not from the circle re-crossing -- since
+#   synthesis_circle/factory_x only ever sweeps rightward, it physically
+#   cannot cross any single car a second time.
+# - The magenta color trigger MOVED from CarTransferState.ARMED->
+#   TRANSFERRED (the old y-depth-threshold mechanism, which only worked
+#   reliably for a single fixed pulse_car_count value and was a poor
+#   conceptual fit for "passed the polymerase") to
+#   SynthesisCrossState.COMPLETED instead. CarTransferState itself is
+#   left in place (baseline_switched logic still uses related position
+#   checks), just no longer drives the car color.
+# ==========================================
+
 # ==========================================
 
 @onready var rail_path: Path2D = $RailPath
 @onready var rail_visual: Line2D = $RailVisual
 @onready var new_strand_line: Line2D = $NewStrandLine
 @onready var synthesis_circle: Node2D = $SynthesisCircle
+@onready var synthesis_area: Area2D = $SynthesisCircle/SynthesisArea
 @onready var new_bottom_template_strand_position: Line2D = $NewBottomTemplateStrandPosition
 @onready var new_synthesized_strand_position: Line2D = $NewSynthesizedStrandPosition
 @onready var backbone_line: Line2D = $BackboneLine
@@ -58,7 +75,7 @@ extends Node2D
 
 @export_group("Speeds & Timing")
 @export var sweep_speed: float = 90.0
-@export var pulse_car_count: int = 5
+@export var pulse_car_count: int = 6
 @export var fade_duration: float = 0.6
 @export var settling_duration: float = 0.5 # how long the curve eases flat instead of snapping instantly at the end of the run -- fixes the "teleport" when transitioning to DONE
 
@@ -68,7 +85,7 @@ extends Node2D
 @export var car_color_odd: Color = Color(0.9, 0.6, 0.2)
 ## CURRENTLY UNUSED -- was previously triggered when a car's fixed spawn x passed factory_x (unzipped_population group), but that trigger fired prematurely for cars that hadn't actually been visually pulled through the loop yet (it compared spawn position, not real position). Removed in favor of car_color_sequence_complete, which triggers on the genuinely correct CarTransferState.ARMED -> TRANSFERRED transition instead.
 @export var car_color_unzipped: Color = Color(0.0, 1.0, 1.0, 1.0) # full cyan
-## Color a car switches to permanently once it completes the genuine ARMED->TRANSFERRED transition: pulled deep into the loop (reaching straight_y+max_loop_depth), then pushed onto NewBottomTemplateStrandPosition -- the real, position-based "passed through the polymerase" event. Overrides any other car color from that point on.
+## Color a car switches to permanently once it completes the directional two-stage synthesis-circle crossing: PRIMED (touches the polymerase collision area while moving deeper into the loop, y increasing) then COMPLETED (touches it again while moving back out toward the strand, y decreasing). Overrides any other car color from that point on.
 @export var car_color_sequence_complete: Color = Color(1.0, 0.0, 1.0, 1.0) # full magenta
 
 @export_group("Backbone")
@@ -128,6 +145,14 @@ var car_original_x: Array[float] = []
 enum CarTransferState { WAITING, ARMED, TRANSFERRED }
 var car_transfer_state: Array[CarTransferState] = []
 var car_max_y_reached: Array[float] = []
+var car_previous_y: Array[float] = [] # previous frame's y, used to determine direction of travel (increasing = priming/into the loop, decreasing = completing/back to the strand) at the moment of synthesis-circle collision
+
+# DIRECTIONAL SYNTHESIS-CIRCLE CROSSING (v37): each car needs to cross the
+# circle TWICE, in specific directions, to count as a complete cycle:
+#   (a) PRIMED -- crosses while moving deeper into the loop (y increasing)
+#   (b) COMPLETED -- crosses again while moving back out (y decreasing)
+enum SynthesisCrossState { NONE, PRIMED, COMPLETED }
+var car_synthesis_state: Array[SynthesisCrossState] = []
 
 # BACKBONE FLICKER FIX: per-car smoothed y_delta, lerped toward whatever
 # the classification (on_rail_visual / on_new_bottom / in-loop) currently
@@ -344,26 +369,26 @@ func _process(delta):
 			CarTransferState.ARMED:
 				if car_y < new_bottom_template_y:
 					car_transfer_state[i] = CarTransferState.TRANSFERRED
-					car_visuals[i].color = car_color_sequence_complete
 					print("[t=%s] car[%d] TRANSFERRED (y=%.1f)" % [Time.get_ticks_msec(), i, car_y])
 			CarTransferState.TRANSFERRED:
 				pass
+
+		car_previous_y[i] = car_y
 
 	for i in range(cars.size()):
 		var car = cars[i]
 		var x = car_original_x[i]
 		var in_loop = (phase != Phase.DONE) and x >= population_left_edge and x <= helicase_x
-		var unzipped = x < factory_x
 
 		if in_loop and not car.is_in_group(LOOP_POPULATION_GROUP):
 			car.add_to_group(LOOP_POPULATION_GROUP)
 		elif not in_loop and car.is_in_group(LOOP_POPULATION_GROUP):
 			car.remove_from_group(LOOP_POPULATION_GROUP)
-
-		if unzipped and not car.is_in_group(UNZIPPED_POPULATION_GROUP):
-			car.add_to_group(UNZIPPED_POPULATION_GROUP)
-		elif not unzipped and car.is_in_group(UNZIPPED_POPULATION_GROUP):
-			car.remove_from_group(UNZIPPED_POPULATION_GROUP)
+		# NOTE: UNZIPPED_POPULATION_GROUP membership is now set directly by
+		# _on_synthesis_area_entered() (v37, collision-based), not manual
+		# x-comparison here -- removed the old "x < factory_x" check
+		# entirely, since it compared spawn position against factory_x
+		# rather than a real geometric event.
 
 	var backbone_points = PackedVector2Array()
 	for i in range(cars.size()):
@@ -517,6 +542,72 @@ func _setup_synthesis_circle():
 	poly.color = synthesis_circle_color
 	synthesis_circle.add_child(poly)
 
+	# COLLISION-BASED CROSSING DETECTION (v37): assign a real
+	# CircleShape2D to SynthesisArea's CollisionShape2D, matching
+	# synthesis_circle_radius. area_entered fires directly from Godot's
+	# physics overlap detection -- a genuine geometric "did this car's
+	# shape actually touch the circle's shape" signal, not an inferred
+	# proxy (depth threshold, max_y_reached, x-comparison) that can desync
+	# from the real visual event depending on pulse timing.
+	var synthesis_collision_shape = synthesis_area.get_node("SynthesisCollisionShape")
+	var circle_shape = CircleShape2D.new()
+	circle_shape.radius = synthesis_circle_radius
+	synthesis_collision_shape.shape = circle_shape
+	# FIX (v37 round 2): explicit monitoring/monitorable, same reasoning
+	# as the car areas -- synthesis_area is the one doing the WATCHING
+	# (connected to area_entered), so its monitoring must be true.
+	synthesis_area.monitoring = true
+	synthesis_area.monitorable = true
+	synthesis_area.area_entered.connect(_on_synthesis_area_entered)
+	print("[SETUP] synthesis_area ready: monitoring=%s monitorable=%s shape_radius=%.1f collision_layer=%d collision_mask=%d" % [
+		synthesis_area.monitoring, synthesis_area.monitorable, circle_shape.radius,
+		synthesis_area.collision_layer, synthesis_area.collision_mask
+	])
+
+func _on_synthesis_area_entered(area: Area2D):
+	# DIAGNOSTIC: unconditional, fires for EVERY area_entered event
+	# regardless of name/filtering -- to directly confirm whether this
+	# signal handler is being called at all.
+	print("[t=%s] SYNTHESIS AREA ENTERED by: %s" % [Time.get_ticks_msec(), area.name])
+
+	# Fires when a car's Area2D genuinely overlaps SynthesisArea -- the
+	# real, direct "touched the polymerase" event. area's name is
+	# "CarArea_%d" (set in _spawn_cars()), parsed back out to identify
+	# which car.
+	#
+	# DIRECTIONAL TWO-STAGE LOGIC: a car must cross the circle TWICE to
+	# complete the cycle, distinguished by its direction of travel (not by
+	# the circle moving, since synthesis_circle/factory_x only ever
+	# sweeps rightward -- it physically cannot re-cross any single car a
+	# second time. The car's OWN y-direction at the moment of overlap is
+	# the real signal: increasing y = heading deeper into the loop
+	# (PRIMED), decreasing y = heading back out toward the strand
+	# (COMPLETED, only valid once already PRIMED).
+	if not area.name.begins_with("CarArea_"):
+		return
+	var car_index = int(area.name.substr("CarArea_".length()))
+	if car_index < 0 or car_index >= cars.size():
+		return
+
+	var car = cars[car_index]
+	if not car.is_in_group(UNZIPPED_POPULATION_GROUP):
+		car.add_to_group(UNZIPPED_POPULATION_GROUP)
+
+	var moving_deeper = car.position.y > car_previous_y[car_index]
+
+	match car_synthesis_state[car_index]:
+		SynthesisCrossState.NONE:
+			if moving_deeper:
+				car_synthesis_state[car_index] = SynthesisCrossState.PRIMED
+				print("[t=%s] car[%d] PRIMED (crossed polymerase moving deeper, y=%.1f)" % [Time.get_ticks_msec(), car_index, car.position.y])
+		SynthesisCrossState.PRIMED:
+			if not moving_deeper:
+				car_synthesis_state[car_index] = SynthesisCrossState.COMPLETED
+				car_visuals[car_index].color = car_color_sequence_complete
+				print("[t=%s] car[%d] COMPLETED (crossed polymerase moving back out, y=%.1f)" % [Time.get_ticks_msec(), car_index, car.position.y])
+		SynthesisCrossState.COMPLETED:
+			pass
+
 func _spawn_cars():
 	var row_span = (num_cars - 1) * car_spacing
 	var row_start_x = (track_length - row_span) / 2.0
@@ -533,6 +624,32 @@ func _spawn_cars():
 		car.add_child(visual)
 		car_visuals.append(visual)
 
+		# COLLISION-BASED CROSSING DETECTION (v37): each car gets its own
+		# Area2D (rectangular CollisionShape2D matching car_size), named
+		# "CarArea_%d" so _on_synthesis_area_entered() can identify which
+		# car triggered the overlap. monitoring=true so it can detect
+		# SynthesisArea; monitorable=true so SynthesisArea (if it monitors
+		# instead) can detect it -- both set for robustness regardless of
+		# which Area2D ends up doing the active monitoring.
+		var car_area = Area2D.new()
+		car_area.name = "CarArea_%d" % i
+		# FIX (v37 round 2): area_entered for Area-to-Area overlap requires
+		# BOTH areas configured correctly -- the watching area's
+		# `monitoring` AND the watched area's `monitorable` must both be
+		# true. Confirmed via Godot's own issue tracker that this doesn't
+		# reliably "just work" off defaults in practice (multiple linked
+		# engine issues describe silent failures here). Setting both
+		# explicitly on every car area, since this car area is the one
+		# being WATCHED by synthesis_area.
+		car_area.monitoring = true
+		car_area.monitorable = true
+		var car_collision_shape = CollisionShape2D.new()
+		var car_shape = RectangleShape2D.new()
+		car_shape.size = car_size
+		car_collision_shape.shape = car_shape
+		car_area.add_child(car_collision_shape)
+		car.add_child(car_area)
+
 		rail_path.add_child(car)
 
 		var x = row_start_x + i * car_spacing
@@ -541,4 +658,6 @@ func _spawn_cars():
 		cars.append(car)
 		car_transfer_state.append(CarTransferState.WAITING)
 		car_max_y_reached.append(straight_y)
+		car_previous_y.append(straight_y)
+		car_synthesis_state.append(SynthesisCrossState.NONE)
 		car_backbone_delta.append(backbone_offset_distance) # starts matching the RailVisual case, since that's where cars begin
