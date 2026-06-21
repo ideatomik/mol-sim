@@ -24,3 +24,7 @@ default_color = Color(0, 0, 0, 1)
 [node name="BackboneLine" type="Line2D" parent="." unique_id=1274713731]
 width = 8.0
 default_color = Color(0, 0, 0, 1)
+
+[node name="NewSynthesizedStrandPosition" type="Line2D" parent="." unique_id=1694821904]
+width = 3.0
+default_color = Color(0, 0, 0, 1)

@@ -22,6 +22,7 @@ extends Node2D
 @onready var new_strand_line: Line2D = $NewStrandLine
 @onready var synthesis_circle: Node2D = $SynthesisCircle
 @onready var new_bottom_template_strand_position: Line2D = $NewBottomTemplateStrandPosition
+@onready var new_synthesized_strand_position: Line2D = $NewSynthesizedStrandPosition
 @onready var backbone_line: Line2D = $BackboneLine
 
 const CAR_SPACING: float = 60.0
@@ -31,6 +32,9 @@ const TRACK_LENGTH: float = 1920.0
 
 const NEW_BOTTOM_TEMPLATE_OFFSET: float = 90.0
 const NEW_BOTTOM_TEMPLATE_Y: float = STRAIGHT_Y + NEW_BOTTOM_TEMPLATE_OFFSET
+# As far below NewBottomTemplateStrandPosition as that line is below
+# RailVisual -- same NEW_BOTTOM_TEMPLATE_OFFSET applied a second time.
+const NEW_SYNTHESIZED_STRAND_Y: float = NEW_BOTTOM_TEMPLATE_Y + NEW_BOTTOM_TEMPLATE_OFFSET
 
 const LOOP_FLOOR_DEPTH: float = 15.0
 const MAX_LOOP_DEPTH: float = 220.0
@@ -38,6 +42,8 @@ const GAP_WIDTH: float = 168.0
 
 const CAR_HEIGHT: float = 24.0
 const BACKBONE_OFFSET_DISTANCE: float = 12.0 # half the car's 24px size -- puts the line at the car's edge, not through its center
+const BACKBONE_LINE_WIDTH: float = 8.0 # also used directly in _ready() when setting backbone_line.width, kept as a named constant so the bond marks can reference the same value
+const BOND_MARK_WIDTH: float = 14.0 # horizontal size of each placeholder ">" mark -- tune to taste
 const NEW_STRAND_Y: float = STRAIGHT_Y + MAX_LOOP_DEPTH + CAR_HEIGHT
 
 const SYNTHESIS_CIRCLE_RADIUS: float = 16.0
@@ -81,6 +87,11 @@ var car_max_y_reached: Array[float] = []
 var baseline_switched: bool = false
 var baseline_switch_car_index: int = -1
 
+# PHOSPHODIESTER BOND MARKS: one Node2D (holding a Polygon2D placeholder
+# ">" shape) per bond/segment, created lazily in _update_bond_marks(),
+# repositioned and rotated every frame to track the backbone.
+var bond_marks: Array[Node2D] = []
+
 func _ready():
 	helicase_x = GAP_WIDTH
 	factory_x = 0.0
@@ -101,8 +112,17 @@ func _ready():
 	])
 	new_bottom_template_strand_position.visible = true
 
+	# NewSynthesizedStrandPosition: starts spanning x=0 to wherever
+	# synthesis_x (the yellow circle's x) is at the very first frame --
+	# updated every frame after this in _process to keep tracking it.
+	new_synthesized_strand_position.points = PackedVector2Array([
+		Vector2(0, NEW_SYNTHESIZED_STRAND_Y),
+		Vector2((factory_x + helicase_x) / 2.0, NEW_SYNTHESIZED_STRAND_Y)
+	])
+	new_synthesized_strand_position.visible = true
+
 	backbone_line.default_color = Color(1.0, 0.0, 1.0, 1.0)
-	backbone_line.width = 8.0
+	backbone_line.width = BACKBONE_LINE_WIDTH
 	backbone_line.z_index = -1
 	# QoL: round points instead of square -- joint_mode rounds where
 	# segments meet (every interior car-to-car joint), cap_mode rounds the
@@ -191,6 +211,19 @@ func _process(delta):
 	var synthesis_x = (factory_x + helicase_x) / 2.0
 	synthesis_circle.position = Vector2(synthesis_x, SYNTHESIS_CIRCLE_Y)
 
+	# NewSynthesizedStrandPosition: starts at the left edge of the track,
+	# right edge follows synthesis_x (the same x driving the yellow
+	# circle) every frame. Once Phase.DONE, synthesis_circle fades out and
+	# this stops being updated here too (the loop_depth==0 DONE-phase
+	# early return in _rebuild_rail still runs every frame, but nothing
+	# currently re-touches synthesis_x in that branch) -- so the line
+	# naturally freezes at wherever the circle was when it faded, same as
+	# everything else settles at DONE.
+	new_synthesized_strand_position.points = PackedVector2Array([
+		Vector2(0, NEW_SYNTHESIZED_STRAND_Y),
+		Vector2(synthesis_x, NEW_SYNTHESIZED_STRAND_Y)
+	])
+
 	for i in range(cars.size()):
 		cars[i].progress = TRACK_LENGTH - car_original_x[i]
 
@@ -275,45 +308,122 @@ func _process(delta):
 	# tangent estimation -- a straight polyline through points in a known,
 	# fixed order cannot self-cross at those joints.
 	#
-	# OFFSET DIRECTION: reference_side is the y-band between RailVisual
-	# (STRAIGHT_Y=300) and NewBottomTemplateStrandPosition
-	# (NEW_BOTTOM_TEMPLATE_Y=390). The precise inside/outside rule only
-	# applies on the FLAT SECTIONS, where a car is actually resting at
-	# STRAIGHT_Y or NEW_BOTTOM_TEMPLATE_Y:
-	#   - On RailVisual (not yet transferred, resting at ~STRAIGHT_Y):
-	#     offset AWAY from reference_side -- smaller y than STRAIGHT_Y.
+	# OFFSET DIRECTION (corrected per explicit instruction):
+	#   - On RailVisual (not yet transferred, resting at ~STRAIGHT_Y=300):
+	#     backbone BELOW the cars -- LARGER y than the car.
 	#   - On NewBottomTemplateStrandPosition (transferred, resting at
-	#     ~NEW_BOTTOM_TEMPLATE_Y): offset INSIDE reference_side -- pulled
-	#     UP from 390, landing between 300 and 390.
-	# INSIDE THE LOOP (any other y, confirmed this rule doesn't need to
-	# apply there): just one consistent direction, toward the loop's own
-	# bulge (same direction depth already grows, i.e. toward higher y) --
-	# simplest choice, avoids the backbone crossing over the cars
-	# mid-curve.
+	#     ~NEW_BOTTOM_TEMPLATE_Y=390): backbone ABOVE the cars -- SMALLER y
+	#     than the car.
+	# These two cases now have GENUINELY OPPOSITE signs (previously they
+	# coincidentally matched under the old "away from/inside reference_side"
+	# framing, which was the wrong rule).
+	# INSIDE THE LOOP: position doesn't matter (confirmed) -- kept the
+	# existing simple consistent direction (toward the bulge).
 	var backbone_points = PackedVector2Array()
 	for i in range(cars.size()):
 		var car = cars[i]
-		var on_flat_section = abs(car.position.y - STRAIGHT_Y) < 1.0 or abs(car.position.y - NEW_BOTTOM_TEMPLATE_Y) < 1.0
+		var on_rail_visual = abs(car.position.y - STRAIGHT_Y) < 1.0
+		var on_new_bottom = abs(car.position.y - NEW_BOTTOM_TEMPLATE_Y) < 1.0
 		var y_delta: float
-		if on_flat_section:
-			# NOTE: both flat-section cases resolve to the same numeric
-			# delta (-BACKBONE_OFFSET_DISTANCE), but for DIFFERENT reasons
-			# -- this is intentional, not a copy-paste mistake. Pre-
-			# transfer (resting at ~300): subtracting moves the backbone
-			# to ~288, smaller than 300, correctly AWAY from the 300-390
-			# band. Post-transfer (resting at ~390): subtracting moves the
-			# backbone to ~378, correctly INSIDE the 300-390 band (between
-			# the two lines). Both rules are satisfied by the same
-			# operation purely because of how STRAIGHT_Y and
-			# NEW_BOTTOM_TEMPLATE_Y relate to each other -- kept as an
-			# explicit if/else (rather than collapsing to one line) so the
-			# two distinct rules stay legible and independently editable
-			# if the geometry ever changes.
-			y_delta = -BACKBONE_OFFSET_DISTANCE
+		if on_rail_visual:
+			y_delta = BACKBONE_OFFSET_DISTANCE # below the car
+		elif on_new_bottom:
+			y_delta = -BACKBONE_OFFSET_DISTANCE # above the car
 		else:
-			y_delta = BACKBONE_OFFSET_DISTANCE # inside the loop: toward the bulge, consistent direction
+			y_delta = BACKBONE_OFFSET_DISTANCE # inside the loop: toward the bulge, consistent direction (position doesn't matter here)
 		backbone_points.append(Vector2(car.position.x, car.position.y + y_delta))
+
+	# REJECTED APPROACH (kept as a comment for reference, see retry below):
+	# inserting a notch point at every segment midpoint, offset
+	# perpendicular -- this read as a continuous zig-zag/sawtooth wave
+	# rather than discrete ">" marks, since every single segment got
+	# notched in the same fixed direction. Confirmed wrong by screenshot.
 	backbone_line.points = backbone_points
+
+	# PHOSPHODIESTER BOND MARKS, v2: separate small Polygon2D sprites (one
+	# per bond), positioned at each segment's midpoint and ROTATED to match
+	# that segment's local tangent direction -- placeholder for an eventual
+	# real vector asset. Each mark's height matches BACKBONE line width, so
+	# it reads as sized-to-fit rather than arbitrary.
+	_update_bond_marks(backbone_points)
+
+func _update_bond_marks(points: PackedVector2Array):
+	# Ensures bond_marks has exactly (points.size() - 1) Polygon2D children
+	# -- one per segment/bond -- creating or removing as the car count
+	# changes (it doesn't in this test, but written generally). Each one
+	# repositioned/rotated every frame to track its segment.
+	var needed = max(0, points.size() - 1)
+	while bond_marks.size() < needed:
+		bond_marks.append(_create_bond_mark_sprite())
+	while bond_marks.size() > needed:
+		var extra = bond_marks.pop_back()
+		extra.queue_free()
+
+	for i in range(needed):
+		var a = points[i]
+		var b = points[i + 1]
+		var mid = (a + b) / 2.0
+		var segment = b - a
+		var mark = bond_marks[i]
+		mark.position = mid
+		if segment.length() > 0.0:
+			mark.rotation = segment.angle()
+			mark.visible = true
+		else:
+			mark.visible = false
+
+func _create_bond_mark_sprite() -> Node2D:
+	# PLACEHOLDER v3: TWO LAYERED SOLID DIAMONDS, not a single outline
+	# polygon -- the actual intended technique (clarified after v2's
+	# hexagon-outline approach never rendered anything visible). A larger
+	# BLACK diamond sits underneath; a smaller MAGENTA diamond (same color
+	# as the backbone) sits on top, shifted slightly toward the tip (+X)
+	# direction. The magenta diamond covers most of the black one, leaving
+	# only a small ">"-shaped sliver of black exposed around the back/left
+	# edges -- the chevron mark comes from LAYERING/OCCLUSION, not from a
+	# single precisely-wound outline shape. Much simpler to get right than
+	# a 6-point self-winding polygon.
+	var holder = Node2D.new()
+	var h = BACKBONE_LINE_WIDTH / 2.0
+	var w = BOND_MARK_WIDTH
+
+	# Bottom: black diamond, full size. 4 points: tip (right), top, back
+	# (left), bottom.
+	var black_diamond = Polygon2D.new()
+	black_diamond.polygon = PackedVector2Array([
+		Vector2(w / 2.0, 0),    # tip
+		Vector2(0, -h),          # top
+		Vector2(-w / 2.0, 0),    # back
+		Vector2(0, h),           # bottom
+	])
+	black_diamond.color = Color(0.0, 0.0, 0.0, 1.0)
+	holder.add_child(black_diamond)
+
+	# Top: magenta diamond, built with EXPLICIT, independently-placed
+	# points -- not a uniform shrink+shift of the black diamond's shape.
+	# A uniform shrink-then-partial-shift doesn't guarantee any one edge
+	# fully covers: confirmed by screenshot, black bled through on ALL
+	# sides (including the tip) because the shift wasn't large enough to
+	# compensate for the shrink there too. Instead: the magenta tip and
+	# top/bottom points are placed to fully cover (extend to or past) the
+	# black diamond's corresponding points, while ONLY the back point is
+	# pulled inward -- guaranteeing black is hidden everywhere except a
+	# deliberate gap at the back, which is what actually produces a clean
+	# one-sided ">" sliver instead of a thin outline all around.
+	var back_inset = w * 0.45 # how far the magenta back point sits inward from the black diamond's own back point -- this distance IS the visible ">" sliver's depth
+	var magenta_diamond = Polygon2D.new()
+	magenta_diamond.polygon = PackedVector2Array([
+		Vector2(w / 2.0, 0),                  # tip: matches black's tip exactly, fully covers it
+		Vector2(0, -h),                          # top: matches black's top exactly, fully covers it
+		Vector2(-w / 2.0 + back_inset, 0),    # back: pulled inward from black's back point -- this gap is the visible sliver
+		Vector2(0, h),                            # bottom: matches black's bottom exactly, fully covers it
+	])
+	magenta_diamond.color = Color(1.0, 0.0, 1.0, 1.0) # same as backbone_line.default_color
+	holder.add_child(magenta_diamond)
+
+	holder.z_index = 1 # above the backbone line
+	add_child(holder)
+	return holder
 
 func _rebuild_rail():
 	# FIX: once Phase.DONE, there is no more transition happening -- every
@@ -330,13 +440,13 @@ func _rebuild_rail():
 	# building ANY step/transition geometry once DONE -- just one flat
 	# line at the correct resting height, full stop.
 	if phase == Phase.DONE:
-		var curve = Curve2D.new()
+		var flat_curve = Curve2D.new()
 		var rest_y = NEW_BOTTOM_TEMPLATE_Y if baseline_switched else STRAIGHT_Y
-		curve.add_point(Vector2(TRACK_LENGTH, rest_y))
-		curve.add_point(Vector2(0, rest_y))
+		flat_curve.add_point(Vector2(TRACK_LENGTH, rest_y))
+		flat_curve.add_point(Vector2(0, rest_y))
 		loop_length = 0.0
-		rail_path.curve = curve
-		rail_visual.points = curve.get_baked_points()
+		rail_path.curve = flat_curve
+		rail_visual.points = flat_curve.get_baked_points()
 		return
 
 	var curve = Curve2D.new()
