@@ -9,7 +9,7 @@ num_nucleotide_slots = 30
 pulse_nucleotide_count = 6
 backbone_color = Color(0.43137255, 0.72156864, 1, 1)
 backbone_line_width = 16.0
-backbone_offset_distance = 20.0
+backbone_offset_distance = 24.0
 synthesis_circle_color = Color(1, 0, 0.101960786, 1)
 synthesis_circle_radius = 20.0
 synthesis_inside_threshold = 20.0
@@ -23,7 +23,6 @@ default_color = Color(0, 1, 0, 0)
 
 [node name="NewStrandLine" type="Line2D" parent="." unique_id=1075958164]
 width = 3.0
-default_color = Color(0, 0, 0, 1)
 
 [node name="SynthesisCircle" type="Node2D" parent="." unique_id=550376968]
 
@@ -41,4 +40,4 @@ default_color = Color(0, 0, 0, 1)
 
 [node name="NewSynthesizedStrandPosition" type="Line2D" parent="." unique_id=1694821904]
 width = 3.0
-default_color = Color(0, 0, 0, 1)
+default_color = Color(0, 0, 1, 1)

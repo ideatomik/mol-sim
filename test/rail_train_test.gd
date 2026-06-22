@@ -1,18 +1,13 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v48
-# REPLACED the i % pulse_nucleotide_count heuristic with a real
-# geometric x-direction signal. At the moment a nucleotide enters the
-# polymerase's inner threshold zone (OUTSIDE->INSIDE), snapshot whether
-# it is moving LEFT (x decreasing, toward factory_x = push/synthesis
-# direction) or RIGHT (x increasing, away from factory_x = pull,
-# being drawn into the loop). Magenta now only fires on confirmed PUSH
-# passes -- pull passes are counted but ignored for the completion
-# trigger. nucleotide_previous_x[] tracks the prior frame's x, updated
-# at the END of the loop body (safe: all within _process(), no
-# physics-signal cross-frame desync). nucleotide_entered_push_direction[]
-# stores the direction flag per nucleotide from entry to exit.
+# RAIL/TRAIN TEST v49
+# Added end-of-run sweep at Phase.DONE transition: any nucleotide
+# currently INSIDE the polymerase zone with push direction
+# (nucleotide_entered_push_direction=true) gets immediately marked
+# COMPLETED and turned magenta. Fixes the Ending Issue where the last
+# nucleotide entered the zone mid-push but the simulation ended before
+# its full OUTSIDE->INSIDE->OUTSIDE cycle could complete.
 # ==========================================
 
 const NewNitrogenBaseScene := preload("res://test/new_nitrogen_base.tscn")
@@ -262,6 +257,22 @@ func _process(delta):
 				loop_depth = 0.0
 				settle_blend = 1.0
 				phase = Phase.DONE
+				# FINAL SWEEP: catch any nucleotide that was mid-push
+				# inside the polymerase zone when the simulation ended --
+				# confirmed via log that the last nucleotide enters the
+				# zone with moving_left=true but never completes its
+				# OUTSIDE->INSIDE->OUTSIDE cycle because the run ends
+				# first. If it entered in the push direction, it's close
+				# enough to "synthesized" for educational purposes.
+				for j in range(template_strand_bottom.size()):
+					if nucleotide_proximity_state[j] == ProximityState.INSIDE \
+					and nucleotide_entered_push_direction[j] \
+					and nucleotide_synthesis_state[j] == SynthesisCrossState.NONE:
+						nucleotide_synthesis_state[j] = SynthesisCrossState.COMPLETED
+						nucleotide_bases[j].set_body_color(nucleotide_color_sequence_complete)
+						print("[t=%s] nucleotide_slot[%d] COMPLETED via end-of-run sweep (was mid-push at DONE)" % [
+							Time.get_ticks_msec(), j
+						])
 		Phase.DONE:
 			settle_blend = 1.0
 			if not synthesis_circle_faded:
