@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="MolSim"
-run/main_scene="uid://ds4h1jmo3hr5f"
+run/main_scene="uid://b8ushv6xjen4s"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 config/icon="res://icon.svg"
 
@@ -20,6 +20,10 @@ config/icon="res://icon.svg"
 SimulationManager="*uid://btatkcr74yse1"
 HighlightManager="*uid://bewcmlio7vky6"
 ThemeManager="*uid://cvtxqqt1ivx2b"
+
+[debug]
+
+gdscript/warnings/enable=false
 
 [display]
 
