@@ -6,7 +6,7 @@
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_ubnsg")
 nucleotide_slot_spacing = 54.0
-num_nucleotide_slots = 57
+num_nucleotide_slots = 30
 wobble_speed = 1.0
 backbone_color = Color(0.43137255, 0.72156864, 1, 1)
 backbone_line_width = 16.0

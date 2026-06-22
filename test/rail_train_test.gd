@@ -1,13 +1,14 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v56
-# Introduced DnaSequenceResource as the single source of truth for the
-# template strand's base sequence. On startup, a random A/T/C/G sequence
-# is generated and each nucleotide slot's nitrogen base is assigned its
-# type and color via set_base_type(). The sequence is stored in
-# dna_sequence and can later be overridden by the UI via
-# dna_sequence.set_from_string() before the simulation starts.
+# RAIL/TRAIN TEST v57
+# New strand synthesis: the magenta trigger now also spawns a complement
+# nitrogen base (full NewNitrogenBaseScene instance) at the template
+# nucleotide's x position offset downward by dna_ribbons_gap. Each
+# spawned complement tracks its template's x every frame, riding the
+# same trombone motion. Complement base type is provided by
+# DnaSequenceResource.get_complement(). Magenta on the template is
+# kept as a visual debug marker.
 # ==========================================
 
 const NewNitrogenBaseScene := preload("res://test/new_nitrogen_base.tscn")
@@ -29,6 +30,11 @@ const NewNitrogenBaseScene := preload("res://test/new_nitrogen_base.tscn")
 ## Not an export -- change num_nucleotide_slots or nucleotide_slot_spacing instead.
 var track_length: float = 0.0
 @export var new_bottom_template_offset: float = 90.0
+## Y offset from new_bottom_template_y to the synthesized strand.
+## Defaults to new_bottom_template_offset (the same gap used between
+## TemplateStrandOriginalTrack and TemplateStrandNewTrack) but can be
+## tweaked freely in the Inspector.
+@export var dna_ribbons_gap: float = 90.0
 
 @export_group("Loop Geometry")
 @export var loop_floor_depth: float = 15.0
@@ -145,6 +151,8 @@ var bond_marks: Array[Node2D] = []
 ## before the simulation starts via dna_sequence.set_from_string().
 var dna_sequence := DnaSequenceResource.new()
 
+var synthesized_bases: Array = []
+
 func _ready():
 	track_length = (num_nucleotide_slots - 1) * nucleotide_slot_spacing + 2.0 * gap_width
 	print("[SETUP] track_length computed: %.1f (%d slots x %.1fpx + 2x gap_width %.1fpx)" % [
@@ -257,6 +265,7 @@ func _process(delta):
 					and nucleotide_synthesis_state[j] == SynthesisCrossState.NONE:
 						nucleotide_synthesis_state[j] = SynthesisCrossState.COMPLETED
 						nucleotide_bases[j].set_body_color(nucleotide_color_sequence_complete)
+						synthesized_bases[j] = _spawn_complement_base(j)
 						print("[t=%s] nucleotide_slot[%d] COMPLETED via end-of-run sweep (was mid-push at DONE)" % [
 							Time.get_ticks_msec(), j
 						])
@@ -333,6 +342,7 @@ func _process(delta):
 					if nucleotide_entered_push_direction[i] and nucleotide_synthesis_state[i] == SynthesisCrossState.NONE:
 						nucleotide_synthesis_state[i] = SynthesisCrossState.COMPLETED
 						nucleotide_bases[i].set_body_color(nucleotide_color_sequence_complete)
+						synthesized_bases[i] = _spawn_complement_base(i)
 						print("[t=%s] nucleotide_slot[%d] COMPLETED on pass #%d PUSH (magenta)" % [
 							Time.get_ticks_msec(), i, nucleotide_crossing_count[i]
 						])
@@ -385,7 +395,28 @@ func _process(delta):
 	backbone_line.points = backbone_points
 	backbone_line.width = backbone_line_width
 
+	# Track synthesized complement bases: mirror the template nucleotide's
+	# x position every frame so they ride the trombone motion together.
+	# y is fixed at new_bottom_template_y + dna_ribbons_gap.
+	for i in range(synthesized_bases.size()):
+		if synthesized_bases[i] != null:
+			synthesized_bases[i].position.x = template_strand_bottom[i].position.x
+
 	_update_bond_marks(backbone_points)
+
+func _spawn_complement_base(template_index: int) -> Node2D:
+	# Instantiate a full NewNitrogenBaseScene so the complement base
+	# gets the correct base type, color, and label automatically.
+	var base = NewNitrogenBaseScene.instantiate()
+	base.set_base_type(dna_sequence.get_complement(template_index))
+	# Position: same x as the template slot, offset downward by dna_ribbons_gap.
+	base.position = Vector2(
+		template_strand_bottom[template_index].position.x,
+		new_bottom_template_y + dna_ribbons_gap
+	)
+	base.z_index = 2
+	add_child(base)
+	return base
 
 func _update_bond_marks(points: PackedVector2Array):
 	var needed = max(0, points.size() - 1)
@@ -588,3 +619,4 @@ func _spawn_nucleotide_slots():
 		nucleotide_entered_push_direction.append(false)
 		nucleotide_synthesis_state.append(SynthesisCrossState.NONE)
 		nucleotide_backbone_delta.append(backbone_offset_distance)
+		synthesized_bases.append(null)
