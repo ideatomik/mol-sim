@@ -3,7 +3,6 @@
 [ext_resource type="Script" uid="uid://diuttskd3h5gq" path="res://test/new_nitrogen_base.gd" id="1_qte5s"]
 
 [node name="NewNitrogenBase" type="RigidBody2D" unique_id=153262830]
+z_index = 2
 script = ExtResource("1_qte5s")
-label_color = Color(0, 0, 0, 1)
 body_radius = 15.0
-body_color = Color(0.8, 1, 0.39215687, 1)

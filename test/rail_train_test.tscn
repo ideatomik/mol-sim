@@ -6,6 +6,7 @@
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_ubnsg")
 nucleotide_slot_spacing = 54.0
+num_nucleotide_slots = 57
 wobble_speed = 1.0
 backbone_color = Color(0.43137255, 0.72156864, 1, 1)
 backbone_line_width = 16.0
@@ -47,7 +48,7 @@ width = 3.0
 
 [node name="TemplateStrandNewTrack" type="Line2D" parent="." unique_id=1670290036]
 width = 3.0
-default_color = Color(0.76862746, 0, 0, 1)
+default_color = Color(0.76862746, 0, 0, 0)
 
 [node name="BackboneLine" type="Line2D" parent="." unique_id=1274713731]
 width = 8.0
@@ -55,4 +56,4 @@ default_color = Color(0, 0, 0, 1)
 
 [node name="NewSynthesizedStrandPosition" type="Line2D" parent="." unique_id=1694821904]
 width = 3.0
-default_color = Color(0.015686275, 1, 0, 1)
+default_color = Color(0.015686275, 1, 0, 0)

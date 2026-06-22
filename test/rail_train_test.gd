@@ -1,17 +1,13 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v55
-# One addition over v54: gentle per-slot sine wobble applied to the
-# nitrogen_base child node's y position offset, giving nucleotides a
-# subtle floating feel while on the flat sections of the strand.
-# Three new @export vars under "Wobble" control amplitude, speed, and
-# per-slot phase offset. Wobble is suppressed while a slot is in the
-# loop (y has moved significantly away from its flat baseline) so it
-# doesn't fight the curve geometry mid-pull. Continues after Phase.DONE.
-# The wobble offset is computed once per slot per frame, applied to
-# the nitrogen_base local y AND added to the backbone point y, so
-# both move together.
+# RAIL/TRAIN TEST v56
+# Introduced DnaSequenceResource as the single source of truth for the
+# template strand's base sequence. On startup, a random A/T/C/G sequence
+# is generated and each nucleotide slot's nitrogen base is assigned its
+# type and color via set_base_type(). The sequence is stored in
+# dna_sequence and can later be overridden by the UI via
+# dna_sequence.set_from_string() before the simulation starts.
 # ==========================================
 
 const NewNitrogenBaseScene := preload("res://test/new_nitrogen_base.tscn")
@@ -144,11 +140,19 @@ var settle_blend: float = 0.0
 
 var bond_marks: Array[Node2D] = []
 
+## Single source of truth for the template strand's base sequence.
+## Populated with a random sequence in _ready(); can be overridden
+## before the simulation starts via dna_sequence.set_from_string().
+var dna_sequence := DnaSequenceResource.new()
+
 func _ready():
 	track_length = (num_nucleotide_slots - 1) * nucleotide_slot_spacing + 2.0 * gap_width
 	print("[SETUP] track_length computed: %.1f (%d slots x %.1fpx + 2x gap_width %.1fpx)" % [
 		track_length, num_nucleotide_slots, nucleotide_slot_spacing, gap_width
 	])
+
+	dna_sequence.randomize_sequence(num_nucleotide_slots)
+	print("[SETUP] sequence: %s" % dna_sequence.to_string())
 
 	new_bottom_template_y = straight_y + new_bottom_template_offset
 	new_synthesized_strand_y = new_bottom_template_y + new_bottom_template_offset
@@ -567,7 +571,7 @@ func _spawn_nucleotide_slots():
 		var nitrogen_base = NewNitrogenBaseScene.instantiate()
 		nucleotide_slot.add_child(nitrogen_base)
 		nucleotide_bases.append(nitrogen_base)
-		nitrogen_base.set_label_text(str(i))
+		nitrogen_base.set_base_type(dna_sequence.sequence[i])
 
 		rail_path.add_child(nucleotide_slot)
 
