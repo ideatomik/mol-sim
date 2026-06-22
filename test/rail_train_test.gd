@@ -1,61 +1,37 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v37
-# ARCHITECTURE CHANGE: replaced manual x-comparison proxies with real
-# Godot collision detection (Area2D/CollisionShape2D) for the
-# synthesis-circle-crossing event, since every prior approach (depth
-# threshold, max_y_reached, x < factory_x) was an inferred proxy that
-# could desync from the actual visual event depending on pulse timing.
-# - SynthesisArea (Area2D + CircleShape2D matching synthesis_circle_radius)
-#   added as a child of SynthesisCircle.
-# - Each car gets its own Area2D + RectangleShape2D (matching car_size),
-#   named "CarArea_%d", added in _spawn_cars().
-# - _on_synthesis_area_entered() fires on genuine geometric overlap and
-#   drives BOTH the unzipped_population group membership AND a new
-#   DIRECTIONAL two-stage state machine (SynthesisCrossState: NONE ->
-#   PRIMED -> COMPLETED). A car must cross the circle TWICE to complete:
-#   once while moving DEEPER into the loop (y increasing, PRIMED), once
-#   while moving BACK OUT toward the strand (y decreasing, COMPLETED).
-#   Direction is read from the car's OWN y movement frame-to-frame
-#   (car_previous_y), not from the circle re-crossing -- since
-#   synthesis_circle/factory_x only ever sweeps rightward, it physically
-#   cannot cross any single car a second time.
-# - The magenta color trigger MOVED from CarTransferState.ARMED->
-#   TRANSFERRED (the old y-depth-threshold mechanism, which only worked
-#   reliably for a single fixed pulse_car_count value and was a poor
-#   conceptual fit for "passed the polymerase") to
-#   SynthesisCrossState.COMPLETED instead. CarTransferState itself is
-#   left in place (baseline_switched logic still uses related position
-#   checks), just no longer drives the car color.
+# RAIL/TRAIN TEST v48
+# REPLACED the i % pulse_nucleotide_count heuristic with a real
+# geometric x-direction signal. At the moment a nucleotide enters the
+# polymerase's inner threshold zone (OUTSIDE->INSIDE), snapshot whether
+# it is moving LEFT (x decreasing, toward factory_x = push/synthesis
+# direction) or RIGHT (x increasing, away from factory_x = pull,
+# being drawn into the loop). Magenta now only fires on confirmed PUSH
+# passes -- pull passes are counted but ignored for the completion
+# trigger. nucleotide_previous_x[] tracks the prior frame's x, updated
+# at the END of the loop body (safe: all within _process(), no
+# physics-signal cross-frame desync). nucleotide_entered_push_direction[]
+# stores the direction flag per nucleotide from entry to exit.
 # ==========================================
 
-# ==========================================
+const NewNitrogenBaseScene := preload("res://test/new_nitrogen_base.tscn")
 
 @onready var rail_path: Path2D = $RailPath
-@onready var rail_visual: Line2D = $RailVisual
+@onready var template_strand_original_track: Line2D = $TemplateStrandOriginalTrack
 @onready var new_strand_line: Line2D = $NewStrandLine
 @onready var synthesis_circle: Node2D = $SynthesisCircle
 @onready var synthesis_area: Area2D = $SynthesisCircle/SynthesisArea
-@onready var new_bottom_template_strand_position: Line2D = $NewBottomTemplateStrandPosition
+@onready var template_strand_new_track: Line2D = $TemplateStrandNewTrack
 @onready var new_synthesized_strand_position: Line2D = $NewSynthesizedStrandPosition
 @onready var backbone_line: Line2D = $BackboneLine
 
-# ==========================================
-# INSPECTOR-EXPOSED TUNABLES
-# Every color, size, thickness, and speed value lives here, grouped by
-# purpose, so future tweaks happen in the Inspector instead of hunting
-# through code. Anything purely structural/logical (group name strings,
-# enums) stays as a plain const further below, since those aren't meant
-# to be tuned.
-# ==========================================
-
 @export_group("Track Layout")
-@export var car_spacing: float = 60.0
-@export var num_cars: int = 24
+@export var nucleotide_slot_spacing: float = 60.0
+@export var num_nucleotide_slots: int = 24
 @export var straight_y: float = 300.0
 @export var track_length: float = 1920.0
-@export var new_bottom_template_offset: float = 90.0 # gap between RailVisual and NewBottomTemplateStrandPosition (and again to NewSynthesizedStrandPosition)
+@export var new_bottom_template_offset: float = 90.0 # gap between TemplateStrandOriginalTrack and TemplateStrandNewTrack (and again to NewSynthesizedStrandPosition)
 
 @export_group("Loop Geometry")
 ## How deep the trombone loop bulges at its SHALLOWEST point during a pulse cycle (in pixels, below the flat track). The pulse never goes fully flat -- this is the floor it bounces back to before growing again.
@@ -70,29 +46,29 @@ extends Node2D
 @export var waist_flare_shallow: float = 0.45
 ## How wide the loop's bottom (waist) bulges, as a fraction of gap_width, when loop_depth is near its DEEPEST (max_loop_depth) -- kept narrower here, since a wide flare at maximum depth risks the curve's handles overshooting and crossing itself.
 @export var waist_flare_deep: float = 0.22
-## Fraction of max_loop_depth a car's y must reach to count as "genuinely pulled deep into the loop" (the ARMED state, a prerequisite for the magenta TRANSFERRED color trigger). NOT 1.0: only a car whose .progress happens to sample the curve's exact geometric midpoint ever reaches the full theoretical max_loop_depth -- most cars peak somewhat short of it, so a 1.0 threshold (520px) was confirmed unreachable in practice (no car ever triggered ARMED). 0.7 (~454px) is comfortably within what real cars actually reach.
+## Fraction of max_loop_depth a nucleotide_slot's y must reach to count as "genuinely pulled deep into the loop" (the ARMED state, a prerequisite for the magenta TRANSFERRED color trigger). NOT 1.0: only a nucleotide_slot whose .progress happens to sample the curve's exact geometric midpoint ever reaches the full theoretical max_loop_depth -- most template_strand_bottom peak somewhat short of it, so a 1.0 threshold (520px) was confirmed unreachable in practice (no nucleotide_slot ever triggered ARMED). 0.7 (~454px) is comfortably within what real template_strand_bottom actually reach.
 @export var armed_depth_fraction: float = 0.7
 
 @export_group("Speeds & Timing")
 @export var sweep_speed: float = 90.0
-@export var pulse_car_count: int = 6
+@export var pulse_nucleotide_count: int = 5
 @export var fade_duration: float = 0.6
 @export var settling_duration: float = 0.5 # how long the curve eases flat instead of snapping instantly at the end of the run -- fixes the "teleport" when transitioning to DONE
 
-@export_group("Car Visuals")
-@export var car_size: Vector2 = Vector2(24, 24)
-@export var car_color_even: Color = Color(0.2, 0.6, 0.9)
-@export var car_color_odd: Color = Color(0.9, 0.6, 0.2)
-## CURRENTLY UNUSED -- was previously triggered when a car's fixed spawn x passed factory_x (unzipped_population group), but that trigger fired prematurely for cars that hadn't actually been visually pulled through the loop yet (it compared spawn position, not real position). Removed in favor of car_color_sequence_complete, which triggers on the genuinely correct CarTransferState.ARMED -> TRANSFERRED transition instead.
-@export var car_color_unzipped: Color = Color(0.0, 1.0, 1.0, 1.0) # full cyan
-## Color a car switches to permanently once it completes the directional two-stage synthesis-circle crossing: PRIMED (touches the polymerase collision area while moving deeper into the loop, y increasing) then COMPLETED (touches it again while moving back out toward the strand, y decreasing). Overrides any other car color from that point on.
-@export var car_color_sequence_complete: Color = Color(1.0, 0.0, 1.0, 1.0) # full magenta
+@export_group("Nucleotide Slot Visuals (DEPRECATED -- will be replaced by nitrogen_base child)")
+@export var nucleotide_slot_size: Vector2 = Vector2(24, 24)
+@export var nucleotide_color_even: Color = Color(0.2, 0.6, 0.9)
+@export var nucleotide_color_odd: Color = Color(0.9, 0.6, 0.2)
+## CURRENTLY UNUSED -- was previously triggered when a nucleotide_slot's fixed spawn x passed factory_x (unzipped_population group), but that trigger fired prematurely for template_strand_bottom that hadn't actually been visually pulled through the loop yet (it compared spawn position, not real position). Removed in favor of nucleotide_color_sequence_complete, which triggers on the genuinely correct NucleotideTransferState.ARMED -> TRANSFERRED transition instead.
+@export var nucleotide_color_unzipped: Color = Color(0.0, 1.0, 1.0, 1.0) # full cyan
+## Color a nucleotide_slot switches to permanently once it completes the directional two-stage synthesis-circle crossing: PRIMED (touches the polymerase collision area while moving deeper into the loop, y increasing) then COMPLETED (touches it again while moving back out toward the strand, y decreasing). Overrides any other nucleotide_slot color from that point on.
+@export var nucleotide_color_sequence_complete: Color = Color(1.0, 0.0, 1.0, 1.0) # full magenta
 
 @export_group("Backbone")
 @export var backbone_color: Color = Color(1.0, 0.0, 1.0, 1.0)
 @export var backbone_line_width: float = 8.0
-@export var backbone_offset_distance: float = 12.0 # half the car's size by default -- puts the line at the car's edge, not through its center
-@export var backbone_offset_smoothing_speed: float = 10.0 # how fast the backbone's per-car y offset lerps toward its target -- higher = snappier, lower = smoother/slower. Set very high (e.g. 1000) to effectively disable smoothing.
+@export var backbone_offset_distance: float = 12.0 # half the nucleotide_slot's size by default -- puts the line at the nucleotide_slot's edge, not through its center
+@export var backbone_offset_smoothing_speed: float = 10.0 # how fast the backbone's per-nucleotide_slot y offset lerps toward its target -- higher = snappier, lower = smoother/slower. Set very high (e.g. 1000) to effectively disable smoothing.
 
 @export_group("Bond Marks")
 @export var bond_mark_width: float = 14.0
@@ -102,11 +78,10 @@ extends Node2D
 @export_group("Synthesis Circle")
 @export var synthesis_circle_color: Color = Color(1.0, 0.85, 0.1)
 @export var synthesis_circle_radius: float = 16.0
-
-# ==========================================
-# DERIVED VALUES (computed once in _ready() from the exports above) and
-# internal state -- not meant to be tuned directly.
-# ==========================================
+## Distance threshold (from synthesis_circle's center) a nucleotide's center must drop BELOW to count as having genuinely entered the polymerase, for the new distance-based pass-counting system (replaces raw area_entered signal counting, which was confirmed too noisy -- same nucleotide could re-trigger 4-7 times per real visual pass due to edge/corner grazing).
+@export var synthesis_inside_threshold: float = 16.0
+## Distance threshold a nucleotide's center must rise ABOVE to count as having fully exited again, before the NEXT entry can register as a new genuine pass. Deliberately larger than synthesis_inside_threshold (hysteresis band) so a nucleotide hovering right at one single boundary value doesn't flicker between states.
+@export var synthesis_outside_threshold: float = 24.0
 
 var new_bottom_template_y: float = 0.0
 var new_synthesized_strand_y: float = 0.0
@@ -138,65 +113,63 @@ var loop_length: float = 0.0
 const LOOP_POPULATION_GROUP := "loop_population"
 const UNZIPPED_POPULATION_GROUP := "unzipped_population"
 
-var cars: Array[PathFollow2D] = []
-var car_visuals: Array[ColorRect] = [] # parallel to cars[], for direct color changes (e.g. cyan once unzipped) without searching the scene tree each frame
-var car_original_x: Array[float] = []
+var template_strand_bottom: Array[PathFollow2D] = []
+var nucleotide_bases: Array[NewNitrogenBase] = [] # parallel to template_strand_bottom; replaces the removed ColorRect-based nucleotide_slot_visuals
+var nucleotide_original_x: Array[float] = []
 
-enum CarTransferState { WAITING, ARMED, TRANSFERRED }
-var car_transfer_state: Array[CarTransferState] = []
-var car_max_y_reached: Array[float] = []
-var car_previous_y: Array[float] = [] # previous frame's y, used to determine direction of travel (increasing = priming/into the loop, decreasing = completing/back to the strand) at the moment of synthesis-circle collision
+enum NucleotideTransferState { WAITING, ARMED, TRANSFERRED }
+var nucleotide_transfer_state: Array[NucleotideTransferState] = []
+var nucleotide_max_y_reached: Array[float] = []
+var nucleotide_previous_y: Array[float] = []
+var nucleotide_crossing_count: Array[int] = [] # total number of GENUINE passes near the polymerase (distance-based, hysteresis-debounced) -- replaces the old raw area_entered signal count, which was confirmed too noisy (same nucleotide could re-trigger 4-7 times per real visual pass)
 
-# DIRECTIONAL SYNTHESIS-CIRCLE CROSSING (v37): each car needs to cross the
-# circle TWICE, in specific directions, to count as a complete cycle:
-#   (a) PRIMED -- crosses while moving deeper into the loop (y increasing)
-#   (b) COMPLETED -- crosses again while moving back out (y decreasing)
-enum SynthesisCrossState { NONE, PRIMED, COMPLETED }
-var car_synthesis_state: Array[SynthesisCrossState] = []
+# Per-nucleotide x position from the previous frame -- used to determine
+# the nucleotide's x-direction at the moment it enters the polymerase's
+# inner threshold zone. Updated every frame at the END of the loop body,
+# after all proximity checks have run (safe to do every frame here since
+# this is entirely within _process(), no physics signal cross-frame issues).
+var nucleotide_previous_x: Array[float] = []
 
-# BACKBONE FLICKER FIX: per-car smoothed y_delta, lerped toward whatever
-# the classification (on_rail_visual / on_new_bottom / in-loop) currently
-# targets, instead of snapping instantly. A car hovering right at one of
-# the < 1.0 classification thresholds can flip between two OPPOSITE-SIGN
-# deltas frame to frame (e.g. +12 on RailVisual vs -12 on
-# NewBottomTemplateStrandPosition), which reads as flicker. Smoothing the
-# applied delta (not the classification itself) keeps the visual
-# transition gradual without touching the classification logic.
-var car_backbone_delta: Array[float] = []
+# Whether the most recent OUTSIDE->INSIDE transition happened while the
+# nucleotide was moving LEFT (decreasing x, toward factory_x) -- the
+# push/synthesis direction. Set at the moment of entry; read at the
+# moment of exit to decide whether this pass counts as the synthesis event.
+var nucleotide_entered_push_direction: Array[bool] = []
+
+# PROXIMITY STATE (new): tracks whether each nucleotide's center is
+# currently OUTSIDE or INSIDE the polymerase's inner threshold distance,
+# checked every frame via direct distance math -- not via the area_entered
+# signal at all. A genuine pass is counted on the OUTSIDE->INSIDE->OUTSIDE
+# full cycle (specifically, counted at the moment it re-exits past
+# synthesis_outside_threshold, confirming it was genuinely INSIDE at some
+# point first).
+enum ProximityState { OUTSIDE, INSIDE }
+var nucleotide_proximity_state: Array[ProximityState] = []
+
+# COMPLETION STATE (simplified, no PRIMED/direction distinction for this
+# test round, per instruction to validate the simpler version first):
+# NONE until the 3rd genuine pass is reached, then COMPLETED (magenta),
+# permanently.
+enum SynthesisCrossState { NONE, COMPLETED }
+var nucleotide_synthesis_state: Array[SynthesisCrossState] = []
+
+var nucleotide_backbone_delta: Array[float] = []
 
 var baseline_switched: bool = false
-var baseline_switch_car_index: int = -1
+var baseline_switch_nucleotide_index: int = -1
 
-# SETTLING PHASE: eases the curve flat over settling_duration instead of
-# snapping instantly. settling_t tracks progress (0 to settling_duration);
-# the *_start values capture loop_depth/factory_x/helicase_x at the moment
-# settling begins, so we can lerp FROM the actual current geometry TO the
-# final flat target, rather than from some arbitrary fixed starting point.
 var settling_t: float = 0.0
 var settling_loop_depth_start: float = 0.0
-# Blends the WHOLE curve's y-coordinates toward the final flat target
-# (new_bottom_template_y everywhere) as SETTLING progresses -- 0 during
-# normal operation/SWEEPING/FINISHING_LAST_PULSE, eases to 1 by the end of
-# SETTLING. Needed because loop_depth alone reaching 0 doesn't make the
-# curve match Phase.DONE's flat construction: the anchor_rest_y step
-# (straight_y -> new_bottom_template_y) is independent of loop_depth and
-# was never eased, causing a real ~27px single-frame jump at the
-# SETTLING->DONE boundary (confirmed by frame-by-frame log).
 var settle_blend: float = 0.0
 
-# PHOSPHODIESTER BOND MARKS: one Node2D (holding a Polygon2D placeholder
-# ">" shape) per bond/segment, created lazily in _update_bond_marks(),
-# repositioned and rotated every frame to track the backbone.
 var bond_marks: Array[Node2D] = []
 
 func _ready():
-	# Compute derived values from the exported tunables FIRST -- everything
-	# below this point (curve building, car spawning, etc.) depends on them.
 	new_bottom_template_y = straight_y + new_bottom_template_offset
 	new_synthesized_strand_y = new_bottom_template_y + new_bottom_template_offset
-	new_strand_y = straight_y + max_loop_depth + car_size.y
+	new_strand_y = straight_y + max_loop_depth + nucleotide_slot_size.y
 	synthesis_circle_y = straight_y + max_loop_depth
-	pulse_width = pulse_car_count * car_spacing
+	pulse_width = pulse_nucleotide_count * nucleotide_slot_spacing
 
 	helicase_x = gap_width
 	factory_x = 0.0
@@ -206,20 +179,17 @@ func _ready():
 	pulse_speed = (2.0 * pulse_width) / pulse_time_budget
 
 	_rebuild_rail()
-	_spawn_cars()
+	_spawn_nucleotide_slots()
 	_setup_synthesis_circle()
 
-	rail_visual.visible = true
+	template_strand_original_track.visible = true
 
-	new_bottom_template_strand_position.points = PackedVector2Array([
+	template_strand_new_track.points = PackedVector2Array([
 		Vector2(0, new_bottom_template_y),
 		Vector2(track_length, new_bottom_template_y)
 	])
-	new_bottom_template_strand_position.visible = true
+	template_strand_new_track.visible = true
 
-	# NewSynthesizedStrandPosition: starts spanning x=0 to wherever
-	# synthesis_x (the yellow circle's x) is at the very first frame --
-	# updated every frame after this in _process to keep tracking it.
 	new_synthesized_strand_position.points = PackedVector2Array([
 		Vector2(0, new_synthesized_strand_y),
 		Vector2((factory_x + helicase_x) / 2.0, new_synthesized_strand_y)
@@ -229,22 +199,17 @@ func _ready():
 	backbone_line.default_color = backbone_color
 	backbone_line.width = backbone_line_width
 	backbone_line.z_index = -1
-	# QoL: round points instead of square -- joint_mode rounds where
-	# segments meet (every interior car-to-car joint), cap_mode rounds the
-	# very first and last endpoints of the whole line.
 	backbone_line.joint_mode = Line2D.LINE_JOINT_ROUND
 	backbone_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
 	backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
 
-	print("=== RUN START === baseline_switched:%s" % baseline_switched)
+	print("=== RUN START === baseline_switched:%s pulse_nucleotide_count:%d" % [baseline_switched, pulse_nucleotide_count])
 
 func _process(delta):
 	match phase:
 		Phase.SWEEPING:
 			helicase_x += sweep_speed * delta
-
 			factory_x = helicase_x - gap_width
-
 			match pulse_state:
 				PulseState.GROWING:
 					pulse_offset = min(pulse_offset + pulse_speed * delta, pulse_width)
@@ -256,14 +221,11 @@ func _process(delta):
 						pulse_state = PulseState.GROWING
 				PulseState.DONE:
 					pulse_offset = 0.0
-
 			var pulse_ratio = pulse_offset / pulse_width
 			loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio)
-
 			population_left_edge = factory_x - pulse_offset
-
-			var last_car_x = car_original_x[car_original_x.size() - 1]
-			if factory_x > last_car_x:
+			var last_nucleotide_x = nucleotide_original_x[nucleotide_original_x.size() - 1]
+			if factory_x > last_nucleotide_x:
 				phase = Phase.FINISHING_LAST_PULSE
 		Phase.FINISHING_LAST_PULSE:
 			match pulse_state:
@@ -277,16 +239,13 @@ func _process(delta):
 						pulse_state = PulseState.GROWING
 				PulseState.DONE:
 					pulse_offset = 0.0
-
 			var pulse_ratio2 = pulse_offset / pulse_width
 			loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio2)
-
 			population_left_edge = factory_x - pulse_offset
-
 			var all_settled = baseline_switched
 			if all_settled:
-				for i in range(cars.size()):
-					if abs(cars[i].position.y - new_bottom_template_y) > 2.0:
+				for i in range(template_strand_bottom.size()):
+					if abs(template_strand_bottom[i].position.y - new_bottom_template_y) > 2.0:
 						all_settled = false
 						break
 			if all_settled:
@@ -294,25 +253,17 @@ func _process(delta):
 				settling_loop_depth_start = loop_depth
 				phase = Phase.SETTLING
 		Phase.SETTLING:
-			# Eases loop_depth from its captured starting value toward 0,
-			# AND settle_blend from 0 toward 1, both over settling_duration
-			# using the same eased_t. settle_blend is what actually fixes
-			# the SETTLING->DONE jump: it blends every curve y-coordinate
-			# in _rebuild_rail() toward new_bottom_template_y, so by t=1.0
-			# the eased curve already matches what Phase.DONE's flat
-			# construction would produce -- making the handoff seamless.
 			settling_t += delta
 			var t = clamp(settling_t / settling_duration, 0.0, 1.0)
 			var eased_t = smoothstep(0.0, 1.0, t)
 			loop_depth = lerp(settling_loop_depth_start, 0.0, eased_t)
 			settle_blend = eased_t
-
 			if t >= 1.0:
 				loop_depth = 0.0
 				settle_blend = 1.0
 				phase = Phase.DONE
 		Phase.DONE:
-			settle_blend = 1.0 # stays fully blended once DONE
+			settle_blend = 1.0
 			if not synthesis_circle_faded:
 				synthesis_circle_faded = true
 				var fade_tween = create_tween()
@@ -320,93 +271,142 @@ func _process(delta):
 
 	_rebuild_rail()
 
-	# synthesis_circle tracks the loop's LEFTMOST anchor (factory_x) in x,
-	# with y FIXED at new_bottom_template_y (not depth-dependent) -- per
-	# explicit instruction, distinct from synthesis_circle_y (which is
-	# derived from max_loop_depth and no longer used here).
 	synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
 
-	# NewSynthesizedStrandPosition keeps tracking the midpoint, unchanged.
 	var new_strand_tracking_x = (factory_x + helicase_x) / 2.0
 	new_synthesized_strand_position.points = PackedVector2Array([
 		Vector2(0, new_synthesized_strand_y),
 		Vector2(new_strand_tracking_x, new_synthesized_strand_y)
 	])
 
-	for i in range(cars.size()):
-		cars[i].progress = track_length - car_original_x[i]
+	for i in range(template_strand_bottom.size()):
+		template_strand_bottom[i].progress = track_length - nucleotide_original_x[i]
 
-	for i in range(cars.size()):
-		var car_y = cars[i].position.y
+	for i in range(template_strand_bottom.size()):
+		var nucleotide_y = template_strand_bottom[i].position.y
 
-		if car_y > car_max_y_reached[i]:
-			car_max_y_reached[i] = car_y
+		if nucleotide_y > nucleotide_max_y_reached[i]:
+			nucleotide_max_y_reached[i] = nucleotide_y
 
-		if not baseline_switched and car_y >= new_bottom_template_y:
+		if not baseline_switched and nucleotide_y >= new_bottom_template_y:
 			baseline_switched = true
-			baseline_switch_car_index = i
-			print(">>> BASELINE SWITCH TRIGGERED by car[%d] at y=%.1f (t=%s) <<<" % [i, car_y, Time.get_ticks_msec()])
+			baseline_switch_nucleotide_index = i
+			print(">>> BASELINE SWITCH TRIGGERED by nucleotide_slot[%d] at y=%.1f (t=%s) <<<" % [i, nucleotide_y, Time.get_ticks_msec()])
 
-		match car_transfer_state[i]:
-			CarTransferState.WAITING:
-				# FIX: was checking instantaneous car_y, which only
-				# catches a car if it happens to be deep enough in THIS
-				# exact frame. Since the pulse is a triangle wave with a
-				# fixed period (pulse_car_count car-widths), cars whose
-				# transit through the loop happened to land during the
-				# shallower portion of a cycle could NEVER satisfy an
-				# instantaneous check, no matter how long the run went on
-				# -- confirmed empirically: cars 0,1,6,7,12,13,18,19 never
-				# triggered ARMED at all, a predictable 2-out-of-6 pattern
-				# matching pulse_car_count. car_max_y_reached[i] (updated
-				# just above, every frame, unconditionally) is each car's
-				# TRUE historical peak depth -- checking THAT instead
-				# guarantees every car eventually qualifies once its real
-				# peak (whenever it occurred) clears the threshold.
-				if car_max_y_reached[i] >= straight_y + max_loop_depth * armed_depth_fraction:
-					car_transfer_state[i] = CarTransferState.ARMED
-					print("[t=%s] car[%d] ARMED (max_y_reached=%.1f)" % [Time.get_ticks_msec(), i, car_max_y_reached[i]])
-			CarTransferState.ARMED:
-				if car_y < new_bottom_template_y:
-					car_transfer_state[i] = CarTransferState.TRANSFERRED
-					print("[t=%s] car[%d] TRANSFERRED (y=%.1f)" % [Time.get_ticks_msec(), i, car_y])
-			CarTransferState.TRANSFERRED:
+		match nucleotide_transfer_state[i]:
+			NucleotideTransferState.WAITING:
+				if nucleotide_max_y_reached[i] >= straight_y + max_loop_depth * armed_depth_fraction:
+					nucleotide_transfer_state[i] = NucleotideTransferState.ARMED
+					print("[t=%s] nucleotide_slot[%d] ARMED (max_y_reached=%.1f)" % [Time.get_ticks_msec(), i, nucleotide_max_y_reached[i]])
+			NucleotideTransferState.ARMED:
+				if nucleotide_y < new_bottom_template_y:
+					nucleotide_transfer_state[i] = NucleotideTransferState.TRANSFERRED
+					print("[t=%s] nucleotide_slot[%d] TRANSFERRED (y=%.1f)" % [Time.get_ticks_msec(), i, nucleotide_y])
+			NucleotideTransferState.TRANSFERRED:
 				pass
 
-		car_previous_y[i] = car_y
+		# NOTE: previous_y update REMOVED from here (v41 fix) -- updating
+		# it unconditionally every single frame meant that by the time
+		# _on_synthesis_area_entered() (a physics-step signal) fired and
+		# read it, _process() had already overwritten it to match the
+		# CURRENT position, making y == previous_y always (confirmed by
+		# diagnostic log: every single collision showed them exactly
+		# equal). The comparison snapshot now lives entirely inside
+		# _on_synthesis_area_entered() itself -- captured only at the
+		# moment of each collision, compared against the PREVIOUS
+		# collision's snapshot for that same nucleotide, not against a
+		# continuously-refreshed per-frame value.
 
-	for i in range(cars.size()):
-		var car = cars[i]
-		var x = car_original_x[i]
+		# DISTANCE-BASED GENUINE PASS DETECTION (replaces raw
+		# area_entered signal counting, confirmed too noisy -- same
+		# nucleotide could re-trigger 4-7 times per real visual pass due
+		# to shape-edge grazing). Checked every frame via direct distance
+		# math between the nucleotide's center and synthesis_circle's
+		# center, with hysteresis (separate inside/outside thresholds) so
+		# a nucleotide hovering right at one boundary doesn't flicker.
+		# Skip proximity state updates entirely once completed -- nothing
+		# to gain from continuing to count passes after magenta is set,
+		# and it was confirmed producing spurious pass #3 logs for
+		# nucleotides that had already correctly completed on pass #2.
+		if nucleotide_synthesis_state[i] == SynthesisCrossState.COMPLETED:
+			continue
+
+		var current_x = template_strand_bottom[i].position.x
+		var distance_to_polymerase = template_strand_bottom[i].position.distance_to(synthesis_circle.position)
+		match nucleotide_proximity_state[i]:
+			ProximityState.OUTSIDE:
+				if distance_to_polymerase < synthesis_inside_threshold:
+					nucleotide_proximity_state[i] = ProximityState.INSIDE
+					# Snapshot x-direction at the moment of entry --
+					# this is the real push/pull signal. Moving LEFT
+					# (x decreasing, toward factory_x) = push/synthesis.
+					# Moving RIGHT (x increasing, away from factory_x)
+					# = pull direction, not the synthesis event.
+					var moving_left = current_x < nucleotide_previous_x[i]
+					nucleotide_entered_push_direction[i] = moving_left
+					print("[t=%s] nucleotide_slot[%d] ENTERED polymerase zone (moving_left=%s x=%.1f prev_x=%.1f)" % [
+						Time.get_ticks_msec(), i, moving_left, current_x, nucleotide_previous_x[i]
+					])
+			ProximityState.INSIDE:
+				if distance_to_polymerase > synthesis_outside_threshold:
+					nucleotide_proximity_state[i] = ProximityState.OUTSIDE
+					nucleotide_crossing_count[i] += 1
+					print("[t=%s] nucleotide_slot[%d] GENUINE PASS #%d push=%s (distance=%.1f)" % [
+						Time.get_ticks_msec(), i, nucleotide_crossing_count[i],
+						nucleotide_entered_push_direction[i], distance_to_polymerase
+					])
+					# Only trigger magenta if this pass was in the PUSH
+					# direction (nucleotide moving left, from loop toward
+					# factory_x / new strand). Pull-direction passes
+					# are just the nucleotide being drawn INTO the loop
+					# and don't represent synthesis.
+					if nucleotide_entered_push_direction[i] and nucleotide_synthesis_state[i] == SynthesisCrossState.NONE:
+						nucleotide_synthesis_state[i] = SynthesisCrossState.COMPLETED
+						nucleotide_bases[i].set_body_color(nucleotide_color_sequence_complete)
+						print("[t=%s] nucleotide_slot[%d] COMPLETED on pass #%d PUSH (magenta)" % [
+							Time.get_ticks_msec(), i, nucleotide_crossing_count[i]
+						])
+
+		# Update x snapshot AFTER proximity check so next frame can compare
+		# against this frame's position -- same pattern as nucleotide_previous_y.
+		nucleotide_previous_x[i] = current_x
+
+
+	for i in range(template_strand_bottom.size()):
+		var nucleotide_slot = template_strand_bottom[i]
+		var x = nucleotide_original_x[i]
 		var in_loop = (phase != Phase.DONE) and x >= population_left_edge and x <= helicase_x
 
-		if in_loop and not car.is_in_group(LOOP_POPULATION_GROUP):
-			car.add_to_group(LOOP_POPULATION_GROUP)
-		elif not in_loop and car.is_in_group(LOOP_POPULATION_GROUP):
-			car.remove_from_group(LOOP_POPULATION_GROUP)
-		# NOTE: UNZIPPED_POPULATION_GROUP membership is now set directly by
-		# _on_synthesis_area_entered() (v37, collision-based), not manual
-		# x-comparison here -- removed the old "x < factory_x" check
-		# entirely, since it compared spawn position against factory_x
-		# rather than a real geometric event.
+		if in_loop and not nucleotide_slot.is_in_group(LOOP_POPULATION_GROUP):
+			nucleotide_slot.add_to_group(LOOP_POPULATION_GROUP)
+		elif not in_loop and nucleotide_slot.is_in_group(LOOP_POPULATION_GROUP):
+			nucleotide_slot.remove_from_group(LOOP_POPULATION_GROUP)
 
 	var backbone_points = PackedVector2Array()
-	for i in range(cars.size()):
-		var car = cars[i]
-		var on_rail_visual = abs(car.position.y - straight_y) < 1.0
-		var on_new_bottom = abs(car.position.y - new_bottom_template_y) < 1.0
+	for i in range(template_strand_bottom.size()):
+		var nucleotide_slot = template_strand_bottom[i]
+		var on_rail_visual = abs(nucleotide_slot.position.y - straight_y) < 1.0
+		var on_new_bottom = abs(nucleotide_slot.position.y - new_bottom_template_y) < 1.0
 		var target_delta: float
 		if on_rail_visual:
-			target_delta = backbone_offset_distance # below the car
+			target_delta = backbone_offset_distance
 		elif on_new_bottom:
-			target_delta = -backbone_offset_distance # above the car
+			target_delta = -backbone_offset_distance
 		else:
-			target_delta = backbone_offset_distance # inside the loop: toward the bulge, consistent direction (position doesn't matter here)
+			target_delta = backbone_offset_distance
 
-		car_backbone_delta[i] = lerp(car_backbone_delta[i], target_delta, clamp(backbone_offset_smoothing_speed * delta, 0.0, 1.0))
-		backbone_points.append(Vector2(car.position.x, car.position.y + car_backbone_delta[i]))
+		nucleotide_backbone_delta[i] = lerp(nucleotide_backbone_delta[i], target_delta, clamp(backbone_offset_smoothing_speed * delta, 0.0, 1.0))
+		backbone_points.append(Vector2(nucleotide_slot.position.x, nucleotide_slot.position.y + nucleotide_backbone_delta[i]))
 
 	backbone_line.points = backbone_points
+	# FIX: width was only ever set once, in _ready() -- tweaking
+	# backbone_line_width live in the Inspector during a running scene
+	# never visually updated, since nothing re-applied it after startup.
+	# default_color, by contrast, only needs setting once since Line2D
+	# re-reads it every frame internally for rendering -- but width is a
+	# Line2D property we were never re-pushing. Re-applying here, same
+	# place points itself gets updated every frame, fixes this.
+	backbone_line.width = backbone_line_width
 
 	_update_bond_marks(backbone_points)
 
@@ -438,10 +438,10 @@ func _create_bond_mark_sprite() -> Node2D:
 
 	var black_diamond = Polygon2D.new()
 	black_diamond.polygon = PackedVector2Array([
-		Vector2(w / 2.0, 0),    # tip
-		Vector2(0, -h),          # top
-		Vector2(-w / 2.0, 0),    # back
-		Vector2(0, h),           # bottom
+		Vector2(w / 2.0, 0),
+		Vector2(0, -h),
+		Vector2(-w / 2.0, 0),
+		Vector2(0, h),
 	])
 	black_diamond.color = bond_mark_black_color
 	holder.add_child(black_diamond)
@@ -469,11 +469,10 @@ func _rebuild_rail():
 		flat_curve.add_point(Vector2(0, rest_y))
 		loop_length = 0.0
 		rail_path.curve = flat_curve
-		rail_visual.points = flat_curve.get_baked_points()
+		template_strand_original_track.points = flat_curve.get_baked_points()
 		return
 
 	var curve = Curve2D.new()
-
 	var blended_straight_y = lerp(straight_y, new_bottom_template_y, settle_blend) if baseline_switched else straight_y
 
 	curve.add_point(Vector2(track_length, blended_straight_y))
@@ -529,9 +528,15 @@ func _rebuild_rail():
 	curve.add_point(Vector2(0, anchor_rest_y))
 
 	rail_path.curve = curve
-	rail_visual.points = curve.get_baked_points()
+	template_strand_original_track.points = curve.get_baked_points()
 
 func _setup_synthesis_circle():
+	# FIX: synthesis_circle had no z_index set (defaults to 0), while the
+	# bond mark diamonds (_create_bond_mark_sprite) use z_index=1 -- so
+	# the diamonds rendered OVER the circle. Set to 2, above both the
+	# bond marks and the backbone line (z_index=-1).
+	synthesis_circle.z_index = 2
+
 	var poly = Polygon2D.new()
 	var points = PackedVector2Array()
 	const SEGMENTS = 32
@@ -542,20 +547,10 @@ func _setup_synthesis_circle():
 	poly.color = synthesis_circle_color
 	synthesis_circle.add_child(poly)
 
-	# COLLISION-BASED CROSSING DETECTION (v37): assign a real
-	# CircleShape2D to SynthesisArea's CollisionShape2D, matching
-	# synthesis_circle_radius. area_entered fires directly from Godot's
-	# physics overlap detection -- a genuine geometric "did this car's
-	# shape actually touch the circle's shape" signal, not an inferred
-	# proxy (depth threshold, max_y_reached, x-comparison) that can desync
-	# from the real visual event depending on pulse timing.
 	var synthesis_collision_shape = synthesis_area.get_node("SynthesisCollisionShape")
 	var circle_shape = CircleShape2D.new()
 	circle_shape.radius = synthesis_circle_radius
 	synthesis_collision_shape.shape = circle_shape
-	# FIX (v37 round 2): explicit monitoring/monitorable, same reasoning
-	# as the car areas -- synthesis_area is the one doing the WATCHING
-	# (connected to area_entered), so its monitoring must be true.
 	synthesis_area.monitoring = true
 	synthesis_area.monitorable = true
 	synthesis_area.area_entered.connect(_on_synthesis_area_entered)
@@ -565,99 +560,83 @@ func _setup_synthesis_circle():
 	])
 
 func _on_synthesis_area_entered(area: Area2D):
-	# DIAGNOSTIC: unconditional, fires for EVERY area_entered event
-	# regardless of name/filtering -- to directly confirm whether this
-	# signal handler is being called at all.
+	# SIMPLIFIED (v44): the raw area_entered signal is no longer used for
+	# pass-counting or the magenta trigger at all -- confirmed too noisy
+	# (same nucleotide could re-trigger 4-7 times per real visual pass due
+	# to shape-edge grazing). That logic moved to a per-frame
+	# distance-based check in _process() instead. Kept here only for the
+	# UNZIPPED_POPULATION_GROUP membership (still a reasonable coarse
+	# signal for "has been near the polymerase at all") and the raw signal
+	# print, in case it's still useful to compare against the new genuine
+	# pass count.
 	print("[t=%s] SYNTHESIS AREA ENTERED by: %s" % [Time.get_ticks_msec(), area.name])
 
-	# Fires when a car's Area2D genuinely overlaps SynthesisArea -- the
-	# real, direct "touched the polymerase" event. area's name is
-	# "CarArea_%d" (set in _spawn_cars()), parsed back out to identify
-	# which car.
-	#
-	# DIRECTIONAL TWO-STAGE LOGIC: a car must cross the circle TWICE to
-	# complete the cycle, distinguished by its direction of travel (not by
-	# the circle moving, since synthesis_circle/factory_x only ever
-	# sweeps rightward -- it physically cannot re-cross any single car a
-	# second time. The car's OWN y-direction at the moment of overlap is
-	# the real signal: increasing y = heading deeper into the loop
-	# (PRIMED), decreasing y = heading back out toward the strand
-	# (COMPLETED, only valid once already PRIMED).
-	if not area.name.begins_with("CarArea_"):
+	if not area.name.begins_with("NucleotideArea_"):
 		return
-	var car_index = int(area.name.substr("CarArea_".length()))
-	if car_index < 0 or car_index >= cars.size():
+	var nucleotide_index = int(area.name.substr("NucleotideArea_".length()))
+	if nucleotide_index < 0 or nucleotide_index >= template_strand_bottom.size():
 		return
 
-	var car = cars[car_index]
-	if not car.is_in_group(UNZIPPED_POPULATION_GROUP):
-		car.add_to_group(UNZIPPED_POPULATION_GROUP)
+	var nucleotide_slot = template_strand_bottom[nucleotide_index]
+	if not nucleotide_slot.is_in_group(UNZIPPED_POPULATION_GROUP):
+		nucleotide_slot.add_to_group(UNZIPPED_POPULATION_GROUP)
 
-	var moving_deeper = car.position.y > car_previous_y[car_index]
-
-	match car_synthesis_state[car_index]:
-		SynthesisCrossState.NONE:
-			if moving_deeper:
-				car_synthesis_state[car_index] = SynthesisCrossState.PRIMED
-				print("[t=%s] car[%d] PRIMED (crossed polymerase moving deeper, y=%.1f)" % [Time.get_ticks_msec(), car_index, car.position.y])
-		SynthesisCrossState.PRIMED:
-			if not moving_deeper:
-				car_synthesis_state[car_index] = SynthesisCrossState.COMPLETED
-				car_visuals[car_index].color = car_color_sequence_complete
-				print("[t=%s] car[%d] COMPLETED (crossed polymerase moving back out, y=%.1f)" % [Time.get_ticks_msec(), car_index, car.position.y])
-		SynthesisCrossState.COMPLETED:
-			pass
-
-func _spawn_cars():
-	var row_span = (num_cars - 1) * car_spacing
+func _spawn_nucleotide_slots():
+	var row_span = (num_nucleotide_slots - 1) * nucleotide_slot_spacing
 	var row_start_x = (track_length - row_span) / 2.0
 
-	for i in range(num_cars):
-		var car = PathFollow2D.new()
-		car.rotates = false
-		car.loop = false
+	for i in range(num_nucleotide_slots):
+		var nucleotide_slot = PathFollow2D.new()
+		nucleotide_slot.rotates = false
+		nucleotide_slot.loop = false
 
-		var visual = ColorRect.new()
-		visual.size = car_size
-		visual.position = Vector2(-car_size.x / 2.0, -car_size.y / 2.0)
-		visual.color = car_color_even if i % 2 == 0 else car_color_odd
-		car.add_child(visual)
-		car_visuals.append(visual)
+		var nucleotide_area = Area2D.new()
+		nucleotide_area.name = "NucleotideArea_%d" % i
+		nucleotide_area.monitoring = true
+		nucleotide_area.monitorable = true
+		var nucleotide_collision_shape = CollisionShape2D.new()
+		var nucleotide_shape = RectangleShape2D.new()
+		nucleotide_shape.size = nucleotide_slot_size
+		nucleotide_collision_shape.shape = nucleotide_shape
+		nucleotide_area.add_child(nucleotide_collision_shape)
+		nucleotide_slot.add_child(nucleotide_area)
 
-		# COLLISION-BASED CROSSING DETECTION (v37): each car gets its own
-		# Area2D (rectangular CollisionShape2D matching car_size), named
-		# "CarArea_%d" so _on_synthesis_area_entered() can identify which
-		# car triggered the overlap. monitoring=true so it can detect
-		# SynthesisArea; monitorable=true so SynthesisArea (if it monitors
-		# instead) can detect it -- both set for robustness regardless of
-		# which Area2D ends up doing the active monitoring.
-		var car_area = Area2D.new()
-		car_area.name = "CarArea_%d" % i
-		# FIX (v37 round 2): area_entered for Area-to-Area overlap requires
-		# BOTH areas configured correctly -- the watching area's
-		# `monitoring` AND the watched area's `monitorable` must both be
-		# true. Confirmed via Godot's own issue tracker that this doesn't
-		# reliably "just work" off defaults in practice (multiple linked
-		# engine issues describe silent failures here). Setting both
-		# explicitly on every car area, since this car area is the one
-		# being WATCHED by synthesis_area.
-		car_area.monitoring = true
-		car_area.monitorable = true
-		var car_collision_shape = CollisionShape2D.new()
-		var car_shape = RectangleShape2D.new()
-		car_shape.size = car_size
-		car_collision_shape.shape = car_shape
-		car_area.add_child(car_collision_shape)
-		car.add_child(car_area)
+		# NEW NITROGEN BASE (v38/v39): instantiate the user-built template
+		# scene as a child of this slot -- positioned at the slot's own
+		# origin (default Vector2.ZERO offset), so it rides exactly
+		# wherever the slot's PathFollow2D places it. stay_frozen=true
+		# (the template's default) keeps it purely positional for now.
+		# Reference stored in nucleotide_bases[] (replaces the removed
+		# ColorRect-based nucleotide_slot_visuals[]) so later code (the
+		# magenta synthesis-completion trigger) can call set_body_color().
+		#
+		# FIX: previously force-applied an even/odd blue/orange color here
+		# unconditionally, silently overriding whatever body_color the
+		# user configured directly in the template scene's Inspector
+		# (e.g. #cc0064) -- every instance, every time. Removed entirely;
+		# each instance now simply keeps the template's own configured
+		# default, exactly as intended when the template scene was set up
+		# specifically so the Inspector could control this.
+		var nitrogen_base: NewNitrogenBase = NewNitrogenBaseScene.instantiate()
+		nucleotide_slot.add_child(nitrogen_base)
+		nucleotide_bases.append(nitrogen_base)
+		# Label now shows the nucleotide's index (was "X") -- makes it
+		# possible to identify and track a specific nucleotide across
+		# screenshots, which the X placeholder didn't allow.
+		nitrogen_base.set_label_text(str(i))
 
-		rail_path.add_child(car)
+		rail_path.add_child(nucleotide_slot)
 
-		var x = row_start_x + i * car_spacing
-		car_original_x.append(x)
-		car.progress = track_length - x
-		cars.append(car)
-		car_transfer_state.append(CarTransferState.WAITING)
-		car_max_y_reached.append(straight_y)
-		car_previous_y.append(straight_y)
-		car_synthesis_state.append(SynthesisCrossState.NONE)
-		car_backbone_delta.append(backbone_offset_distance) # starts matching the RailVisual case, since that's where cars begin
+		var x = row_start_x + i * nucleotide_slot_spacing
+		nucleotide_original_x.append(x)
+		nucleotide_slot.progress = track_length - x
+		template_strand_bottom.append(nucleotide_slot)
+		nucleotide_transfer_state.append(NucleotideTransferState.WAITING)
+		nucleotide_max_y_reached.append(straight_y)
+		nucleotide_previous_y.append(straight_y)
+		nucleotide_crossing_count.append(0)
+		nucleotide_proximity_state.append(ProximityState.OUTSIDE)
+		nucleotide_previous_x.append(x)
+		nucleotide_entered_push_direction.append(false)
+		nucleotide_synthesis_state.append(SynthesisCrossState.NONE)
+		nucleotide_backbone_delta.append(backbone_offset_distance)
