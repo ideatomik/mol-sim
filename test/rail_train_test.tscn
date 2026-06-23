@@ -6,9 +6,13 @@
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_ubnsg")
 nucleotide_slot_spacing = 54.0
-num_nucleotide_slots = 30
+num_nucleotide_slots = 36
+new_bottom_template_offset = 120.0
+dna_ribbons_gap = 60.0
+max_loop_depth = 230.0
+settling_threshold = 20.0
 wobble_speed = 1.0
-backbone_color = Color(0.43137255, 0.72156864, 1, 1)
+backbone_color = Color(0.6666667, 0.8745098, 1, 1)
 backbone_line_width = 16.0
 backbone_offset_distance = 24.0
 bond_mark_black_color = Color(0, 0, 0, 0.7176471)
@@ -31,7 +35,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0.15377063, 0.22897473, 0.44707716, 1)
+color = Color(0.29903293, 0.40603662, 0.4383842, 1)
 
 [node name="RailPath" type="Path2D" parent="." unique_id=1800472999]
 

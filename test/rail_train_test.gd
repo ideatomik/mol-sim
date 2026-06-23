@@ -53,6 +53,11 @@ var track_length: float = 0.0
 @export var pulse_nucleotide_count: int = 6
 @export var fade_duration: float = 0.6
 @export var settling_duration: float = 0.5
+## Threshold in pixels within which all nucleotide slots must be to
+## new_bottom_template_y before FINISHING_LAST_PULSE transitions to
+## SETTLING. Increase if larger new_bottom_template_offset values cause
+## the simulation to stall at the end.
+@export var settling_threshold: float = 2.0
 
 @export_group("Wobble")
 ## Maximum pixel offset of the per-slot sine wobble (up and down).
@@ -277,7 +282,7 @@ func _process(delta):
 			var all_settled = baseline_switched
 			if all_settled:
 				for i in range(template_strand_bottom.size()):
-					if abs(template_strand_bottom[i].position.y - new_bottom_template_y) > 2.0:
+					if abs(template_strand_bottom[i].position.y - new_bottom_template_y) > settling_threshold:
 						all_settled = false
 						break
 			if all_settled:
