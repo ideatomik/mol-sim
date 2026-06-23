@@ -1,14 +1,16 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v57
-# New strand synthesis: the magenta trigger now also spawns a complement
-# nitrogen base (full NewNitrogenBaseScene instance) at the template
-# nucleotide's x position offset downward by dna_ribbons_gap. Each
-# spawned complement tracks its template's x every frame, riding the
-# same trombone motion. Complement base type is provided by
-# DnaSequenceResource.get_complement(). Magenta on the template is
-# kept as a visual debug marker.
+# RAIL/TRAIN TEST v58
+# Two changes over v57:
+# 1. Magenta debug color removed from template nucleotides on synthesis
+#    completion -- the complement base spawn is now the only visual signal.
+# 2. New strand backbone: a Line2D connecting all spawned complement bases
+#    in left-to-right order, with the same bond mark diamond system as the
+#    template backbone. Because the new strand is antiparallel, iterating
+#    left-to-right makes segment vectors point rightward, so the asymmetric
+#    diamond indicators naturally point right (→) -- correct for a 5'→3'
+#    strand running right-to-left in biological terms.
 # ==========================================
 
 const NewNitrogenBaseScene := preload("res://test/new_nitrogen_base.tscn")
@@ -145,6 +147,14 @@ var settling_loop_depth_start: float = 0.0
 var settle_blend: float = 0.0
 
 var bond_marks: Array[Node2D] = []
+## Bond marks for the new synthesized strand backbone -- separate array
+## so template and new strand marks are managed independently.
+var new_strand_bond_marks: Array[Node2D] = []
+## Created in _ready() -- not a scene node so it doesn't need an @onready.
+var new_strand_backbone_line: Line2D
+## Per-slot backbone offset delta for the new strand, lerped each frame
+## same as nucleotide_backbone_delta for the template strand.
+var new_strand_backbone_delta: Array[float] = []
 
 ## Single source of truth for the template strand's base sequence.
 ## Populated with a random sequence in _ready(); can be overridden
@@ -199,6 +209,16 @@ func _ready():
 	backbone_line.joint_mode = Line2D.LINE_JOINT_ROUND
 	backbone_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
 	backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
+
+	# New strand backbone -- created in code, same style as template backbone.
+	new_strand_backbone_line = Line2D.new()
+	new_strand_backbone_line.default_color = backbone_color
+	new_strand_backbone_line.width = backbone_line_width
+	new_strand_backbone_line.z_index = -1
+	new_strand_backbone_line.joint_mode = Line2D.LINE_JOINT_ROUND
+	new_strand_backbone_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	new_strand_backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
+	add_child(new_strand_backbone_line)
 
 	print("=== RUN START === baseline_switched:%s pulse_nucleotide_count:%d" % [baseline_switched, pulse_nucleotide_count])
 
@@ -264,7 +284,6 @@ func _process(delta):
 					and nucleotide_entered_push_direction[j] \
 					and nucleotide_synthesis_state[j] == SynthesisCrossState.NONE:
 						nucleotide_synthesis_state[j] = SynthesisCrossState.COMPLETED
-						nucleotide_bases[j].set_body_color(nucleotide_color_sequence_complete)
 						synthesized_bases[j] = _spawn_complement_base(j)
 						print("[t=%s] nucleotide_slot[%d] COMPLETED via end-of-run sweep (was mid-push at DONE)" % [
 							Time.get_ticks_msec(), j
@@ -341,9 +360,8 @@ func _process(delta):
 					])
 					if nucleotide_entered_push_direction[i] and nucleotide_synthesis_state[i] == SynthesisCrossState.NONE:
 						nucleotide_synthesis_state[i] = SynthesisCrossState.COMPLETED
-						nucleotide_bases[i].set_body_color(nucleotide_color_sequence_complete)
 						synthesized_bases[i] = _spawn_complement_base(i)
-						print("[t=%s] nucleotide_slot[%d] COMPLETED on pass #%d PUSH (magenta)" % [
+						print("[t=%s] nucleotide_slot[%d] COMPLETED on pass #%d PUSH" % [
 							Time.get_ticks_msec(), i, nucleotide_crossing_count[i]
 						])
 
@@ -396,23 +414,43 @@ func _process(delta):
 	backbone_line.width = backbone_line_width
 
 	# Track synthesized complement bases: mirror the template nucleotide's
-	# x position every frame so they ride the trombone motion together.
-	# y is fixed at new_bottom_template_y + dna_ribbons_gap.
+	# x position and wobble every frame. y is fixed at
+	# new_bottom_template_y + dna_ribbons_gap, plus the template's wobble.
+	# Backbone points include a lerped offset (below the base center)
+	# matching the template backbone pattern.
+	var new_strand_points = PackedVector2Array()
 	for i in range(synthesized_bases.size()):
 		if synthesized_bases[i] != null:
-			synthesized_bases[i].position.x = template_strand_bottom[i].position.x
+			var template_slot = template_strand_bottom[i]
+			# wobble_y is the local y offset already applied to the template base.
+			var wobble_y = nucleotide_bases[i].position.y
+			# World position: template x, fixed strand y + gap + wobble.
+			var world_x = template_slot.position.x
+			var world_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
+			synthesized_bases[i].position = Vector2(world_x, world_y)
+			# Backbone offset below the base center.
+			new_strand_backbone_delta[i] = lerp(
+				new_strand_backbone_delta[i],
+				backbone_offset_distance,
+				clamp(backbone_offset_smoothing_speed * delta, 0.0, 1.0)
+			)
+			new_strand_points.append(Vector2(world_x, world_y + new_strand_backbone_delta[i]))
+	new_strand_backbone_line.points = new_strand_points
+	new_strand_backbone_line.width = backbone_line_width
+	_update_bond_marks_new_strand(new_strand_points)
 
 	_update_bond_marks(backbone_points)
 
 func _spawn_complement_base(template_index: int) -> Node2D:
 	# Instantiate a full NewNitrogenBaseScene so the complement base
 	# gets the correct base type, color, and label automatically.
+	# Position is set here for the first frame only; the tracking loop
+	# in _process() owns position every subsequent frame.
 	var base = NewNitrogenBaseScene.instantiate()
 	base.set_base_type(dna_sequence.get_complement(template_index))
-	# Position: same x as the template slot, offset downward by dna_ribbons_gap.
 	base.position = Vector2(
 		template_strand_bottom[template_index].position.x,
-		new_bottom_template_y + dna_ribbons_gap
+		0.0  # tracking loop sets y every frame relative to new_bottom_template_y + dna_ribbons_gap
 	)
 	base.z_index = 2
 	add_child(base)
@@ -438,6 +476,65 @@ func _update_bond_marks(points: PackedVector2Array):
 			mark.visible = true
 		else:
 			mark.visible = false
+
+func _update_bond_marks_new_strand(points: PackedVector2Array):
+	# Identical logic to _update_bond_marks but uses new_strand_bond_marks
+	# and _create_bond_mark_sprite_reversed() so diamonds point right (→)
+	# for the antiparallel new strand.
+	var needed = max(0, points.size() - 1)
+	while new_strand_bond_marks.size() < needed:
+		new_strand_bond_marks.append(_create_bond_mark_sprite_reversed())
+	while new_strand_bond_marks.size() > needed:
+		var extra = new_strand_bond_marks.pop_back()
+		extra.queue_free()
+
+	for i in range(needed):
+		var a = points[i]
+		var b = points[i + 1]
+		var mid = (a + b) / 2.0
+		var segment = b - a
+		var mark = new_strand_bond_marks[i]
+		mark.position = mid
+		if segment.length() > 0.0:
+			mark.rotation = segment.angle()
+			mark.visible = true
+		else:
+			mark.visible = false
+
+func _create_bond_mark_sprite_reversed() -> Node2D:
+	# Mirror of _create_bond_mark_sprite(): the magenta inset is on the
+	# RIGHT side instead of the left, so the ">" shape becomes "<" in
+	# local space -- but since these marks are rotated to follow rightward
+	# segments, they render as ">" on screen, correct for the antiparallel
+	# new strand pointing right (→).
+	var holder = Node2D.new()
+	var h = backbone_line_width / 2.0
+	var w = bond_mark_width
+
+	var black_diamond = Polygon2D.new()
+	black_diamond.polygon = PackedVector2Array([
+		Vector2(w / 2.0, 0),
+		Vector2(0, -h),
+		Vector2(-w / 2.0, 0),
+		Vector2(0, h),
+	])
+	black_diamond.color = bond_mark_black_color
+	holder.add_child(black_diamond)
+
+	var back_inset = bond_mark_back_inset
+	var magenta_diamond = Polygon2D.new()
+	magenta_diamond.polygon = PackedVector2Array([
+		Vector2(w / 2.0 - back_inset, 0),
+		Vector2(0, -h),
+		Vector2(-w / 2.0, 0),
+		Vector2(0, h),
+	])
+	magenta_diamond.color = backbone_color
+	holder.add_child(magenta_diamond)
+
+	holder.z_index = 1
+	add_child(holder)
+	return holder
 
 func _create_bond_mark_sprite() -> Node2D:
 	var holder = Node2D.new()
@@ -620,3 +717,4 @@ func _spawn_nucleotide_slots():
 		nucleotide_synthesis_state.append(SynthesisCrossState.NONE)
 		nucleotide_backbone_delta.append(backbone_offset_distance)
 		synthesized_bases.append(null)
+		new_strand_backbone_delta.append(backbone_offset_distance)
