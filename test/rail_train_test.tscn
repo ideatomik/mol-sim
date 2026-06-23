@@ -11,6 +11,8 @@ wobble_speed = 1.0
 backbone_color = Color(0.43137255, 0.72156864, 1, 1)
 backbone_line_width = 16.0
 backbone_offset_distance = 24.0
+bond_mark_black_color = Color(0, 0, 0, 0.7176471)
+hydrogen_bond_spacing = 10.0
 synthesis_circle_color = Color(1, 0, 0.101960786, 1)
 synthesis_circle_radius = 20.0
 synthesis_inside_threshold = 20.0
@@ -57,3 +59,5 @@ default_color = Color(0, 0, 0, 1)
 [node name="NewSynthesizedStrandPosition" type="Line2D" parent="." unique_id=1694821904]
 width = 3.0
 default_color = Color(0.015686275, 1, 0, 0)
+
+[node name="HydrogenBondsContainer" type="Node2D" parent="." unique_id=2001417321]

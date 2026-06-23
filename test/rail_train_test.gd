@@ -1,16 +1,16 @@
 extends Node2D
 
 # ==========================================
-# RAIL/TRAIN TEST v58
-# Two changes over v57:
-# 1. Magenta debug color removed from template nucleotides on synthesis
-#    completion -- the complement base spawn is now the only visual signal.
-# 2. New strand backbone: a Line2D connecting all spawned complement bases
-#    in left-to-right order, with the same bond mark diamond system as the
-#    template backbone. Because the new strand is antiparallel, iterating
-#    left-to-right makes segment vectors point rightward, so the asymmetric
-#    diamond indicators naturally point right (→) -- correct for a 5'→3'
-#    strand running right-to-left in biological terms.
+# RAIL/TRAIN TEST v59
+# Hydrogen bonds between template and new strand bases.
+# A-T pairs: 2 lines. C-G pairs: 3 lines.
+# Each bond group is a Node2D container child of HydrogenBondsContainer
+# (a dedicated scene node), holding the individual Line2D segments in
+# local space (y: 0 to dna_ribbons_gap). The container's world position
+# is updated every frame to follow the template slot x and wobble y,
+# so the bonds track both strands without recomputing each line.
+# Spawned progressively on synthesis completion, same trigger as the
+# complement base. Color and thickness are @export vars.
 # ==========================================
 
 const NewNitrogenBaseScene := preload("res://test/new_nitrogen_base.tscn")
@@ -23,6 +23,7 @@ const NewNitrogenBaseScene := preload("res://test/new_nitrogen_base.tscn")
 @onready var template_strand_new_track: Line2D = $TemplateStrandNewTrack
 @onready var new_synthesized_strand_position: Line2D = $NewSynthesizedStrandPosition
 @onready var backbone_line: Line2D = $BackboneLine
+@onready var hydrogen_bonds_container: Node2D = $HydrogenBondsContainer
 
 @export_group("Track Layout")
 @export var nucleotide_slot_spacing: float = 60.0
@@ -81,6 +82,16 @@ var track_length: float = 0.0
 @export var bond_mark_width: float = 14.0
 @export var bond_mark_black_color: Color = Color(0.0, 0.0, 0.0, 1.0)
 @export var bond_mark_back_inset: float = 6.3
+
+@export_group("Hydrogen Bonds")
+## Color of the two hydrogen bonds in A-T pairs.
+@export var at_bond_color: Color = Color(1.0, 0.85, 0.3, 1.0)
+## Color of the three hydrogen bonds in C-G pairs.
+@export var cg_bond_color: Color = Color(0.3, 0.85, 1.0, 1.0)
+## Width of each individual hydrogen bond line in pixels.
+@export var hydrogen_bond_width: float = 1.5
+## Horizontal spacing between parallel bond lines in pixels.
+@export var hydrogen_bond_spacing: float = 4.0
 
 @export_group("Synthesis Circle")
 @export var synthesis_circle_color: Color = Color(1.0, 0.85, 0.1)
@@ -162,6 +173,10 @@ var new_strand_backbone_delta: Array[float] = []
 var dna_sequence := DnaSequenceResource.new()
 
 var synthesized_bases: Array = []
+## Parallel to template_strand_bottom: null until synthesis completes,
+## then holds the Node2D container (child of HydrogenBondsContainer)
+## with the individual Line2D bond segments inside.
+var hydrogen_bonds: Array = []
 
 func _ready():
 	track_length = (num_nucleotide_slots - 1) * nucleotide_slot_spacing + 2.0 * gap_width
@@ -285,6 +300,7 @@ func _process(delta):
 					and nucleotide_synthesis_state[j] == SynthesisCrossState.NONE:
 						nucleotide_synthesis_state[j] = SynthesisCrossState.COMPLETED
 						synthesized_bases[j] = _spawn_complement_base(j)
+						hydrogen_bonds[j] = _spawn_hydrogen_bonds(j)
 						print("[t=%s] nucleotide_slot[%d] COMPLETED via end-of-run sweep (was mid-push at DONE)" % [
 							Time.get_ticks_msec(), j
 						])
@@ -361,6 +377,7 @@ func _process(delta):
 					if nucleotide_entered_push_direction[i] and nucleotide_synthesis_state[i] == SynthesisCrossState.NONE:
 						nucleotide_synthesis_state[i] = SynthesisCrossState.COMPLETED
 						synthesized_bases[i] = _spawn_complement_base(i)
+						hydrogen_bonds[i] = _spawn_hydrogen_bonds(i)
 						print("[t=%s] nucleotide_slot[%d] COMPLETED on pass #%d PUSH" % [
 							Time.get_ticks_msec(), i, nucleotide_crossing_count[i]
 						])
@@ -428,6 +445,11 @@ func _process(delta):
 			var world_x = template_slot.position.x
 			var world_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
 			synthesized_bases[i].position = Vector2(world_x, world_y)
+			# Hydrogen bond container follows the same x and wobble y,
+			# anchored at the template strand y so bonds span downward
+			# to the complement base in local space.
+			if hydrogen_bonds[i] != null:
+				hydrogen_bonds[i].position = Vector2(world_x, new_bottom_template_y + wobble_y)
 			# Backbone offset below the base center.
 			new_strand_backbone_delta[i] = lerp(
 				new_strand_backbone_delta[i],
@@ -440,6 +462,37 @@ func _process(delta):
 	_update_bond_marks_new_strand(new_strand_points)
 
 	_update_bond_marks(backbone_points)
+
+func _spawn_hydrogen_bonds(template_index: int) -> Node2D:
+	# Determine bond count and color from the template base type.
+	# A and T form 2 hydrogen bonds; C and G form 3.
+	var base_type = dna_sequence.sequence[template_index]
+	var bond_count = 3 if (base_type == "C" or base_type == "G") else 2
+	var bond_color = cg_bond_color if (base_type == "C" or base_type == "G") else at_bond_color
+
+	# Container node: position is updated every frame in _process() to
+	# follow the template slot x and wobble y. The individual Line2D
+	# children are static in local space -- they span from y=0 (template
+	# strand) to y=dna_ribbons_gap (complement strand).
+	var container = Node2D.new()
+
+	# Space the lines evenly, centered on x=0 in local space.
+	var total_width = (bond_count - 1) * hydrogen_bond_spacing
+	var start_x = -total_width / 2.0
+
+	for b in range(bond_count):
+		var line = Line2D.new()
+		var lx = start_x + b * hydrogen_bond_spacing
+		line.add_point(Vector2(lx, 0.0))
+		line.add_point(Vector2(lx, dna_ribbons_gap))
+		line.default_color = bond_color
+		line.width = hydrogen_bond_width
+		line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+		line.end_cap_mode = Line2D.LINE_CAP_ROUND
+		container.add_child(line)
+
+	hydrogen_bonds_container.add_child(container)
+	return container
 
 func _spawn_complement_base(template_index: int) -> Node2D:
 	# Instantiate a full NewNitrogenBaseScene so the complement base
@@ -718,3 +771,4 @@ func _spawn_nucleotide_slots():
 		nucleotide_backbone_delta.append(backbone_offset_distance)
 		synthesized_bases.append(null)
 		new_strand_backbone_delta.append(backbone_offset_distance)
+		hydrogen_bonds.append(null)
