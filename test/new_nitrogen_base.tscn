@@ -1,8 +1,0 @@
-[gd_scene format=3 uid="uid://yng5ddx3wt41"]
-
-[ext_resource type="Script" uid="uid://diuttskd3h5gq" path="res://test/new_nitrogen_base.gd" id="1_qte5s"]
-
-[node name="NewNitrogenBase" type="RigidBody2D" unique_id=153262830]
-z_index = 2
-script = ExtResource("1_qte5s")
-body_radius = 15.0

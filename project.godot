@@ -15,21 +15,14 @@ run/main_scene="uid://b8ushv6xjen4s"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 config/icon="res://icon.svg"
 
-[autoload]
-
-SimulationManager="*uid://btatkcr74yse1"
-HighlightManager="*uid://bewcmlio7vky6"
-ThemeManager="*uid://cvtxqqt1ivx2b"
-
 [debug]
 
 gdscript/warnings/enable=false
 
 [display]
 
-window/size/viewport_width=1920
-window/size/viewport_height=1080
-window/stretch/mode="canvas_items"
+window/size/viewport_width=1280
+window/size/viewport_height=720
 window/stretch/aspect="expand"
 
 [editor]
@@ -56,3 +49,4 @@ viewport/hdr_2d=true
 anti_aliasing/quality/msaa_2d=3
 anti_aliasing/quality/smaa_edge_detection_threshold=0.02
 anti_aliasing/quality/use_debanding=true
+anti_aliasing/quality/screen_space_aa=1

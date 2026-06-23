@@ -1,6 +1,0 @@
-[gd_scene format=3 uid="uid://byoy0hl4v8trp"]
-
-[ext_resource type="Script" uid="uid://6jaf3ydh54ul" path="res://scripts/hydrogen_bonds.gd" id="1_s5lrl"]
-
-[node name="HydrogenBonds" type="Node2D" unique_id=117653020]
-script = ExtResource("1_s5lrl")
