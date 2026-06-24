@@ -78,7 +78,8 @@ func get_length() -> int:
 func is_empty() -> bool:
 	return sequence.is_empty()
 
-func to_string() -> String:
+# FIXED: Use _to_string() to override Godot's built-in string representation
+func _to_string() -> String:
 	return "".join(sequence)
 
 # ---------- PRESET METHODS ----------
@@ -87,7 +88,7 @@ func load_preset(preset_name: String) -> String:
 	"""Load a preset by name. Returns the preset string (or empty if not found)."""
 	if preset_name == "Aleatória":
 		randomize_sequence()
-		return to_string()
+		return _to_string()
 
 	var preset_string = PRESETS.get(preset_name, "")
 	if preset_string.is_empty():
@@ -95,7 +96,7 @@ func load_preset(preset_name: String) -> String:
 
 	# Load the preset into the sequence
 	set_from_string(preset_string)
-	return to_string()
+	return _to_string()
 
 func get_preset_names() -> Array[String]:
 	"""Return a list of all preset names (for the UI dropdown)."""
@@ -109,7 +110,7 @@ func get_preset_string(preset_name: String) -> String:
 	if preset_name == "Aleatória":
 		var temp_seq = DnaSequenceResource.new()
 		temp_seq.randomize_sequence()
-		return temp_seq.to_string()
+		return temp_seq._to_string()
 	return PRESETS.get(preset_name, "")
 
 # ---------- VALIDATION ----------

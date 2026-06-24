@@ -777,7 +777,7 @@ func get_synthesized_count() -> int:
 
 func get_sequence_rich_text() -> String:
 	var text = "5' "
-	var seq_string = dna_sequence.to_string()
+	var seq_string = dna_sequence._to_string()  # Changed from to_string()
 	if seq_string.is_empty():
 		return "5' [empty] 3'"
 
