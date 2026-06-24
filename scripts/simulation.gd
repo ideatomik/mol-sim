@@ -884,8 +884,8 @@ func scrub_to(progress: float):
 
 	for i in range(leading_synth_count):
 		if leading_synthesized_bases[i] == null:
-			var bottom_base = dna_sequence.get_base(i)
-			leading_synthesized_bases[i] = _spawn_leading_base(i, bottom_base)
+			var leading_base = dna_sequence.get_complement(i)
+			leading_synthesized_bases[i] = _spawn_leading_base(i, leading_base)
 			leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
 	# Force immediate rail rebuild
@@ -992,7 +992,7 @@ func _spawn_nucleotide_slots():
 
 		rail_path.add_child(nucleotide_slot)
 
-		var base_char = dna_sequence.get_base(i)
+		var base_char = dna_sequence.get_complement(i)
 		nitrogen_base.set_base_type(base_char)
 		nitrogen_base.set_colors(
 			_get_base_fill(base_char),
@@ -1034,25 +1034,25 @@ func _spawn_top_strand():
 		base.position = Vector2(x, straight_y - dna_ribbons_gap)
 		base.z_index = 2
 		add_child(base)
-		var complement = dna_sequence.get_complement(i)
-		base.set_base_type(complement)
-		base.set_colors(_get_base_fill(complement), %ThemeManager.base_label_color)
+		var base_char = dna_sequence.get_base(i)
+		base.set_base_type(base_char)
+		base.set_colors(_get_base_fill(base_char), %ThemeManager.base_label_color)
 		top_strand_bases.append(base)
 		top_strand_backbone_delta.append(%ThemeManager.backbone_offset_distance)
 		template_hydrogen_bonds.append(_spawn_template_hydrogen_bonds(i))
 
 func _spawn_complement_base(template_index: int) -> Node2D:
 	var base = NewNitrogenBaseScene.instantiate()
-	var complement = dna_sequence.get_complement(template_index)
+	var base_type = dna_sequence.get_complement(template_index)
 	base.position = Vector2(
 		template_strand_bottom[template_index].position.x,
 		0.0
 	)
 	base.z_index = 2
 	add_child(base)
-	base.set_base_type(complement)
+	base.set_base_type(base_type)
 	base.set_colors(
-		_get_base_fill(complement),
+		_get_base_fill(base_type),
 		%ThemeManager.base_label_color
 	)
 	return base
@@ -1096,7 +1096,7 @@ func _spawn_hydrogen_bonds(template_index: int) -> Node2D:
 
 func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
 	"""Spawn hydrogen bonds between top template and leading strand."""
-	var template_base = dna_sequence.get_complement(index)  # top template base
+	var template_base = dna_sequence.get_base(index)  # top template base
 	# Determine bond count based on the template base (which is the top strand)
 	var bond_count = 3 if (template_base == "C" or template_base == "G") else 2
 	var bond_color = %ThemeManager.cg_bond_color if (template_base == "C" or template_base == "G") else %ThemeManager.at_bond_color
@@ -1119,7 +1119,7 @@ func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
 	return container
 
 func _spawn_template_hydrogen_bonds(index: int) -> Node2D:
-	var base_type = dna_sequence.get_base(index)
+	var base_type = dna_sequence.get_complement(index)
 	var bond_count = 3 if (base_type == "C" or base_type == "G") else 2
 	var bond_color = %ThemeManager.cg_bond_color if (base_type == "C" or base_type == "G") else %ThemeManager.at_bond_color
 	var container = Node2D.new()
