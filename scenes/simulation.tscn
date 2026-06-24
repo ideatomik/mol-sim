@@ -41,6 +41,7 @@ color = Color(0.15294118, 0.22745098, 0.44705883, 1)
 curve = SubResource("Curve2D_mwrr7")
 
 [node name="TemplateStrandOriginalTrack" type="Line2D" parent="." unique_id=498789482]
+points = PackedVector2Array(656, -10)
 width = 2.0
 default_color = Color(0, 1, 0, 0)
 

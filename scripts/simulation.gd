@@ -140,6 +140,8 @@ var marker_new_5p: Node2D = null
 var marker_new_3p: Node2D = null
 var marker_top_5p: Node2D = null
 var marker_top_3p: Node2D = null
+var marker_leading_5p: Node2D = null
+var marker_leading_3p: Node2D = null
 
 # ---------- SINGLE SOURCE OF TRUTH ----------
 var dna_sequence := DnaSequenceResource.new()
@@ -310,6 +312,10 @@ func teardown_simulation():
 		nodes_to_free.append(marker_top_3p)
 	if top_polymerase:
 		nodes_to_free.append(top_polymerase)
+	if marker_leading_5p:
+		nodes_to_free.append(marker_leading_5p)
+	if marker_leading_3p:
+		nodes_to_free.append(marker_leading_3p)
 
 	for node in nodes_to_free:
 		if is_instance_valid(node) and node != null:
@@ -340,6 +346,8 @@ func teardown_simulation():
 	bond_marks.clear()
 	new_strand_bond_marks.clear()
 	leading_strand_bond_marks.clear()
+	marker_leading_5p = null
+	marker_leading_3p = null
 
 	# Reset line points so they don't linger
 	if backbone_line:
@@ -607,6 +615,7 @@ func _process(delta):
 		top_strand_points.append(Vector2(world_x, world_y - top_strand_backbone_delta[i]))
 		if template_hydrogen_bonds[i] != null:
 			template_hydrogen_bonds[i].position = Vector2(world_x, straight_y + wobble_y)
+			template_hydrogen_bonds[i].visible = (nucleotide_original_x[i] > helicase_x)	# ---- NEW: Hide bonds that have been passed by the helicase ----
 	top_strand_backbone_line.points = top_strand_points
 	top_strand_backbone_line.width = %ThemeManager.backbone_line_width
 	_update_bond_marks_top_strand(top_strand_points)
@@ -676,6 +685,55 @@ func _process(delta):
 			nucleotide_original_x[last] + %ThemeManager.marker_offset,
 			straight_y - dna_ribbons_gap - top_strand_backbone_delta[last] + wobble_last
 		)
+		# ---- Leading strand markers ----
+	# 5' marker: appears when the first leading base is synthesized
+	if marker_leading_5p == null and leading_synthesized_bases[0] != null:
+		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
+		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
+		marker_leading_5p = _spawn_marker("5'", Vector2(
+			nucleotide_original_x[0] - %ThemeManager.marker_offset,
+			leading_y - %ThemeManager.backbone_offset_distance
+		))
+	
+	# Update 5' marker position (follows wobble)
+	if marker_leading_5p:
+		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
+		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
+		marker_leading_5p.position = Vector2(
+			nucleotide_original_x[0] - %ThemeManager.marker_offset,
+			leading_y - %ThemeManager.backbone_offset_distance
+		)
+	
+	# 3' marker: appears at the rightmost synthesized base
+	# For the leading strand, the 3' end is at the growing tip (rightmost synthesized base)
+	# We'll show it when at least one base is synthesized
+	if marker_leading_3p == null and leading_synthesized_bases[0] != null:
+		# Find the rightmost synthesized base
+		var last_synth_index = -1
+		for i in range(leading_synthesized_bases.size()):
+			if leading_synthesized_bases[i] != null:
+				last_synth_index = i
+		if last_synth_index >= 0:
+			var wobble_last = sin(wobble_t * wobble_speed * TAU + last_synth_index * wobble_phase_offset) * wobble_amplitude
+			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
+			marker_leading_3p = _spawn_marker("3'", Vector2(
+				nucleotide_original_x[last_synth_index] + %ThemeManager.marker_offset,
+				leading_y - %ThemeManager.backbone_offset_distance
+			))
+	
+	# Update 3' marker position (follows the rightmost synthesized base)
+	if marker_leading_3p:
+		var last_synth_index = -1
+		for i in range(leading_synthesized_bases.size()):
+			if leading_synthesized_bases[i] != null:
+				last_synth_index = i
+		if last_synth_index >= 0:
+			var wobble_last = sin(wobble_t * wobble_speed * TAU + last_synth_index * wobble_phase_offset) * wobble_amplitude
+			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
+			marker_leading_3p.position = Vector2(
+				nucleotide_original_x[last_synth_index] + %ThemeManager.marker_offset,
+				leading_y - %ThemeManager.backbone_offset_distance
+			)
 
 	background_rect.color = %ThemeManager.background_color
 
@@ -761,6 +819,15 @@ func scrub_to(progress: float):
 			marker_new_3p.queue_free()
 			marker_new_3p = null
 
+	# ---- Clear leading markers when scrubbing back ----
+	if target_factory_x < nucleotide_original_x[0]:
+		if marker_leading_5p and is_instance_valid(marker_leading_5p):
+			marker_leading_5p.queue_free()
+			marker_leading_5p = null
+		if marker_leading_3p and is_instance_valid(marker_leading_3p):
+			marker_leading_3p.queue_free()
+			marker_leading_3p = null
+
 	var lagging_synth_count = 0
 	for i in range(num_nucleotide_slots):
 		if nucleotide_original_x[i] <= target_factory_x:
@@ -795,6 +862,11 @@ func scrub_to(progress: float):
 	leading_hydrogen_bonds.clear()
 	leading_synthesized_bases.resize(num_nucleotide_slots)
 	leading_hydrogen_bonds.resize(num_nucleotide_slots)
+
+	# ---- Update template hydrogen bond visibility based on helicase position ----
+	for i in range(num_nucleotide_slots):
+		if template_hydrogen_bonds[i] != null:
+			template_hydrogen_bonds[i].visible = (nucleotide_original_x[i] > helicase_x)
 
 	# ---- Clear leading bond marks ----
 	for mark in leading_strand_bond_marks:
@@ -949,6 +1021,8 @@ func _spawn_leading_arrays():
 	leading_synthesized_bases.clear()
 	leading_hydrogen_bonds.clear()
 	leading_strand_bond_marks.clear()
+	marker_leading_5p = null
+	marker_leading_3p = null
 	for i in range(num_nucleotide_slots):
 		leading_synthesized_bases.append(null)
 		leading_hydrogen_bonds.append(null)
