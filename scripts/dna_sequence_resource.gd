@@ -3,65 +3,132 @@ extends Resource
 
 # ==========================================
 # DNA SEQUENCE RESOURCE
-# Single source of truth for the template strand's base sequence.
-# Decoupled from any simulation script so the UI, template strand,
-# new strand, and any future system can all read from the same object.
-#
-# Usage:
-#   var dna_sequence := DnaSequenceResource.new()
-#   dna_sequence.randomize_sequence(num_nucleotide_slots)
-#   var base = dna_sequence.sequence[i]          # "A", "T", "C", or "G"
-#   var comp = dna_sequence.get_complement(i)    # paired base on new strand
-#   dna_sequence.set_from_string("ATCGATCG")    # UI/manual assignment
+# Single source of truth for all sequence data.
+# Owns presets, random generation, and complement logic.
 # ==========================================
 
-const VALID_BASES: Array[String] = ["A", "T", "C", "G"]
+# ---------- CONSTANTS ----------
+const VALID_BASES: Array[String] = ["A", "T", "C", "G", "U"]
+## Bases used for random DNA generation -- U excluded until RNA/transcription is implemented.
+const DNA_BASES: Array[String] = ["A", "T", "C", "G"]
 
 const COMPLEMENTS: Dictionary = {
 	"A": "T",
 	"T": "A",
 	"C": "G",
-	"G": "C"
+	"G": "C",
+	"U": "A"   # RNA complement
 }
 
-## The template strand sequence. Each entry is one of "A", "T", "C", "G".
-## Index 0 = leftmost nucleotide slot (slot 0 in rail_train_test.gd).
+const MIN_LENGTH: int = 18
+const MAX_LENGTH: int = 57
+
+# ---------- PRESETS ----------
+const PRESETS: Dictionary = {
+	"Aleatória": "",  # Special case: generates random sequence
+	"Telômeros": "TTAGGGTTAGGGTTAGGGTTAGGG",
+	"Promotores": "TATAAAATATAAAATATAAA",
+	"Rica em C-G": "GCGCCGCCGCCGCCGCCGCCGCCGC",
+	"Rica em A-T": "ATATATATATATATATATATATATAT"
+}
+
+# ---------- DATA ----------
 @export var sequence: Array[String] = []
 
-## Fill the sequence with random bases of the given length.
-## Called during simulation setup when no explicit sequence is provided.
-func randomize_sequence(length: int) -> void:
+# ==========================================
+# PUBLIC METHODS
+# ==========================================
+
+func randomize_sequence(length: int = -1) -> void:
+	"""Generate a random sequence. If length is -1, pick random length between MIN and MAX."""
+	if length < 0:
+		length = randi_range(MIN_LENGTH, MAX_LENGTH)
 	sequence.clear()
 	for i in range(length):
-		sequence.append(VALID_BASES[randi() % VALID_BASES.size()])
+		sequence.append(DNA_BASES[randi() % DNA_BASES.size()])
 
-## Return the Watson-Crick complement of the base at the given index.
-## Used by the new synthesized strand to determine its base type.
-func get_complement(index: int) -> String:
-	if index < 0 or index >= sequence.size():
-		push_warning("DnaSequenceResource.get_complement: index %d out of range (size=%d)" % [index, sequence.size()])
-		return ""
-	return COMPLEMENTS.get(sequence[index], "")
-
-## Parse a plain string into the sequence array, ignoring any character
-## that isn't a valid base. Case-insensitive. Extra characters are skipped
-## silently so a user can paste a sequence with spaces or numbers and it
-## still works. The resulting sequence is truncated or padded with random
-## bases to match target_length if provided (pass -1 to skip padding).
 func set_from_string(s: String, target_length: int = -1) -> void:
+	"""Parse a string into the sequence array, filtering invalid characters."""
 	sequence.clear()
 	for c in s.to_upper():
 		if c in VALID_BASES:
 			sequence.append(c)
 	if target_length > 0:
-		# Truncate if too long.
 		while sequence.size() > target_length:
 			sequence.pop_back()
-		# Pad with random bases if too short.
 		while sequence.size() < target_length:
-			sequence.append(VALID_BASES[randi() % VALID_BASES.size()])
+			sequence.append(DNA_BASES[randi() % DNA_BASES.size()])
 
-## Return the sequence as a plain string, e.g. "ATCGATCG".
-## Useful for displaying in a UI text field or saving to disk.
+func get_complement(index: int) -> String:
+	"""Return the Watson-Crick complement of the base at the given index."""
+	if index < 0 or index >= sequence.size():
+		push_warning("DnaSequenceResource.get_complement: index %d out of range (size=%d)" % [index, sequence.size()])
+		return ""
+	return COMPLEMENTS.get(sequence[index], "")
+
+func get_base(index: int) -> String:
+	"""Return the base at the given index, or empty string if out of range."""
+	if index >= 0 and index < sequence.size():
+		return sequence[index]
+	return ""
+
+func get_length() -> int:
+	return sequence.size()
+
+func is_empty() -> bool:
+	return sequence.is_empty()
+
 func to_string() -> String:
 	return "".join(sequence)
+
+# ---------- PRESET METHODS ----------
+
+func load_preset(preset_name: String) -> String:
+	"""Load a preset by name. Returns the preset string (or empty if not found)."""
+	if preset_name == "Aleatória":
+		randomize_sequence()
+		return to_string()
+
+	var preset_string = PRESETS.get(preset_name, "")
+	if preset_string.is_empty():
+		return ""
+
+	# Load the preset into the sequence
+	set_from_string(preset_string)
+	return to_string()
+
+func get_preset_names() -> Array[String]:
+	"""Return a list of all preset names (for the UI dropdown)."""
+	var names: Array[String] = []
+	for key in PRESETS.keys():
+		names.append(key)
+	return names
+
+func get_preset_string(preset_name: String) -> String:
+	"""Get the raw string for a preset (without loading it into the sequence)."""
+	if preset_name == "Aleatória":
+		var temp_seq = DnaSequenceResource.new()
+		temp_seq.randomize_sequence()
+		return temp_seq.to_string()
+	return PRESETS.get(preset_name, "")
+
+# ---------- VALIDATION ----------
+
+func is_valid_sequence(s: String) -> bool:
+	"""Check if a string is a valid sequence (length and characters)."""
+	var cleaned = s.to_upper().replace(" ", "")
+	var len = cleaned.length()
+	if len < MIN_LENGTH or len > MAX_LENGTH:
+		return false
+	for char in cleaned:
+		if char not in VALID_BASES:
+			return false
+	return true
+
+func clean_sequence(s: String) -> String:
+	"""Strip whitespace, convert to uppercase, and filter invalid characters."""
+	var result = ""
+	for c in s.to_upper():
+		if c in VALID_BASES:
+			result += c
+	return result

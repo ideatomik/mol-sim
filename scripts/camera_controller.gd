@@ -13,7 +13,9 @@ const STRAND_WIDTH_PERCENTAGE: float = 0.90
 var _last_viewport_size: Vector2 = Vector2.ZERO
 
 func _ready():
-	_frame_strand()
+	# Defer so simulation._ready() has time to call initialize_simulation()
+	# and compute track_length before we try to frame the strand.
+	_frame_strand.call_deferred()
 
 func _process(_delta):
 	var current_size = get_viewport_rect().size

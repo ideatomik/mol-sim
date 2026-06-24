@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="MolSim"
-run/main_scene="uid://b8ushv6xjen4s"
+run/main_scene="uid://c6lmtknskx8xm"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 config/icon="res://icon.svg"
 

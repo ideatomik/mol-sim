@@ -1,14 +1,14 @@
-[gd_scene format=3 uid="uid://b8ushv6xjen4s"]
+[gd_scene format=3 uid="uid://c6lmtknskx8xm"]
 
 [ext_resource type="Script" uid="uid://bvkapeyriw2xi" path="res://scripts/simulation.gd" id="1_5eski"]
 [ext_resource type="Script" uid="uid://bw6vnkf4in668" path="res://scripts/camera_controller.gd" id="2_ik8a0"]
 [ext_resource type="Script" uid="uid://cvtxqqt1ivx2b" path="res://scripts/theme_manager.gd" id="3_ik8a0"]
+[ext_resource type="PackedScene" uid="uid://7864n4b58mn6" path="res://scenes/PlayerUI.tscn" id="5_gimvv"]
+[ext_resource type="PackedScene" uid="uid://bkcyhxg58gv21" path="res://scenes/SequenceLoaderPopup.tscn" id="5_mwrr7"]
 
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_5eski")
-nucleotide_slot_spacing = 54.0
 num_nucleotide_slots = 36
-new_bottom_template_offset = 120.0
 dna_ribbons_gap = 60.0
 max_loop_depth = 230.0
 settling_threshold = 20.0
@@ -31,7 +31,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0.29903293, 0.40603662, 0.4383842, 1)
+color = Color(0.15294118, 0.22745098, 0.44705883, 1)
 
 [node name="RailPath" type="Path2D" parent="." unique_id=1800472999]
 
@@ -63,5 +63,16 @@ default_color = Color(0, 0, 0, 1)
 [node name="ThemeManager" type="Node" parent="." unique_id=264924326]
 unique_name_in_owner = true
 script = ExtResource("3_ik8a0")
-hydrogen_bond_width = 1.0
+base_color_a = Color(0.40392157, 0.18039216, 0.77254903, 1)
+base_color_t = Color(0.8117647, 0.003921569, 0.91764706, 1)
+base_color_c = Color(1, 0.45882353, 0.101960786, 1)
+base_color_g = Color(0.2, 0.6509804, 0.2, 1)
+hydrogen_bond_width = 2.0
 hydrogen_bond_spacing = 10.0
+
+[node name="UI" type="CanvasLayer" parent="." unique_id=2139151095]
+
+[node name="SequenceLoaderPopup" parent="UI" unique_id=1037424246 instance=ExtResource("5_mwrr7")]
+
+[node name="PlayerUI" parent="UI" unique_id=1005777864 node_paths=PackedStringArray("simulation") instance=ExtResource("5_gimvv")]
+simulation = NodePath("../..")
