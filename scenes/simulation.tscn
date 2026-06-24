@@ -6,6 +6,8 @@
 [ext_resource type="PackedScene" uid="uid://7864n4b58mn6" path="res://scenes/PlayerUI.tscn" id="5_gimvv"]
 [ext_resource type="PackedScene" uid="uid://bkcyhxg58gv21" path="res://scenes/SequenceLoaderPopup.tscn" id="5_mwrr7"]
 
+[sub_resource type="Curve2D" id="Curve2D_mwrr7"]
+
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_5eski")
 num_nucleotide_slots = 36
@@ -34,6 +36,9 @@ grow_vertical = 2
 color = Color(0.15294118, 0.22745098, 0.44705883, 1)
 
 [node name="RailPath" type="Path2D" parent="." unique_id=1800472999]
+
+[node name="TopRailPath" type="Path2D" parent="." unique_id=1372616083]
+curve = SubResource("Curve2D_mwrr7")
 
 [node name="TemplateStrandOriginalTrack" type="Line2D" parent="." unique_id=498789482]
 width = 2.0
