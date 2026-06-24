@@ -8,8 +8,8 @@ extends CanvasLayer
 @export var simulation: Node2D  # Drag the root Simulation node here
 
 # UI Node References
-@onready var sequence_label: RichTextLabel = $Panel/MarginContainer/VBoxContainer/SequenceLabel
-@onready var scrubber: HSlider = $Panel/MarginContainer/VBoxContainer/Scrubber
+@onready var sequence_label: RichTextLabel = $Panel/MarginContainer/VBoxContainer/VBoxContainer/SequenceLabel
+@onready var scrubber: HSlider = $Panel/MarginContainer/VBoxContainer/VBoxContainer/Scrubber
 @onready var transport_buttons: HBoxContainer = $Panel/MarginContainer/VBoxContainer/TransportButtons
 
 # Transport Buttons
@@ -198,6 +198,14 @@ func _on_sequence_loaded(new_sequence: String):
 func _update_ui():
 	if not simulation:
 		return
+
+	# NEW: Match scrubber width to label's content width
+	# Force label to recalculate its size
+	sequence_label.queue_redraw()
+	await get_tree().process_frame
+	# Set scrubber's minimum width to label's content width
+	var label_width = sequence_label.get_content_width()
+	scrubber.custom_minimum_size.x = max(label_width, 100)  # Minimum 100px for usability
 
 	# Update sequence label with rich text
 	sequence_label.bbcode_text = simulation.get_sequence_rich_text()

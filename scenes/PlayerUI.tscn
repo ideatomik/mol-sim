@@ -38,7 +38,12 @@ layout_mode = 2
 theme_override_constants/separation = 4
 alignment = 1
 
-[node name="SequenceLabel" type="RichTextLabel" parent="Panel/MarginContainer/VBoxContainer" unique_id=1224318101]
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer" unique_id=2137807815]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 3
+
+[node name="SequenceLabel" type="RichTextLabel" parent="Panel/MarginContainer/VBoxContainer/VBoxContainer" unique_id=1224318101]
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 theme_override_colors/default_color = Color(0, 0, 0, 1)
@@ -47,10 +52,11 @@ theme_override_font_sizes/normal_font_size = 18
 bbcode_enabled = true
 text = "GCTA"
 fit_content = true
+autowrap_mode = 0
 horizontal_alignment = 1
 text_direction = 1
 
-[node name="Scrubber" type="HSlider" parent="Panel/MarginContainer/VBoxContainer" unique_id=2076170533]
+[node name="Scrubber" type="HSlider" parent="Panel/MarginContainer/VBoxContainer/VBoxContainer" unique_id=2076170533]
 layout_mode = 2
 size_flags_horizontal = 3
 max_value = 1.0
