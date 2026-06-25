@@ -75,13 +75,13 @@ default_color = Color(0, 0, 0, 1)
 [node name="ThemeManager" type="Node" parent="." unique_id=264924326]
 unique_name_in_owner = true
 script = ExtResource("3_ik8a0")
-background_color = Color(0.09798656, 0.15335932, 0.3171949, 1)
-base_color_a = Color(0.40392157, 0.18039216, 0.77254903, 1)
-base_color_t = Color(0.8117647, 0.003921569, 0.91764706, 1)
-base_color_c = Color(1, 0.45882353, 0.101960786, 1)
-base_color_g = Color(0.2, 0.6509804, 0.2, 1)
-hydrogen_bond_width = 2.0
+background_color = Color(0.77803177, 0.830392, 0.95439404, 1)
+at_bond_color = Color(0, 0, 0, 1)
+cg_bond_color = Color(0, 0, 0, 1)
+hydrogen_bond_width = 3.0
 hydrogen_bond_spacing = 10.0
+helicase_half_width = 24.0
+helicase_height_margin = 10.0
 
 [node name="UI" type="CanvasLayer" parent="." unique_id=2139151095]
 

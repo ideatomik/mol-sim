@@ -82,7 +82,7 @@ var helicase_node: Node2D = null
 var helicase_x: float = 0.0
 var factory_x: float = 0.0
 
-enum Phase { SWEEPING, FINISHING_LAST_PULSE, SETTLING, DONE }
+enum Phase { INTRO, SWEEPING, FINISHING_LAST_PULSE, SETTLING, DONE }
 var phase: Phase = Phase.SWEEPING
 
 var pulse_time_budget: float = 0.0
@@ -199,7 +199,7 @@ func initialize_simulation(sequence: String):
 	loop_depth = max_loop_depth
 	pulse_offset = 0.0
 	pulse_state = PulseState.GROWING
-	phase = Phase.SWEEPING
+	phase = Phase.INTRO
 	baseline_switched = false
 	settle_blend = 0.0
 	settling_t = 0.0
@@ -218,6 +218,13 @@ func initialize_simulation(sequence: String):
 	_setup_synthesis_circle()
 	_setup_top_polymerase()
 	_setup_helicase()
+
+	# All enzymes start invisible; they fade in on first play.
+	synthesis_circle.modulate.a = 0.0
+	if top_polymerase:
+		top_polymerase.modulate.a = 0.0
+	if helicase_node:
+		helicase_node.modulate.a = 0.0
 
 	template_strand_original_track.visible = true
 	template_strand_new_track.points = PackedVector2Array([
@@ -393,6 +400,8 @@ func _process(delta):
 	# ---------- 1. STATE UPDATE (only if not manually overridden) ----------
 	if not manual_override:
 		match phase:
+			Phase.INTRO:
+				pass  # Handled by _run_intro tween; simulation doesn't advance.
 			Phase.SWEEPING:
 				helicase_x += sweep_speed * delta
 				factory_x = helicase_x - gap_width
@@ -658,11 +667,15 @@ func _process(delta):
 		top_strand_points.append(Vector2(world_x, slot_y + top_strand_backbone_delta[i] + wobble_y))
 
 		if template_hydrogen_bonds[i] != null:
-			var container_y = straight_y + wobble_y
+			# Container anchors at bottom template slot y; lines draw upward to top template slot.
+			var bottom_slot_y = template_strand_bottom[i].position.y
+			var bottom_wobble_y = nucleotide_bases[i].position.y
+			var container_y = bottom_slot_y + bottom_wobble_y
 			template_hydrogen_bonds[i].position = Vector2(world_x, container_y)
+			# Height is negative: top template slot is above bottom template slot.
 			var bond_height = (slot_y + wobble_y) - container_y
 			_update_hydrogen_bond_height(template_hydrogen_bonds[i], bond_height)
-			template_hydrogen_bonds[i].visible = on_bonded
+			template_hydrogen_bonds[i].visible = (world_x >= helicase_x)
 	top_strand_backbone_line.points = top_strand_points
 	top_strand_backbone_line.width = %ThemeManager.backbone_line_width
 	_update_bond_marks_top_strand(top_strand_points)
@@ -792,10 +805,49 @@ func toggle_play():
 	if not manual_override:
 		if phase == Phase.DONE:
 			scrub_to_nucleotide_index(0)
-		synthesis_circle.modulate.a = 1.0
-		if top_polymerase:
-			top_polymerase.modulate.a = 1.0
+			phase = Phase.INTRO
+		if phase == Phase.INTRO:
+			_run_intro()
+		else:
+			synthesis_circle.modulate.a = 1.0
+			if top_polymerase:
+				top_polymerase.modulate.a = 1.0
+			if helicase_node:
+				helicase_node.modulate.a = 1.0
 		synthesis_circle_faded = false
+
+func _run_intro():
+	# Position enzymes left of the strand, then fade in and slide to start position.
+	var intro_x = nucleotide_original_x[0] - gap_width * 0.5
+	var fade_time = 0.4
+	var slide_time = 0.5
+
+	synthesis_circle.position = Vector2(intro_x - gap_width, new_bottom_template_y)
+	if top_polymerase:
+		top_polymerase.position = Vector2(intro_x - gap_width, straight_y - dna_ribbons_gap - new_bottom_template_offset)
+	if helicase_node:
+		helicase_node.position = Vector2(intro_x, straight_y - dna_ribbons_gap / 2.0)
+
+	var tween = create_tween().set_parallel(true)
+	# Fade in
+	tween.tween_property(synthesis_circle, "modulate:a", 1.0, fade_time)
+	if top_polymerase:
+		tween.tween_property(top_polymerase, "modulate:a", 1.0, fade_time)
+	if helicase_node:
+		tween.tween_property(helicase_node, "modulate:a", 1.0, fade_time)
+	# Slide to starting position after fade
+	tween.tween_property(synthesis_circle, "position",
+		Vector2(factory_x, new_bottom_template_y), slide_time).set_delay(fade_time)
+	if top_polymerase:
+		tween.tween_property(top_polymerase, "position",
+			Vector2(factory_x, straight_y - dna_ribbons_gap - new_bottom_template_offset), slide_time).set_delay(fade_time)
+	if helicase_node:
+		tween.tween_property(helicase_node, "position",
+			Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0), slide_time).set_delay(fade_time)
+	# Start simulation after intro completes
+	tween.chain().tween_callback(func():
+		phase = Phase.SWEEPING
+	)
 
 func scrub_to(progress: float):
 	progress = clamp(progress, 0.0, 1.0)
@@ -914,7 +966,7 @@ func scrub_to(progress: float):
 	# ---- Update template hydrogen bond visibility based on helicase position ----
 	for i in range(num_nucleotide_slots):
 		if template_hydrogen_bonds[i] != null:
-			template_hydrogen_bonds[i].visible = (nucleotide_original_x[i] > helicase_x)
+			template_hydrogen_bonds[i].visible = (nucleotide_original_x[i] >= helicase_x)
 
 	# ---- Clear leading bond marks ----
 	for mark in leading_strand_bond_marks:
@@ -943,6 +995,12 @@ func scrub_to(progress: float):
 		template_strand_bottom[i].progress = track_length - nucleotide_original_x[i]
 	for i in range(top_strand_slots.size()):
 		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
+
+	synthesis_circle.modulate.a = 1.0
+	if top_polymerase:
+		top_polymerase.modulate.a = 1.0
+	if helicase_node:
+		helicase_node.modulate.a = 1.0
 
 	synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
 	if top_polymerase:
@@ -1219,12 +1277,20 @@ func _get_base_fill(base_type: String) -> Color:
 	return Color.GRAY
 
 func _update_hydrogen_bond_height(container: Node2D, height: float) -> void:
+	# Rescale bond lines to match the actual distance between paired bases.
+	# Preserves the inset ratio from the original spawn so lines don't
+	# touch the base circles regardless of current bond height.
+	var inset = 12.0
 	for child in container.get_children():
 		if child is Line2D and child.get_point_count() >= 2:
 			var p1 = child.get_point_position(0)
-			var p2 = child.get_point_position(1)
-			child.set_point_position(0, Vector2(p1.x, 0.0))
-			child.set_point_position(1, Vector2(p2.x, height))
+			# Determine direction: bonds may draw upward (negative) or downward (positive).
+			var sign = -1.0 if height < 0.0 else 1.0
+			var abs_h = abs(height)
+			var p0_y = sign * inset
+			var p1_y = sign * max(inset, abs_h - inset)
+			child.set_point_position(0, Vector2(p1.x, p0_y))
+			child.set_point_position(1, Vector2(p1.x, p1_y))
 
 func _sample_curve_y_at_x(baked: PackedVector2Array, x: float, fallback_y: float) -> float:
 	if baked.size() < 2:
@@ -1358,30 +1424,26 @@ func _setup_synthesis_circle():
 	synthesis_area.area_entered.connect(_on_synthesis_area_entered)
 
 func _setup_helicase():
-	# Capsule-shaped ring centered between the two template strands at helicase_x.
-	# Drawn as outer filled capsule minus inner filled capsule (background color).
 	helicase_node = Node2D.new()
-	helicase_node.z_index = 3  # In front of strands
+	helicase_node.z_index = 3
 
-	var backbone_reach = %ThemeManager.backbone_offset_distance + %ThemeManager.backbone_line_width
-	var half_h = dna_ribbons_gap / 2.0 + backbone_reach + 4.0  # +4px margin
-	var half_w = 14.0  # exported-style; adjust in Inspector by tweaking this function
-
-	var outer_color = Color(0.85, 0.85, 0.85, 1.0)  # Light grey ring
-	var inner_color = %ThemeManager.background_color   # Hollow center
+	var backbone_reach = %ThemeManager.backbone_offset_distance + %ThemeManager.backbone_line_width * 0.5
+	var half_h = dna_ribbons_gap / 2.0 + backbone_reach + %ThemeManager.helicase_height_margin
+	var half_w = %ThemeManager.helicase_half_width
+	var thickness = %ThemeManager.helicase_thickness
+	var outer_color = %ThemeManager.helicase_color
+	var inner_color = %ThemeManager.background_color
 
 	for pass_idx in range(2):
 		var poly = Polygon2D.new()
-		var w = half_w if pass_idx == 0 else half_w - 5.0
-		var h = half_h if pass_idx == 0 else half_h - 5.0
+		var w = half_w if pass_idx == 0 else half_w - thickness
+		var h = half_h if pass_idx == 0 else half_h - thickness
 		var r = w  # Capsule radius = half_width
 		var pts = PackedVector2Array()
 		const SEGS = 24
-		# Top arc
 		for i in range(SEGS + 1):
 			var angle = PI + (PI * i / SEGS)
 			pts.append(Vector2(cos(angle) * r, -h + r + sin(angle) * r))
-		# Bottom arc
 		for i in range(SEGS + 1):
 			var angle = (PI * i / SEGS)
 			pts.append(Vector2(cos(angle) * r, h - r + sin(angle) * r))

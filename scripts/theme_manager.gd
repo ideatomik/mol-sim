@@ -41,6 +41,12 @@ extends Node
 @export_group("Synthesis Circle")
 @export var synthesis_circle_color: Color = Color(1.0, 0.0, 0.101960786, 1.0)
 
+@export_group("Helicase")
+@export var helicase_color: Color = Color(0.85, 0.85, 0.85, 1.0)
+@export var helicase_thickness: float = 5.0
+@export var helicase_half_width: float = 14.0
+@export var helicase_height_margin: float = 4.0
+
 @export_group("Markers")
 @export var marker_color: Color = Color(0.0, 0.0, 0.0, 0.0)
 @export var marker_font_color: Color = Color(1.0, 1.0, 1.0, 1.0)
