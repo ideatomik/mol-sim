@@ -77,6 +77,7 @@ var pulse_width: float = 0.0
 
 var synthesis_circle_faded: bool = false
 var top_polymerase: Node2D = null
+var helicase_node: Node2D = null
 
 var helicase_x: float = 0.0
 var factory_x: float = 0.0
@@ -216,6 +217,7 @@ func initialize_simulation(sequence: String):
 	_spawn_nucleotide_slots()
 	_setup_synthesis_circle()
 	_setup_top_polymerase()
+	_setup_helicase()
 
 	template_strand_original_track.visible = true
 	template_strand_new_track.points = PackedVector2Array([
@@ -323,6 +325,8 @@ func teardown_simulation():
 		nodes_to_free.append(marker_top_3p)
 	if top_polymerase:
 		nodes_to_free.append(top_polymerase)
+	if helicase_node:
+		nodes_to_free.append(helicase_node)
 	if marker_leading_5p:
 		nodes_to_free.append(marker_leading_5p)
 	if marker_leading_3p:
@@ -481,6 +485,8 @@ func _process(delta):
 		synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
 		if top_polymerase:
 			top_polymerase.position = Vector2(factory_x, straight_y - dna_ribbons_gap - new_bottom_template_offset)
+		if helicase_node:
+			helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
 
 		if phase != Phase.DONE:
 			for i in range(template_strand_bottom.size()):
@@ -938,6 +944,12 @@ func scrub_to(progress: float):
 	for i in range(top_strand_slots.size()):
 		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
 
+	synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
+	if top_polymerase:
+		top_polymerase.position = Vector2(factory_x, straight_y - dna_ribbons_gap - new_bottom_template_offset)
+	if helicase_node:
+		helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
+
 	queue_redraw()
 
 func scrub_to_nucleotide_index(index: int):
@@ -1344,6 +1356,41 @@ func _setup_synthesis_circle():
 	synthesis_area.monitoring = true
 	synthesis_area.monitorable = true
 	synthesis_area.area_entered.connect(_on_synthesis_area_entered)
+
+func _setup_helicase():
+	# Capsule-shaped ring centered between the two template strands at helicase_x.
+	# Drawn as outer filled capsule minus inner filled capsule (background color).
+	helicase_node = Node2D.new()
+	helicase_node.z_index = 3  # In front of strands
+
+	var backbone_reach = %ThemeManager.backbone_offset_distance + %ThemeManager.backbone_line_width
+	var half_h = dna_ribbons_gap / 2.0 + backbone_reach + 4.0  # +4px margin
+	var half_w = 14.0  # exported-style; adjust in Inspector by tweaking this function
+
+	var outer_color = Color(0.85, 0.85, 0.85, 1.0)  # Light grey ring
+	var inner_color = %ThemeManager.background_color   # Hollow center
+
+	for pass_idx in range(2):
+		var poly = Polygon2D.new()
+		var w = half_w if pass_idx == 0 else half_w - 5.0
+		var h = half_h if pass_idx == 0 else half_h - 5.0
+		var r = w  # Capsule radius = half_width
+		var pts = PackedVector2Array()
+		const SEGS = 24
+		# Top arc
+		for i in range(SEGS + 1):
+			var angle = PI + (PI * i / SEGS)
+			pts.append(Vector2(cos(angle) * r, -h + r + sin(angle) * r))
+		# Bottom arc
+		for i in range(SEGS + 1):
+			var angle = (PI * i / SEGS)
+			pts.append(Vector2(cos(angle) * r, h - r + sin(angle) * r))
+		poly.polygon = pts
+		poly.color = outer_color if pass_idx == 0 else inner_color
+		helicase_node.add_child(poly)
+
+	helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
+	add_child(helicase_node)
 
 func _setup_top_polymerase():
 	top_polymerase = Node2D.new()
