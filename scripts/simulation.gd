@@ -29,6 +29,8 @@ const NewNitrogenBaseScene := preload("res://scenes/nitrogen_base.tscn")
 @onready var backbone_line: Line2D = $BackboneLine
 @onready var hydrogen_bonds_container: Node2D = $HydrogenBondsContainer
 @onready var template_hydrogen_bonds_container: Node2D = $TemplateHydrogenBondsContainer
+@onready var top_rail_path: Path2D = $TopRailPath
+@onready var top_template_new_track: Line2D = $TopTemplateStrandNewTrack
 
 @export_group("Track Layout")
 @export var nucleotide_slot_spacing: float = 54.0
@@ -67,6 +69,7 @@ var track_length: float = 0.0
 
 # ---------- STATE VARIABLES ----------
 var new_bottom_template_y: float = 0.0
+var new_top_template_y: float = 0.0
 var new_synthesized_strand_y: float = 0.0
 var new_strand_y: float = 0.0
 var synthesis_circle_y: float = 0.0
@@ -128,6 +131,7 @@ var new_strand_bond_marks: Array[Node2D] = []
 var new_strand_backbone_line: Line2D
 var new_strand_backbone_delta: Array[float] = []
 
+var top_strand_slots: Array[PathFollow2D] = []
 var top_strand_bases: Array = []
 var top_strand_backbone_delta: Array[float] = []
 var top_strand_bond_marks: Array[Node2D] = []
@@ -202,6 +206,7 @@ func initialize_simulation(sequence: String):
 	synthesis_circle_faded = false
 
 	new_bottom_template_y = straight_y + new_bottom_template_offset
+	new_top_template_y = straight_y - dna_ribbons_gap - new_bottom_template_offset
 	new_synthesized_strand_y = new_bottom_template_y + new_bottom_template_offset
 	new_strand_y = straight_y + max_loop_depth + nucleotide_slot_size.y
 	synthesis_circle_y = straight_y + max_loop_depth
@@ -254,7 +259,12 @@ func initialize_simulation(sequence: String):
 	leading_backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
 	add_child(leading_backbone_line)
 
+	top_template_new_track.visible = false
+
 	_spawn_top_strand()
+	_rebuild_top_rail()
+	for i in range(top_strand_slots.size()):
+		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
 	_spawn_leading_arrays()  # Initialize arrays for leading strand
 
 	# Strand end markers
@@ -283,6 +293,7 @@ func teardown_simulation():
 	nodes_to_free.append_array(nucleotide_bases)
 	nodes_to_free.append_array(synthesized_bases)
 	nodes_to_free.append_array(leading_synthesized_bases)
+	nodes_to_free.append_array(top_strand_slots)
 	nodes_to_free.append_array(top_strand_bases)
 	nodes_to_free.append_array(hydrogen_bonds)
 	nodes_to_free.append_array(leading_hydrogen_bonds)
@@ -339,6 +350,7 @@ func teardown_simulation():
 	leading_synthesized_bases.clear()
 	leading_hydrogen_bonds.clear()
 	new_strand_backbone_delta.clear()
+	top_strand_slots.clear()
 	top_strand_bases.clear()
 	top_strand_backbone_delta.clear()
 	top_strand_bond_marks.clear()
@@ -359,11 +371,15 @@ func teardown_simulation():
 	if leading_backbone_line:
 		leading_backbone_line.points = PackedVector2Array()
 
-	# Clear the rail path
+	# Clear the rail paths
 	if rail_path:
 		var old_curve = rail_path.curve
 		if old_curve:
 			old_curve.clear_points()
+	if top_rail_path:
+		var top_curve = top_rail_path.curve
+		if top_curve:
+			top_curve.clear_points()
 
 # ==========================================
 # CORE UPDATE LOOP
@@ -455,6 +471,12 @@ func _process(delta):
 						nucleotide_original_x[last] + %ThemeManager.marker_offset,
 						new_bottom_template_y + dna_ribbons_gap + wobble_last + new_strand_backbone_delta[last]
 					))
+					# Sweep: catch any leading bases not yet spawned by the position-based trigger.
+					for i in range(num_nucleotide_slots):
+						if leading_synthesized_bases[i] == null:
+							var bottom_base = dna_sequence.get_complement(i)
+							leading_synthesized_bases[i] = _spawn_leading_base(i, bottom_base)
+							leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
 		# ---- State logic that runs every frame (even if not playing, but we keep it here for clarity) ----
 		_rebuild_rail()
@@ -536,7 +558,7 @@ func _process(delta):
 			if leading_synthesized_bases[i] == null:
 				# The leading strand base is the complement of the top template.
 				# Since top template is complement of bottom, leading base = bottom base.
-				var bottom_base = dna_sequence.get_base(i)
+				var bottom_base = dna_sequence.get_complement(i)
 				leading_synthesized_bases[i] = _spawn_leading_base(i, bottom_base)
 				leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
@@ -544,7 +566,8 @@ func _process(delta):
 		progress_changed.emit(get_total_progress())
 
 	# ---------- 2. VISUAL RENDERING (Always runs, even when paused) ----------
-	# Use virtual time for wobble so it matches the scrubber position
+	_rebuild_top_rail()
+
 	var virtual_time = (helicase_x - gap_width) / sweep_speed if sweep_speed > 0 else 0.0
 	var wobble_t = virtual_time
 
@@ -587,7 +610,9 @@ func _process(delta):
 			var world_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
 			synthesized_bases[i].position = Vector2(world_x, world_y)
 			if hydrogen_bonds[i] != null:
-				hydrogen_bonds[i].position = Vector2(world_x, new_bottom_template_y + wobble_y)
+				var container_y = new_bottom_template_y + wobble_y
+				hydrogen_bonds[i].position = Vector2(world_x, container_y)
+				_update_hydrogen_bond_height(hydrogen_bonds[i], world_y - container_y)
 			new_strand_backbone_delta[i] = lerp(
 				new_strand_backbone_delta[i],
 				%ThemeManager.backbone_offset_distance,
@@ -600,22 +625,42 @@ func _process(delta):
 
 	_update_bond_marks(backbone_points)
 
-	# ---- Top template strand (existing visual) ----
+	# ---- Top template strand ----
+	# Sample curve y at each slot's original x position directly.
+	# This avoids arc-length distortion from PathFollow2D progress mapping.
 	var top_strand_points = PackedVector2Array()
-	for i in range(top_strand_bases.size()):
-		var wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
+	var top_curve = top_rail_path.curve
+	for i in range(top_strand_slots.size()):
 		var world_x = nucleotide_original_x[i]
-		var world_y = straight_y - dna_ribbons_gap + wobble_y
-		top_strand_bases[i].position = Vector2(world_x, world_y)
+		var slot_y: float
+		if top_curve != null:
+			# Binary search the baked points for the closest x, then interpolate y.
+			var baked = top_curve.get_baked_points()
+			slot_y = _sample_curve_y_at_x(baked, world_x, straight_y - dna_ribbons_gap)
+		else:
+			slot_y = straight_y - dna_ribbons_gap
+		# Apply to slot position so leading strand can still read it.
+		top_strand_slots[i].position = Vector2(world_x, slot_y)
+
+		var wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
+		top_strand_bases[i].position = Vector2(0, wobble_y)
+
+		var mid_y = new_top_template_y + (straight_y - dna_ribbons_gap - new_top_template_y) * 0.5
+		var on_bonded = slot_y > mid_y
+		var target_backbone_delta = -%ThemeManager.backbone_offset_distance if on_bonded else %ThemeManager.backbone_offset_distance
 		top_strand_backbone_delta[i] = lerp(
 			top_strand_backbone_delta[i],
-			%ThemeManager.backbone_offset_distance,
+			target_backbone_delta,
 			clamp(%ThemeManager.backbone_offset_smoothing_speed * delta, 0.0, 1.0)
 		)
-		top_strand_points.append(Vector2(world_x, world_y - top_strand_backbone_delta[i]))
+		top_strand_points.append(Vector2(world_x, slot_y + top_strand_backbone_delta[i] + wobble_y))
+
 		if template_hydrogen_bonds[i] != null:
-			template_hydrogen_bonds[i].position = Vector2(world_x, straight_y + wobble_y)
-			template_hydrogen_bonds[i].visible = (nucleotide_original_x[i] > helicase_x)	# ---- NEW: Hide bonds that have been passed by the helicase ----
+			var container_y = straight_y + wobble_y
+			template_hydrogen_bonds[i].position = Vector2(world_x, container_y)
+			var bond_height = (slot_y + wobble_y) - container_y
+			_update_hydrogen_bond_height(template_hydrogen_bonds[i], bond_height)
+			template_hydrogen_bonds[i].visible = on_bonded
 	top_strand_backbone_line.points = top_strand_points
 	top_strand_backbone_line.width = %ThemeManager.backbone_line_width
 	_update_bond_marks_top_strand(top_strand_points)
@@ -625,14 +670,14 @@ func _process(delta):
 	for i in range(leading_synthesized_bases.size()):
 		if leading_synthesized_bases[i] != null:
 			var wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
-			var world_x = nucleotide_original_x[i]
+			var world_x = top_strand_slots[i].position.x if top_strand_slots.size() > i else nucleotide_original_x[i]
 			# Leading strand sits above the top template: straight_y - dna_ribbons_gap - dna_ribbons_gap
 			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_y
 			leading_synthesized_bases[i].position = Vector2(world_x, leading_y)
 			if leading_hydrogen_bonds[i] != null:
-				# Hydrogen bonds between top template and leading strand
 				var top_template_y = straight_y - dna_ribbons_gap - new_bottom_template_offset + wobble_y
 				leading_hydrogen_bonds[i].position = Vector2(world_x, top_template_y)
+				_update_hydrogen_bond_height(leading_hydrogen_bonds[i], leading_y - top_template_y)
 			# Backbone offset: on the opposite side (above the base)
 			leading_points.append(Vector2(world_x, leading_y - %ThemeManager.backbone_offset_distance))
 	leading_backbone_line.points = leading_points
@@ -675,15 +720,15 @@ func _process(delta):
 	if marker_top_5p:
 		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
 		marker_top_5p.position = Vector2(
-			nucleotide_original_x[0] - %ThemeManager.marker_offset,
-			straight_y - dna_ribbons_gap - top_strand_backbone_delta[0] + wobble_first
+			top_strand_slots[0].position.x - %ThemeManager.marker_offset,
+			top_strand_slots[0].position.y + top_strand_backbone_delta[0] + wobble_first
 		)
 	if marker_top_3p:
 		var last = num_nucleotide_slots - 1
 		var wobble_last = sin(wobble_t * wobble_speed * TAU + last * wobble_phase_offset) * wobble_amplitude
 		marker_top_3p.position = Vector2(
-			nucleotide_original_x[last] + %ThemeManager.marker_offset,
-			straight_y - dna_ribbons_gap - top_strand_backbone_delta[last] + wobble_last
+			top_strand_slots[last].position.x + %ThemeManager.marker_offset,
+			top_strand_slots[last].position.y + top_strand_backbone_delta[last] + wobble_last
 		)
 		# ---- Leading strand markers ----
 	# 5' marker: appears when the first leading base is synthesized
@@ -890,8 +935,11 @@ func scrub_to(progress: float):
 
 	# Force immediate rail rebuild
 	_rebuild_rail()
+	_rebuild_top_rail()
 	for i in range(template_strand_bottom.size()):
 		template_strand_bottom[i].progress = track_length - nucleotide_original_x[i]
+	for i in range(top_strand_slots.size()):
+		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
 
 	queue_redraw()
 
@@ -1029,21 +1077,27 @@ func _spawn_leading_arrays():
 
 func _spawn_top_strand():
 	for i in range(num_nucleotide_slots):
+		var slot = PathFollow2D.new()
+		slot.rotates = false
+		slot.loop = false
+		top_rail_path.add_child(slot)
+
 		var base = NewNitrogenBaseScene.instantiate()
-		var x = nucleotide_original_x[i]
-		base.position = Vector2(x, straight_y - dna_ribbons_gap)
-		base.z_index = 2
-		add_child(base)
+		slot.add_child(base)
 		var base_char = dna_sequence.get_base(i)
 		base.set_base_type(base_char)
 		base.set_colors(_get_base_fill(base_char), %ThemeManager.base_label_color)
+
+		top_strand_slots.append(slot)
 		top_strand_bases.append(base)
 		top_strand_backbone_delta.append(%ThemeManager.backbone_offset_distance)
 		template_hydrogen_bonds.append(_spawn_template_hydrogen_bonds(i))
 
 func _spawn_complement_base(template_index: int) -> Node2D:
 	var base = NewNitrogenBaseScene.instantiate()
-	var base_type = dna_sequence.get_complement(template_index)
+	# The lagging strand is complement of the bottom template,
+	# which itself is complement of the sequence -- so lagging = get_base().
+	var base_type = dna_sequence.get_base(template_index)
 	base.position = Vector2(
 		template_strand_bottom[template_index].position.x,
 		0.0
@@ -1156,6 +1210,63 @@ func _get_base_fill(base_type: String) -> Color:
 		"G": return %ThemeManager.base_color_g
 		"5'", "3'": return %ThemeManager.marker_color
 	return Color.GRAY
+
+func _update_hydrogen_bond_height(container: Node2D, height: float) -> void:
+	for child in container.get_children():
+		if child is Line2D and child.get_point_count() >= 2:
+			var p1 = child.get_point_position(0)
+			var p2 = child.get_point_position(1)
+			child.set_point_position(0, Vector2(p1.x, 0.0))
+			child.set_point_position(1, Vector2(p2.x, height))
+
+func _sample_curve_y_at_x(baked: PackedVector2Array, x: float, fallback_y: float) -> float:
+	# Find the y value on a baked curve at a given x by linear interpolation.
+	# The curve runs right-to-left so x decreases along the baked points.
+	if baked.size() < 2:
+		return fallback_y
+	# Clamp to curve x range.
+	var x_start = baked[0].x
+	var x_end = baked[baked.size() - 1].x
+	if x >= x_start:
+		return baked[0].y
+	if x <= x_end:
+		return baked[baked.size() - 1].y
+	# Binary search for the segment containing x.
+	var lo = 0
+	var hi = baked.size() - 1
+	while hi - lo > 1:
+		var mid = (lo + hi) / 2
+		if baked[mid].x > x:
+			lo = mid
+		else:
+			hi = mid
+	# Interpolate y between baked[lo] and baked[hi].
+	var seg_x = baked[lo].x - baked[hi].x
+	if seg_x == 0.0:
+		return baked[lo].y
+	var t = (baked[lo].x - x) / seg_x
+	return lerp(baked[lo].y, baked[hi].y, t)
+
+func _rebuild_top_rail():
+	var curve = Curve2D.new()
+	var bonded_y = straight_y - dna_ribbons_gap
+	var unzipped_y = new_top_template_y
+	var first_slot_x = nucleotide_original_x[0] if nucleotide_original_x.size() > 0 else 0.0
+
+	if helicase_x <= first_slot_x:
+		curve.add_point(Vector2(track_length, bonded_y))
+		curve.add_point(Vector2(-gap_width, bonded_y))
+		top_rail_path.curve = curve
+		return
+
+	var handle_x = (helicase_x - factory_x) * 0.4
+	curve.add_point(Vector2(track_length, bonded_y))
+	curve.add_point(Vector2(helicase_x, bonded_y))
+	curve.add_point(Vector2(helicase_x, bonded_y), Vector2.ZERO, Vector2(-handle_x, 0))
+	curve.add_point(Vector2(factory_x, unzipped_y), Vector2(handle_x, 0), Vector2.ZERO)
+	# Extend well past 0 so slot[0] (largest progress) always sits on the flat section.
+	curve.add_point(Vector2(-gap_width, unzipped_y))
+	top_rail_path.curve = curve
 
 func _rebuild_rail():
 	if phase == Phase.DONE:

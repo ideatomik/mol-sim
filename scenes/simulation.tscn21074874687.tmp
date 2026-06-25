@@ -10,12 +10,27 @@
 
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_5eski")
+nucleotide_slot_spacing = null
 num_nucleotide_slots = 36
+straight_y = null
+nucleotide_slot_size = null
+new_bottom_template_offset = null
 dna_ribbons_gap = 60.0
+loop_floor_depth = null
 max_loop_depth = 230.0
+gap_width = null
+neck_depth_fraction = null
+waist_flare_shallow = null
+waist_flare_deep = null
+armed_depth_fraction = null
+sweep_speed = null
+pulse_nucleotide_count = null
+fade_duration = null
+settling_duration = null
 settling_threshold = 20.0
 wobble_amplitude = 1.0
 wobble_speed = 1.0
+wobble_phase_offset = null
 synthesis_circle_radius = 20.0
 synthesis_inside_threshold = 20.0
 synthesis_outside_threshold = 28.0
@@ -47,7 +62,6 @@ default_color = Color(0, 1, 0, 0)
 
 [node name="NewStrandLine" type="Line2D" parent="." unique_id=1075958164]
 width = 3.0
-default_color = Color(1, 1, 1, 0)
 
 [node name="SynthesisCircle" type="Node2D" parent="." unique_id=550376968]
 
@@ -60,7 +74,6 @@ width = 3.0
 default_color = Color(0.76862746, 0, 0, 0)
 
 [node name="TopTemplateStrandNewTrack" type="Line2D" parent="." unique_id=635682591]
-default_color = Color(1, 1, 1, 0)
 
 [node name="BackboneLine" type="Line2D" parent="." unique_id=1274713731]
 width = 8.0
