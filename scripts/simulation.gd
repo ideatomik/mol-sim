@@ -471,16 +471,13 @@ func _process(delta):
 						nucleotide_original_x[last] + %ThemeManager.marker_offset,
 						new_bottom_template_y + dna_ribbons_gap + wobble_last + new_strand_backbone_delta[last]
 					))
-					# Sweep: catch any leading bases not yet spawned by the position-based trigger.
+					# Sweep: catch any leading bases not yet spawned.
 					for i in range(num_nucleotide_slots):
 						if leading_synthesized_bases[i] == null:
-							var bottom_base = dna_sequence.get_complement(i)
-							leading_synthesized_bases[i] = _spawn_leading_base(i, bottom_base)
+							leading_synthesized_bases[i] = _spawn_leading_base(i, dna_sequence.get_complement(i))
 							leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
 		# ---- State logic that runs every frame (even if not playing, but we keep it here for clarity) ----
-		_rebuild_rail()
-
 		synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
 		if top_polymerase:
 			top_polymerase.position = Vector2(factory_x, straight_y - dna_ribbons_gap - new_bottom_template_offset)
@@ -566,6 +563,9 @@ func _process(delta):
 		progress_changed.emit(get_total_progress())
 
 	# ---------- 2. VISUAL RENDERING (Always runs, even when paused) ----------
+	# Rail rebuilds here so they always reflect current state, even when paused
+	# or after scrubbing/stopping.
+	_rebuild_rail()
 	_rebuild_top_rail()
 
 	var virtual_time = (helicase_x - gap_width) / sweep_speed if sweep_speed > 0 else 0.0
@@ -626,20 +626,16 @@ func _process(delta):
 	_update_bond_marks(backbone_points)
 
 	# ---- Top template strand ----
-	# Sample curve y at each slot's original x position directly.
-	# This avoids arc-length distortion from PathFollow2D progress mapping.
 	var top_strand_points = PackedVector2Array()
 	var top_curve = top_rail_path.curve
 	for i in range(top_strand_slots.size()):
 		var world_x = nucleotide_original_x[i]
 		var slot_y: float
 		if top_curve != null:
-			# Binary search the baked points for the closest x, then interpolate y.
 			var baked = top_curve.get_baked_points()
 			slot_y = _sample_curve_y_at_x(baked, world_x, straight_y - dna_ribbons_gap)
 		else:
 			slot_y = straight_y - dna_ribbons_gap
-		# Apply to slot position so leading strand can still read it.
 		top_strand_slots[i].position = Vector2(world_x, slot_y)
 
 		var wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
@@ -671,7 +667,6 @@ func _process(delta):
 		if leading_synthesized_bases[i] != null:
 			var wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
 			var world_x = top_strand_slots[i].position.x if top_strand_slots.size() > i else nucleotide_original_x[i]
-			# Leading strand sits above the top template: straight_y - dna_ribbons_gap - dna_ribbons_gap
 			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_y
 			leading_synthesized_bases[i].position = Vector2(world_x, leading_y)
 			if leading_hydrogen_bonds[i] != null:
@@ -840,8 +835,10 @@ func scrub_to(progress: float):
 			top_polymerase.modulate.a = 0.0
 	elif target_factory_x > nucleotide_original_x[num_nucleotide_slots - 1]:
 		phase = Phase.FINISHING_LAST_PULSE
+		settle_blend = 0.0
 	else:
 		phase = Phase.SWEEPING
+		settle_blend = 0.0
 
 	# ---- Clear and rebuild lagging strand bases ----
 	for base in synthesized_bases:
@@ -1095,8 +1092,6 @@ func _spawn_top_strand():
 
 func _spawn_complement_base(template_index: int) -> Node2D:
 	var base = NewNitrogenBaseScene.instantiate()
-	# The lagging strand is complement of the bottom template,
-	# which itself is complement of the sequence -- so lagging = get_base().
 	var base_type = dna_sequence.get_base(template_index)
 	base.position = Vector2(
 		template_strand_bottom[template_index].position.x,
@@ -1220,18 +1215,12 @@ func _update_hydrogen_bond_height(container: Node2D, height: float) -> void:
 			child.set_point_position(1, Vector2(p2.x, height))
 
 func _sample_curve_y_at_x(baked: PackedVector2Array, x: float, fallback_y: float) -> float:
-	# Find the y value on a baked curve at a given x by linear interpolation.
-	# The curve runs right-to-left so x decreases along the baked points.
 	if baked.size() < 2:
 		return fallback_y
-	# Clamp to curve x range.
-	var x_start = baked[0].x
-	var x_end = baked[baked.size() - 1].x
-	if x >= x_start:
+	if x >= baked[0].x:
 		return baked[0].y
-	if x <= x_end:
+	if x <= baked[baked.size() - 1].x:
 		return baked[baked.size() - 1].y
-	# Binary search for the segment containing x.
 	var lo = 0
 	var hi = baked.size() - 1
 	while hi - lo > 1:
@@ -1240,7 +1229,6 @@ func _sample_curve_y_at_x(baked: PackedVector2Array, x: float, fallback_y: float
 			lo = mid
 		else:
 			hi = mid
-	# Interpolate y between baked[lo] and baked[hi].
 	var seg_x = baked[lo].x - baked[hi].x
 	if seg_x == 0.0:
 		return baked[lo].y
@@ -1264,7 +1252,6 @@ func _rebuild_top_rail():
 	curve.add_point(Vector2(helicase_x, bonded_y))
 	curve.add_point(Vector2(helicase_x, bonded_y), Vector2.ZERO, Vector2(-handle_x, 0))
 	curve.add_point(Vector2(factory_x, unzipped_y), Vector2(handle_x, 0), Vector2.ZERO)
-	# Extend well past 0 so slot[0] (largest progress) always sits on the flat section.
 	curve.add_point(Vector2(-gap_width, unzipped_y))
 	top_rail_path.curve = curve
 
