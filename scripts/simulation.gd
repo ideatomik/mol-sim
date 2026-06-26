@@ -1028,7 +1028,8 @@ func scrub_to(progress: float):
 
 	var lagging_synth_count = 0
 	for i in range(num_nucleotide_slots):
-		if nucleotide_original_x[i] <= target_factory_x:
+		var in_loop = phase != Phase.DONE and nucleotide_original_x[i] >= population_left_edge and nucleotide_original_x[i] <= helicase_x
+		if nucleotide_original_x[i] <= target_factory_x and not in_loop:
 			lagging_synth_count += 1
 		else:
 			break
