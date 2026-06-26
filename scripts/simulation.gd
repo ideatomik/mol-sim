@@ -1,9 +1,14 @@
 extends Node2D
 
 # ==========================================
-# v 70.1
+# v 70.2
 # - Okazaki fragments: per-fragment Line2D backbones with Y-offset markers
 # - Helicase now fades out with polymerases at Phase.DONE
+# - Scrub no longer synthesizes slots inside or between factory_x and helicase_x
+# - Sequence label tracks helicase position
+# - Leading strand markers corrected (3' left, 5' rigaht)
+# - Okazaki fragment markers corrected; single-slot uses 5'-3' combined marker
+# - Whole-strand lagging markers hidden until ligase
 # ==========================================
 
 # ---------- SIGNALS ----------
@@ -1028,9 +1033,11 @@ func scrub_to(progress: float):
 
 	var lagging_synth_count = 0
 	for i in range(num_nucleotide_slots):
-		var in_loop = phase != Phase.DONE and nucleotide_original_x[i] >= population_left_edge and nucleotide_original_x[i] <= helicase_x
-		if nucleotide_original_x[i] <= target_factory_x and not in_loop:
-			lagging_synth_count += 1
+		if phase == Phase.DONE or nucleotide_original_x[i] < population_left_edge:
+			if nucleotide_original_x[i] <= target_factory_x:
+				lagging_synth_count += 1
+			else:
+				break
 		else:
 			break
 
