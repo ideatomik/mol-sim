@@ -1,11 +1,12 @@
 [gd_scene format=3 uid="uid://bkcyhxg58gv21"]
 
-[ext_resource type="FontFile" uid="uid://2ip46klnu02y" path="res://fonts/Gyrotrope-Semibold.otf" id="1_tm0gy"]
 [ext_resource type="Script" uid="uid://coqc4e87gupxb" path="res://scripts/sequence_loader_popup.gd" id="1_w87t3"]
-[ext_resource type="FontFile" uid="uid://d7aekpbjjlrj" path="res://fonts/Gyrotrope-Bold.otf" id="4_w87t3"]
+[ext_resource type="FontFile" uid="uid://q1v5f1fmoxhk" path="res://fonts/Raleway/static/Raleway-SemiBold.ttf" id="2_egfmf"]
+[ext_resource type="FontFile" uid="uid://dkyjnrbvkb6g6" path="res://fonts/GoogleSans/GoogleSans-Medium.ttf" id="3_iinsh"]
+[ext_resource type="FontFile" uid="uid://dxdsv5nrybqcb" path="res://fonts/Raleway/static/Raleway-ExtraBold.ttf" id="4_fr0gj"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
-bg_color = Color(0.89827347, 0.89827347, 0.9138015, 0.8)
+bg_color = Color(0.89827347, 0.89827347, 0.9138015, 1)
 border_width_left = 1
 border_width_top = 1
 border_width_right = 1
@@ -15,6 +16,13 @@ corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
+corner_detail = 10
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_egfmf"]
+color = Color(1, 1, 1, 0)
+grow_begin = 0.0
+grow_end = 0.0
+thickness = 2
 
 [node name="SequenceLoaderPopup" type="ColorRect" unique_id=1037424246]
 visible = false
@@ -54,19 +62,21 @@ alignment = 1
 
 [node name="TitleLabel" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1838920493]
 layout_mode = 2
-theme_override_colors/font_color = Color(0, 0, 0, 1)
-theme_override_fonts/font = ExtResource("1_tm0gy")
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("2_egfmf")
 theme_override_font_sizes/font_size = 22
-text = "CARREGAR NOVA SEQUÊNCIA DE DNA/RNA"
+text = "CARREGAR NOVA SEQUÊNCIA DE DNA"
 horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="HSeparator" type="HSeparator" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=756266725]
 layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_egfmf")
 
 [node name="SequenceInput" type="LineEdit" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=2056294362]
 layout_mode = 2
 theme_override_constants/minimum_character_width = 4
+theme_override_fonts/font = ExtResource("3_iinsh")
 theme_override_font_sizes/font_size = 18
 placeholder_text = "PREENCHER SEQUÊNCIA"
 alignment = 1
@@ -76,7 +86,8 @@ clear_button_enabled = true
 
 [node name="CharCountLabel" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=275838739]
 layout_mode = 2
-theme_override_colors/font_color = Color(0, 0, 0, 1)
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("2_egfmf")
 theme_override_font_sizes/font_size = 14
 text = "(12 A 57 SEQUÊNCIAS)"
 horizontal_alignment = 1
@@ -89,12 +100,14 @@ size_flags_vertical = 4
 
 [node name="Label" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/PresetsRow" unique_id=825355123]
 layout_mode = 2
-theme_override_colors/font_color = Color(0, 0, 0, 1)
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("2_egfmf")
 theme_override_font_sizes/font_size = 14
-text = "Sequências:"
+text = "SELECIONAR SEQUÊNCIA:"
 
 [node name="OptionButton" type="OptionButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/PresetsRow" unique_id=1124973994]
 layout_mode = 2
+theme_override_fonts/font = ExtResource("2_egfmf")
 selected = 0
 item_count = 5
 popup/item_0/text = "Aleatória"
@@ -117,7 +130,7 @@ alignment = 1
 [node name="CancelButton" type="Button" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow" unique_id=948012622]
 custom_minimum_size = Vector2(150, 30)
 layout_mode = 2
-theme_override_fonts/font = ExtResource("4_w87t3")
+theme_override_fonts/font = ExtResource("4_fr0gj")
 text = "CANCELAR"
 
 [node name="Control" type="Control" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow" unique_id=337778790]
@@ -127,5 +140,5 @@ layout_mode = 2
 [node name="OKButton" type="Button" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow" unique_id=530923925]
 custom_minimum_size = Vector2(150, 30)
 layout_mode = 2
-theme_override_fonts/font = ExtResource("4_w87t3")
+theme_override_fonts/font = ExtResource("4_fr0gj")
 text = "CARREGAR"

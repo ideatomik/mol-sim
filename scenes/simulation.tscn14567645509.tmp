@@ -3,7 +3,6 @@
 [ext_resource type="Script" uid="uid://bvkapeyriw2xi" path="res://scripts/simulation.gd" id="1_5eski"]
 [ext_resource type="Script" uid="uid://bw6vnkf4in668" path="res://scripts/camera_controller.gd" id="2_ik8a0"]
 [ext_resource type="Script" uid="uid://cvtxqqt1ivx2b" path="res://scripts/theme_manager.gd" id="3_ik8a0"]
-[ext_resource type="FontFile" uid="uid://b5ngkvlh4x883" path="res://fonts/GoogleSans/GoogleSans-SemiBold.ttf" id="4_gimvv"]
 [ext_resource type="PackedScene" uid="uid://7864n4b58mn6" path="res://scenes/PlayerUI.tscn" id="5_gimvv"]
 [ext_resource type="PackedScene" uid="uid://bkcyhxg58gv21" path="res://scenes/SequenceLoaderPopup.tscn" id="5_mwrr7"]
 
@@ -11,14 +10,27 @@
 
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_5eski")
+nucleotide_slot_spacing = null
 num_nucleotide_slots = 36
+straight_y = null
+nucleotide_slot_size = null
+new_bottom_template_offset = null
 dna_ribbons_gap = 60.0
+loop_floor_depth = null
 max_loop_depth = 230.0
+gap_width = null
+neck_depth_fraction = null
+waist_flare_shallow = null
+waist_flare_deep = null
 armed_depth_fraction = 0.5
+sweep_speed = null
 pulse_nucleotide_count = 5
+fade_duration = null
+settling_duration = null
 settling_threshold = 18.0
 wobble_amplitude = 1.0
 wobble_speed = 1.0
+wobble_phase_offset = null
 synthesis_circle_radius = 32.0
 synthesis_inside_threshold = 32.0
 synthesis_outside_threshold = 40.0
@@ -81,8 +93,6 @@ base_color_a = Color(0.9593466, 0.25030932, 0.20285092, 1)
 base_color_t = Color(0.64573294, 0.2505012, 0.99999994, 1)
 base_color_c = Color(0.8499613, 0.46963003, 0.09985284, 1)
 base_color_g = Color(0.1705673, 0.64293486, 0.16792625, 1)
-base_label_font_size = 20
-base_label_font = ExtResource("4_gimvv")
 backbone_color = Color(0.68298626, 0.8408255, 1, 1)
 at_bond_color = Color(0.6238186, 1, 0.5938983, 1)
 cg_bond_color = Color(0, 1, 0.9920456, 1)

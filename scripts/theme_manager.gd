@@ -20,6 +20,8 @@ extends Node
 @export var base_color_c: Color = Color(0.85, 0.6, 0.1, 1.0)
 @export var base_color_g: Color = Color(0.2, 0.8, 0.2, 1.0)
 @export var base_label_color: Color = Color(1.0, 1.0, 1.0, 1.0)
+@export var base_label_font_size: int = 14
+@export var base_label_font: Font = null  # Leave null to use Godot default
 
 @export_group("Backbone")
 @export var backbone_color: Color = Color(0.43137255, 0.72156864, 1.0, 1.0)

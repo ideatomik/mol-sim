@@ -1,13 +1,7 @@
 extends Node2D
 
 # ==========================================
-# SIMULATION
-# Main simulation script. Visual styling (colors, line widths) has been
-# moved to ThemeManager autoload. This script retains only simulation
-# logic exports: track layout, loop geometry, speeds, wobble, and
-# synthesis circle thresholds.
-#
-# Uses DnaSequenceResource as the single source of truth for sequence data.
+# v 69.3 - Fix leading strand marker orientation (3' left, 5' right)
 # ==========================================
 
 # ---------- SIGNALS ----------
@@ -745,29 +739,9 @@ func _process(delta):
 			top_strand_slots[last].position.y + top_strand_backbone_delta[last] + wobble_last
 		)
 		# ---- Leading strand markers ----
-	# 5' marker: appears when the first leading base is synthesized
+
+	# 5' marker: at the growing tip (rightmost synthesized base)
 	if marker_leading_5p == null and leading_synthesized_bases[0] != null:
-		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
-		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
-		marker_leading_5p = _spawn_marker("5'", Vector2(
-			nucleotide_original_x[0] - %ThemeManager.marker_offset,
-			leading_y - %ThemeManager.backbone_offset_distance
-		))
-	
-	# Update 5' marker position (follows wobble)
-	if marker_leading_5p:
-		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
-		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
-		marker_leading_5p.position = Vector2(
-			nucleotide_original_x[0] - %ThemeManager.marker_offset,
-			leading_y - %ThemeManager.backbone_offset_distance
-		)
-	
-	# 3' marker: appears at the rightmost synthesized base
-	# For the leading strand, the 3' end is at the growing tip (rightmost synthesized base)
-	# We'll show it when at least one base is synthesized
-	if marker_leading_3p == null and leading_synthesized_bases[0] != null:
-		# Find the rightmost synthesized base
 		var last_synth_index = -1
 		for i in range(leading_synthesized_bases.size()):
 			if leading_synthesized_bases[i] != null:
@@ -775,13 +749,13 @@ func _process(delta):
 		if last_synth_index >= 0:
 			var wobble_last = sin(wobble_t * wobble_speed * TAU + last_synth_index * wobble_phase_offset) * wobble_amplitude
 			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
-			marker_leading_3p = _spawn_marker("3'", Vector2(
+			marker_leading_5p = _spawn_marker("5'", Vector2(
 				nucleotide_original_x[last_synth_index] + %ThemeManager.marker_offset,
 				leading_y - %ThemeManager.backbone_offset_distance
 			))
-	
-	# Update 3' marker position (follows the rightmost synthesized base)
-	if marker_leading_3p:
+
+	# Update 5' marker position (follows the rightmost synthesized base)
+	if marker_leading_5p:
 		var last_synth_index = -1
 		for i in range(leading_synthesized_bases.size()):
 			if leading_synthesized_bases[i] != null:
@@ -789,10 +763,28 @@ func _process(delta):
 		if last_synth_index >= 0:
 			var wobble_last = sin(wobble_t * wobble_speed * TAU + last_synth_index * wobble_phase_offset) * wobble_amplitude
 			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
-			marker_leading_3p.position = Vector2(
+			marker_leading_5p.position = Vector2(
 				nucleotide_original_x[last_synth_index] + %ThemeManager.marker_offset,
 				leading_y - %ThemeManager.backbone_offset_distance
 			)
+
+	# 3' marker: fixed at the left end (index 0, the origin of the leading strand)
+	if marker_leading_3p == null and leading_synthesized_bases[0] != null:
+		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
+		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
+		marker_leading_3p = _spawn_marker("3'", Vector2(
+			nucleotide_original_x[0] - %ThemeManager.marker_offset,
+			leading_y - %ThemeManager.backbone_offset_distance
+		))
+
+	# Update 3' marker position (follows wobble at index 0)
+	if marker_leading_3p:
+		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
+		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
+		marker_leading_3p.position = Vector2(
+			nucleotide_original_x[0] - %ThemeManager.marker_offset,
+			leading_y - %ThemeManager.backbone_offset_distance
+		)
 
 	background_rect.color = %ThemeManager.background_color
 
@@ -1113,6 +1105,7 @@ func _spawn_nucleotide_slots():
 			_get_base_fill(base_char),
 			%ThemeManager.base_label_color
 		)
+		nitrogen_base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 
 		var x = row_start_x + i * nucleotide_slot_spacing
 		nucleotide_original_x.append(x)
@@ -1154,6 +1147,7 @@ func _spawn_top_strand():
 		var base_char = dna_sequence.get_base(i)
 		base.set_base_type(base_char)
 		base.set_colors(_get_base_fill(base_char), %ThemeManager.base_label_color)
+		base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 
 		top_strand_slots.append(slot)
 		top_strand_bases.append(base)
@@ -1174,6 +1168,7 @@ func _spawn_complement_base(template_index: int) -> Node2D:
 		_get_base_fill(base_type),
 		%ThemeManager.base_label_color
 	)
+	base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 	return base
 
 func _spawn_leading_base(index: int, base_type: String) -> Node2D:
@@ -1190,6 +1185,7 @@ func _spawn_leading_base(index: int, base_type: String) -> Node2D:
 		_get_base_fill(base_type),
 		%ThemeManager.base_label_color
 	)
+	base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 	return base
 
 func _spawn_hydrogen_bonds(template_index: int) -> Node2D:
@@ -1265,6 +1261,7 @@ func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
 	add_child(marker)
 	marker.set_base_type(marker_type)
 	marker.set_colors(%ThemeManager.marker_color, %ThemeManager.marker_font_color)
+	marker.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 	return marker
 
 func _get_base_fill(base_type: String) -> Color:
