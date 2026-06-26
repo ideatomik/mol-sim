@@ -932,6 +932,10 @@ func scrub_to(progress: float):
 	if helicase_mgr != null:
 		if target_slot >= num_nucleotide_slots - 1:
 			helicase_mgr.set_phase(helicase_mgr.Phase.DONE)
+			# Push helicase past the last slot so enzymes exit visually off the right edge
+			var last_x = nucleotide_original_x[num_nucleotide_slots - 1]
+			helicase_x = last_x + gap_width
+			factory_x = last_x
 			loop_depth = 0.0
 			settle_blend = 1.0
 			synthesis_circle_faded = true
