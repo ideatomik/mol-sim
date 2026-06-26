@@ -1,14 +1,12 @@
 extends Node2D
 
 # ==========================================
-# v 70.2
-# - Okazaki fragments: per-fragment Line2D backbones with Y-offset markers
-# - Helicase now fades out with polymerases at Phase.DONE
-# - Scrub no longer synthesizes slots inside or between factory_x and helicase_x
-# - Sequence label tracks helicase position
-# - Leading strand markers corrected (3' left, 5' rigaht)
-# - Okazaki fragment markers corrected; single-slot uses 5'-3' combined marker
-# - Whole-strand lagging markers hidden until ligase
+# v 70.3
+# - Discrete helicase motion: helicase.gd owns slot stepping and phase
+# - helicase_x is now a derived visual value (lerp between slots)
+# - sweep_speed replaced by step_duration in helicase.gd
+# - settle_blend driven by helicase.get_settling_blend()
+# - simulation.gd reduced to template manager + visual coordinator
 # ==========================================
 
 # ---------- SIGNALS ----------
@@ -33,6 +31,9 @@ const NewNitrogenBaseScene := preload("res://scenes/nitrogen_base.tscn")
 @onready var top_rail_path: Path2D = $TopRailPath
 @onready var top_template_new_track: Line2D = $TopTemplateStrandNewTrack
 
+# ---------- SUB-MANAGERS ----------
+var helicase_mgr: Node = null  # helicase.gd instance, added as child in initialize_simulation
+
 @export_group("Track Layout")
 @export var nucleotide_slot_spacing: float = 54.0
 @export var num_nucleotide_slots: int = 30  # Default length; can be overridden by sequence
@@ -52,8 +53,7 @@ var track_length: float = 0.0
 @export var armed_depth_fraction: float = 0.7
 
 @export_group("Speeds & Timing")
-@export var sweep_speed: float = 90.0
-@export var pulse_nucleotide_count: int = 6
+@export var pulse_nucleotide_count: int = 6  # Slots per Okazaki fragment (boundary arithmetic only)
 @export var fade_duration: float = 0.6
 @export var settling_duration: float = 0.5
 @export var settling_threshold: float = 2.0
@@ -80,22 +80,18 @@ var synthesis_circle_faded: bool = false
 var top_polymerase: Node2D = null
 var helicase_node: Node2D = null
 
-var helicase_x: float = 0.0
-var factory_x: float = 0.0
+var helicase_x: float = 0.0   # Derived each frame from helicase_mgr
+var factory_x: float = 0.0   # Derived: helicase_x - gap_width
 
-enum Phase { INTRO, SWEEPING, FINISHING_LAST_PULSE, SETTLING, DONE }
-var phase: Phase = Phase.SWEEPING
-
-var pulse_time_budget: float = 0.0
-var pulse_speed: float = 0.0
-
-enum PulseState { GROWING, SHRINKING, DONE }
-var pulse_state: PulseState = PulseState.GROWING
-var pulse_offset: float = 0.0
+# Phase is now owned by helicase_mgr. Use helicase_mgr.get_phase() or
+# helicase_mgr.Phase.* constants for phase checks.
+# pulse_width is kept for Okazaki fragment boundary arithmetic.
+var pulse_offset: float = 0.0  # Continuous loop animation value, driven visually
 
 var population_left_edge: float = 0.0
 var loop_depth: float = 0.0
 var loop_length: float = 0.0
+var settle_blend: float = 0.0
 
 const LOOP_POPULATION_GROUP := "loop_population"
 const UNZIPPED_POPULATION_GROUP := "unzipped_population"
@@ -123,10 +119,7 @@ var nucleotide_backbone_delta: Array[float] = []
 
 var baseline_switched: bool = false
 var baseline_switch_nucleotide_index: int = -1
-
-var settling_t: float = 0.0
 var settling_loop_depth_start: float = 0.0
-var settle_blend: float = 0.0
 
 var bond_marks: Array[Node2D] = []
 var new_strand_backbone_line: Line2D
@@ -196,23 +189,28 @@ func initialize_simulation(sequence: String):
 	# 3. Update parameters from the resource
 	num_nucleotide_slots = dna_sequence.get_length()
 	track_length = (num_nucleotide_slots - 1) * nucleotide_slot_spacing + 2.0 * gap_width
-	pulse_width = pulse_nucleotide_count * nucleotide_slot_spacing
-	pulse_time_budget = pulse_width / sweep_speed
-	pulse_speed = (2.0 * pulse_width) / pulse_time_budget
+	pulse_width = pulse_nucleotide_count * nucleotide_slot_spacing  # For Okazaki boundary arithmetic
 
 	# 4. RESET all state variables
 	helicase_x = gap_width
 	factory_x = 0.0
 	loop_depth = max_loop_depth
 	pulse_offset = 0.0
-	pulse_state = PulseState.GROWING
-	phase = Phase.INTRO
 	baseline_switched = false
 	settle_blend = 0.0
-	settling_t = 0.0
 	manual_override = true  # Start paused when a new sequence loads
 	synthesis_circle_faded = false
 	last_synthesis_pulse_cycle = -1
+
+	# 4b. Create or re-initialize helicase manager
+	if helicase_mgr != null:
+		helicase_mgr.queue_free()
+	var HelicastScript = load("res://scripts/helicase.gd")
+	helicase_mgr = HelicastScript.new()
+	add_child(helicase_mgr)
+	helicase_mgr.initialize(num_nucleotide_slots, settling_duration)
+	helicase_mgr.slot_reached.connect(_on_helicase_slot_reached)
+	helicase_mgr.phase_changed.connect(_on_helicase_phase_changed)
 
 	new_bottom_template_y = straight_y + new_bottom_template_offset
 	new_top_template_y = straight_y - dna_ribbons_gap - new_bottom_template_offset
@@ -391,6 +389,7 @@ func teardown_simulation():
 	leading_strand_bond_marks.clear()
 	marker_leading_5p = null
 	marker_leading_3p = null
+	helicase_mgr = null  # Re-created in initialize_simulation
 
 	# Reset line points so they don't linger
 	if backbone_line:
@@ -416,127 +415,103 @@ func teardown_simulation():
 # CORE UPDATE LOOP
 # ==========================================
 
+
 func _process(delta):
-	# ---------- 1. STATE UPDATE (only if not manually overridden) ----------
-	if not manual_override:
-		match phase:
-			Phase.INTRO:
-				pass  # Handled by _run_intro tween; simulation doesn't advance.
-			Phase.SWEEPING:
-				helicase_x += sweep_speed * delta
-				factory_x = helicase_x - gap_width
-				match pulse_state:
-					PulseState.GROWING:
-						pulse_offset = min(pulse_offset + pulse_speed * delta, pulse_width)
-						if pulse_offset >= pulse_width:
-							pulse_state = PulseState.SHRINKING
-					PulseState.SHRINKING:
-						pulse_offset = max(pulse_offset - pulse_speed * delta, 0.0)
-						if pulse_offset <= 0.0:
-							pulse_state = PulseState.GROWING
-					PulseState.DONE:
-						pulse_offset = 0.0
-				var pulse_ratio = pulse_offset / pulse_width
-				loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio)
-				population_left_edge = factory_x - pulse_offset
-				var last_nucleotide_x = nucleotide_original_x[nucleotide_original_x.size() - 1]
-				if factory_x > last_nucleotide_x:
-					phase = Phase.FINISHING_LAST_PULSE
+	# ---------- 1. DERIVE VISUAL HELICASE POSITION ----------
+	# helicase_x is computed from helicase_mgr's discrete slot index and eased step_t.
+	# This is the only place helicase_x and factory_x are written.
+	if helicase_mgr != null:
+		var idx = helicase_mgr.get_slot_index()
+		var eased = helicase_mgr.get_eased_step_t()
+		var last_valid = num_nucleotide_slots - 1
+		if idx >= last_valid:
+			# Helicase is past the last slot (finishing phase) — extrapolate using slot spacing
+			var overshoot = (idx - last_valid + eased) * nucleotide_slot_spacing
+			helicase_x = nucleotide_original_x[last_valid] + overshoot
+		else:
+			helicase_x = lerp(nucleotide_original_x[idx], nucleotide_original_x[idx + 1], eased)
+		factory_x = helicase_x - gap_width
+		settle_blend = helicase_mgr.get_settling_blend()
 
-			Phase.FINISHING_LAST_PULSE:
-				match pulse_state:
-					PulseState.GROWING:
-						pulse_offset = min(pulse_offset + pulse_speed * delta, pulse_width)
-						if pulse_offset >= pulse_width:
-							pulse_state = PulseState.SHRINKING
-					PulseState.SHRINKING:
-						pulse_offset = max(pulse_offset - pulse_speed * delta, 0.0)
-						if pulse_offset <= 0.0:
-							pulse_state = PulseState.GROWING
-					PulseState.DONE:
-						pulse_offset = 0.0
-				var pulse_ratio2 = pulse_offset / pulse_width
-				loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio2)
-				population_left_edge = factory_x - pulse_offset
-				var all_settled = baseline_switched
-				if all_settled:
-					for i in range(template_strand_bottom.size()):
-						if abs(template_strand_bottom[i].position.y - new_bottom_template_y) > settling_threshold:
-							all_settled = false
-							break
-				if all_settled:
-					settling_t = 0.0
-					settling_loop_depth_start = loop_depth
-					phase = Phase.SETTLING
+		# Trombone loop: pulse_offset animates continuously based on slot progress.
+		# Each full slot step = one full pulse cycle.
+		var slot_frac = fmod(float(idx) + eased, 2.0) / 2.0
+		if slot_frac < 0.5:
+			pulse_offset = slot_frac * 2.0 * nucleotide_slot_spacing
+		else:
+			pulse_offset = (1.0 - (slot_frac - 0.5) * 2.0) * nucleotide_slot_spacing
+		var pulse_ratio = pulse_offset / nucleotide_slot_spacing
 
-			Phase.SETTLING:
-				settling_t += delta
-				var t = clamp(settling_t / settling_duration, 0.0, 1.0)
-				var eased_t = smoothstep(0.0, 1.0, t)
-				loop_depth = lerp(settling_loop_depth_start, 0.0, eased_t)
-				settle_blend = eased_t
-				if t >= 1.0:
-					loop_depth = 0.0
-					settle_blend = 1.0
-					phase = Phase.DONE
-					for j in range(template_strand_bottom.size()):
-						if nucleotide_proximity_state[j] == ProximityState.INSIDE \
-						and nucleotide_entered_push_direction[j] \
-						and nucleotide_synthesis_state[j] == SynthesisCrossState.NONE:
-							nucleotide_synthesis_state[j] = SynthesisCrossState.COMPLETED
-							synthesized_bases[j] = _spawn_complement_base(j)
-							hydrogen_bonds[j] = _spawn_hydrogen_bonds(j)
-							# Assign to fragment using pulse cycle boundary
-							var sweep_pulse_cycle = int((nucleotide_original_x[j] - nucleotide_original_x[0]) / pulse_width)
-							var needs_new_frag = (sweep_pulse_cycle != last_synthesis_pulse_cycle)
-							if needs_new_frag:
-								if current_fragment_index >= 0 and not okazaki_fragments[current_fragment_index].complete:
-									_close_okazaki_fragment(current_fragment_index)
-								current_fragment_index = _start_new_okazaki_fragment()
-							okazaki_fragments[current_fragment_index].slots.append(j)
-							last_synthesis_pulse_cycle = sweep_pulse_cycle
-							print("[t=%s] nucleotide_slot[%d] COMPLETED via end-of-run sweep" % [
-								Time.get_ticks_msec(), j
-							])
+		var phase = helicase_mgr.get_phase()
+		if phase == helicase_mgr.Phase.DONE:
+			loop_depth = 0.0
+			settle_blend = 1.0
+		elif phase == helicase_mgr.Phase.SETTLING:
+			loop_depth = lerp(settling_loop_depth_start, 0.0, settle_blend)
+		else:
+			loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio)
 
-			Phase.DONE:
-				settle_blend = 1.0
-				if not synthesis_circle_faded:
-					synthesis_circle_faded = true
-					var fade_tween = create_tween()
-					fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, fade_duration)
-					if top_polymerase:
-						fade_tween.parallel().tween_property(top_polymerase, "modulate:a", 0.0, fade_duration)
-					if helicase_node:
-						fade_tween.parallel().tween_property(helicase_node, "modulate:a", 0.0, fade_duration)
-					var last = num_nucleotide_slots - 1
-					var wobble_last = nucleotide_bases[last].position.y
-					marker_new_3p = _spawn_marker("3'", Vector2(
-						nucleotide_original_x[last] + %ThemeManager.marker_offset,
-						new_bottom_template_y + dna_ribbons_gap + wobble_last + new_strand_backbone_delta[last]
-					))
-					marker_new_3p.modulate.a = 0.0  # Hidden until ligase joins fragments
-					# Sweep: catch any leading bases not yet spawned.
-					for i in range(num_nucleotide_slots):
-						if leading_synthesized_bases[i] == null:
-							leading_synthesized_bases[i] = _spawn_leading_base(i, dna_sequence.get_complement(i))
-							leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
-					# Close the last Okazaki fragment
-					if current_fragment_index >= 0 and not okazaki_fragments[current_fragment_index].complete:
-						_close_okazaki_fragment(current_fragment_index)
+		population_left_edge = factory_x - pulse_offset
 
-		# ---- State logic that runs every frame (even if not playing, but we keep it here for clarity) ----
+	# ---------- 2. STATE UPDATE (only if not manually overridden) ----------
+	if not manual_override and helicase_mgr != null:
+		var phase = helicase_mgr.get_phase()
+
+		# FINISHING_LAST_PULSE: sweep remaining lagging slots, then hand off to
+		# helicase_mgr to step through remaining leading slots naturally.
+		# Guard: extra_steps_total == 0 means start_finishing hasn't been called yet.
+		if phase == helicase_mgr.Phase.FINISHING_LAST_PULSE and helicase_mgr.extra_steps_total == 0:
+			# Catch any lagging slots still in the loop
+			for j in range(num_nucleotide_slots):
+				if nucleotide_synthesis_state[j] == SynthesisCrossState.NONE:
+					nucleotide_synthesis_state[j] = SynthesisCrossState.COMPLETED
+					synthesized_bases[j] = _spawn_complement_base(j)
+					hydrogen_bonds[j] = _spawn_hydrogen_bonds(j)
+					_assign_to_okazaki_fragment(j)
+					print("[t=%s] nucleotide_slot[%d] COMPLETED via end-of-run sweep" % [Time.get_ticks_msec(), j])
+			# Close the last open Okazaki fragment
+			if current_fragment_index >= 0 and not okazaki_fragments[current_fragment_index].complete:
+				_close_okazaki_fragment(current_fragment_index)
+			settling_loop_depth_start = loop_depth
+			# Count leading slots still ahead of factory_x — helicase steps through
+			# exactly this many more times so they spawn one by one, not all at once
+			var remaining_leading = 0
+			for i in range(num_nucleotide_slots):
+				if nucleotide_original_x[i] > factory_x:
+					remaining_leading += 1
+			helicase_mgr.start_finishing(remaining_leading)
+
+		# DONE: fade enzymes, spawn final markers
+		if phase == helicase_mgr.Phase.DONE and not synthesis_circle_faded:
+			synthesis_circle_faded = true
+			var fade_tween = create_tween()
+			fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, fade_duration)
+			if top_polymerase:
+				fade_tween.parallel().tween_property(top_polymerase, "modulate:a", 0.0, fade_duration)
+			if helicase_node:
+				fade_tween.parallel().tween_property(helicase_node, "modulate:a", 0.0, fade_duration)
+			var last = num_nucleotide_slots - 1
+			var wobble_last = nucleotide_bases[last].position.y
+			marker_new_3p = _spawn_marker("3'", Vector2(
+				nucleotide_original_x[last] + %ThemeManager.marker_offset,
+				new_bottom_template_y + dna_ribbons_gap + wobble_last + new_strand_backbone_delta[last]
+			))
+			marker_new_3p.modulate.a = 0.0  # Hidden until ligase joins fragments
+
+		# ---- Enzyme positions ----
 		synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
 		if top_polymerase:
 			top_polymerase.position = Vector2(factory_x, straight_y - dna_ribbons_gap - new_bottom_template_offset)
 		if helicase_node:
 			helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
 
-		if phase != Phase.DONE:
+		if phase != helicase_mgr.Phase.DONE:
 			for i in range(template_strand_bottom.size()):
 				template_strand_bottom[i].progress = track_length - nucleotide_original_x[i]
 
-		# ---- Lagging strand synthesis logic (existing) ----
+		# ---- Lagging strand: trombone + proximity synthesis ----
+		# (Synthesis firing now also happens in _on_helicase_slot_reached,
+		#  but proximity/transfer state tracking still runs here.)
 		for i in range(template_strand_bottom.size()):
 			var nucleotide_y = template_strand_bottom[i].position.y
 			if nucleotide_y > nucleotide_max_y_reached[i]:
@@ -576,47 +551,28 @@ func _process(delta):
 							nucleotide_synthesis_state[i] = SynthesisCrossState.COMPLETED
 							synthesized_bases[i] = _spawn_complement_base(i)
 							hydrogen_bonds[i] = _spawn_hydrogen_bonds(i)
-							# ---- Assign to Okazaki fragment ----
-							# A new fragment starts when we're in a different pulse cycle
-							# than the last synthesized base.
-							var current_pulse_cycle = int((helicase_x - gap_width) / pulse_width)
-							var needs_new_frag = (current_pulse_cycle != last_synthesis_pulse_cycle)
-							if needs_new_frag:
-								if current_fragment_index >= 0 and not okazaki_fragments[current_fragment_index].complete:
-									_close_okazaki_fragment(current_fragment_index)
-								current_fragment_index = _start_new_okazaki_fragment()
-							okazaki_fragments[current_fragment_index].slots.append(i)
-							last_synthesis_pulse_cycle = current_pulse_cycle
-							print("[OKAZAKI] Slot %d assigned to fragment #%d (pulse_cycle=%d, needs_new=%s)" % [i, current_fragment_index, current_pulse_cycle, str(needs_new_frag)])
+							_assign_to_okazaki_fragment(i)
 
 			nucleotide_previous_x[i] = current_x
 
 		for i in range(template_strand_bottom.size()):
 			var nucleotide_slot = template_strand_bottom[i]
 			var x = nucleotide_original_x[i]
-			var in_loop = (phase != Phase.DONE) and x >= population_left_edge and x <= helicase_x
+			var in_loop = (phase != helicase_mgr.Phase.DONE) and x >= population_left_edge and x <= helicase_x
 			if in_loop and not nucleotide_slot.is_in_group(LOOP_POPULATION_GROUP):
 				nucleotide_slot.add_to_group(LOOP_POPULATION_GROUP)
 			elif not in_loop and nucleotide_slot.is_in_group(LOOP_POPULATION_GROUP):
 				nucleotide_slot.remove_from_group(LOOP_POPULATION_GROUP)
 
-		# ---- Leading strand synthesis (Option B: Position-Based) ----
-		# The leading polymerase position is factory_x (since top_polymerase follows factory_x)
-		var leading_polymerase_x = factory_x
-
-		# Determine how many top-strand bases have been passed by the leading polymerase
+		# ---- Leading strand synthesis ----
 		var leading_synth_count = 0
 		for i in range(num_nucleotide_slots):
-			if nucleotide_original_x[i] <= leading_polymerase_x:
+			if nucleotide_original_x[i] <= factory_x:
 				leading_synth_count += 1
 			else:
 				break
-
-		# Spawn leading bases as needed (only if not already synthesized)
 		for i in range(leading_synth_count):
 			if leading_synthesized_bases[i] == null:
-				# The leading strand base is the complement of the top template.
-				# Since top template is complement of bottom, leading base = bottom base.
 				var bottom_base = dna_sequence.get_complement(i)
 				leading_synthesized_bases[i] = _spawn_leading_base(i, bottom_base)
 				leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
@@ -624,14 +580,14 @@ func _process(delta):
 		# Emit progress for the UI
 		progress_changed.emit(get_total_progress())
 
-	# ---------- 2. VISUAL RENDERING (Always runs, even when paused) ----------
-	# Rail rebuilds here so they always reflect current state, even when paused
-	# or after scrubbing/stopping.
+	# ---------- 3. VISUAL RENDERING (Always runs, even when paused) ----------
 	_rebuild_rail()
 	_rebuild_top_rail()
 
-	var virtual_time = (helicase_x - gap_width) / sweep_speed if sweep_speed > 0 else 0.0
-	var wobble_t = virtual_time
+	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
+	var wobble_t = helicase_x / nucleotide_slot_spacing  # Continuous wobble driver
+
+
 
 	# ---- Backbone for bottom template (existing) ----
 	var backbone_points = PackedVector2Array()
@@ -764,7 +720,7 @@ func _process(delta):
 			# Height is negative: top template slot is above bottom template slot.
 			var bond_height = (slot_y + wobble_y) - container_y
 			_update_hydrogen_bond_height(template_hydrogen_bonds[i], bond_height)
-			template_hydrogen_bonds[i].visible = (world_x >= helicase_x)
+			template_hydrogen_bonds[i].visible = (world_x >= helicase_x) and not is_done
 	top_strand_backbone_line.points = top_strand_points
 	top_strand_backbone_line.width = %ThemeManager.backbone_line_width
 	_update_bond_marks_top_strand(top_strand_points)
@@ -843,7 +799,7 @@ func _process(delta):
 			nucleotide_original_x[0] - %ThemeManager.marker_offset,
 			leading_y - %ThemeManager.backbone_offset_distance
 		))
-	
+
 	# Update 5' marker position (follows wobble)
 	if marker_leading_5p:
 		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
@@ -852,7 +808,7 @@ func _process(delta):
 			nucleotide_original_x[0] - %ThemeManager.marker_offset,
 			leading_y - %ThemeManager.backbone_offset_distance
 		)
-	
+
 	# 3' marker: appears at the rightmost synthesized base
 	# For the leading strand, the 3' end is at the growing tip (rightmost synthesized base)
 	# We'll show it when at least one base is synthesized
@@ -869,7 +825,7 @@ func _process(delta):
 				nucleotide_original_x[last_synth_index] + %ThemeManager.marker_offset,
 				leading_y - %ThemeManager.backbone_offset_distance
 			))
-	
+
 	# Update 3' marker position (follows the rightmost synthesized base)
 	if marker_leading_3p:
 		var last_synth_index = -1
@@ -892,11 +848,11 @@ func _process(delta):
 
 func toggle_play():
 	manual_override = !manual_override
-	if not manual_override:
-		if phase == Phase.DONE:
+	if not manual_override and helicase_mgr != null:
+		if helicase_mgr.is_done():
 			scrub_to_nucleotide_index(0)
-			phase = Phase.INTRO
-		if phase == Phase.INTRO:
+			helicase_mgr.start_intro()
+		if helicase_mgr.get_phase() == helicase_mgr.Phase.INTRO:
 			_run_intro()
 		else:
 			synthesis_circle.modulate.a = 1.0
@@ -904,7 +860,10 @@ func toggle_play():
 				top_polymerase.modulate.a = 1.0
 			if helicase_node:
 				helicase_node.modulate.a = 1.0
+			helicase_mgr.resume()
 		synthesis_circle_faded = false
+	elif helicase_mgr != null:
+		helicase_mgr.pause()
 
 func _run_intro():
 	# Position enzymes left of the strand, then fade in and slide to start position.
@@ -919,13 +878,11 @@ func _run_intro():
 		helicase_node.position = Vector2(intro_x, straight_y - dna_ribbons_gap / 2.0)
 
 	var tween = create_tween().set_parallel(true)
-	# Fade in
 	tween.tween_property(synthesis_circle, "modulate:a", 1.0, fade_time)
 	if top_polymerase:
 		tween.tween_property(top_polymerase, "modulate:a", 1.0, fade_time)
 	if helicase_node:
 		tween.tween_property(helicase_node, "modulate:a", 1.0, fade_time)
-	# Slide to starting position after fade
 	tween.tween_property(synthesis_circle, "position",
 		Vector2(factory_x, new_bottom_template_y), slide_time).set_delay(fade_time)
 	if top_polymerase:
@@ -934,59 +891,61 @@ func _run_intro():
 	if helicase_node:
 		tween.tween_property(helicase_node, "position",
 			Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0), slide_time).set_delay(fade_time)
-	# Start simulation after intro completes
+	# Notify helicase_mgr when intro tween completes → starts SWEEPING
 	tween.chain().tween_callback(func():
-		phase = Phase.SWEEPING
+		if helicase_mgr != null:
+			helicase_mgr.finish_intro()
 	)
 
 func scrub_to(progress: float):
 	progress = clamp(progress, 0.0, 1.0)
 
-	var start_helicase_x = gap_width
-	var last_nucleotide_x = nucleotide_original_x[num_nucleotide_slots - 1]
-	var end_helicase_x = last_nucleotide_x + gap_width + pulse_width
-	var total_distance = end_helicase_x - start_helicase_x
+	# Map progress to a slot index
+	var target_slot = int(progress * (num_nucleotide_slots - 1))
+	target_slot = clamp(target_slot, 0, num_nucleotide_slots - 1)
 
-	var target_helicase_x = lerp(start_helicase_x, end_helicase_x, progress)
+	# Derive helicase_x and factory_x from target slot for this scrub
+	var target_helicase_x = nucleotide_original_x[target_slot]
 	var target_factory_x = target_helicase_x - gap_width
 
-	# Calculate pulse offset for this exact time
-	var virtual_time = (target_helicase_x - gap_width) / sweep_speed
-	var cycle_duration = 2.0 * pulse_time_budget
-	var t_mod = fmod(virtual_time, cycle_duration)
+	# Update helicase_mgr discrete state
+	if helicase_mgr != null:
+		helicase_mgr.scrub_to_slot(target_slot)
 
-	var target_pulse_offset: float
-	if t_mod < pulse_time_budget:
-		target_pulse_offset = (t_mod / pulse_time_budget) * pulse_width
-	else:
-		var shrinking_t = t_mod - pulse_time_budget
-		target_pulse_offset = (1.0 - (shrinking_t / pulse_time_budget)) * pulse_width
-
-	# Apply state
+	# Derive visual state
 	helicase_x = target_helicase_x
 	factory_x = target_factory_x
-	pulse_offset = target_pulse_offset
-	var pulse_ratio = pulse_offset / pulse_width
+
+	# Compute pulse_offset from slot position for trombone visual
+	var slot_frac = fmod(float(target_slot), 2.0) / 2.0
+	if slot_frac < 0.5:
+		pulse_offset = slot_frac * 2.0 * nucleotide_slot_spacing
+	else:
+		pulse_offset = (1.0 - (slot_frac - 0.5) * 2.0) * nucleotide_slot_spacing
+	var pulse_ratio = pulse_offset / nucleotide_slot_spacing
 	loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio)
 	population_left_edge = factory_x - pulse_offset
 
 	baseline_switched = (target_factory_x >= nucleotide_original_x[0])
 
-	# Handle phase
-	if target_helicase_x >= end_helicase_x - pulse_width:
-		phase = Phase.DONE
-		loop_depth = 0.0
-		settle_blend = 1.0
-		synthesis_circle_faded = true
-		synthesis_circle.modulate.a = 0.0
-		if top_polymerase:
-			top_polymerase.modulate.a = 0.0
-	elif target_factory_x > nucleotide_original_x[num_nucleotide_slots - 1]:
-		phase = Phase.FINISHING_LAST_PULSE
-		settle_blend = 0.0
-	else:
-		phase = Phase.SWEEPING
-		settle_blend = 0.0
+	# Set phase on helicase_mgr based on scrub position
+	if helicase_mgr != null:
+		if target_slot >= num_nucleotide_slots - 1:
+			helicase_mgr.set_phase(helicase_mgr.Phase.DONE)
+			loop_depth = 0.0
+			settle_blend = 1.0
+			synthesis_circle_faded = true
+			synthesis_circle.modulate.a = 0.0
+			if top_polymerase:
+				top_polymerase.modulate.a = 0.0
+			if helicase_node:
+				helicase_node.modulate.a = 0.0
+		elif target_factory_x > nucleotide_original_x[num_nucleotide_slots - 1]:
+			helicase_mgr.set_phase(helicase_mgr.Phase.FINISHING_LAST_PULSE)
+			settle_blend = 0.0
+		else:
+			helicase_mgr.set_phase(helicase_mgr.Phase.SWEEPING)
+			settle_blend = 0.0
 
 	# ---- Clear and rebuild lagging strand bases ----
 	for base in synthesized_bases:
@@ -1031,9 +990,12 @@ func scrub_to(progress: float):
 			marker_leading_3p.queue_free()
 			marker_leading_3p = null
 
+	var is_done_phase = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
 	var lagging_synth_count = 0
 	for i in range(num_nucleotide_slots):
-		if phase == Phase.DONE or nucleotide_original_x[i] < population_left_edge:
+		if is_done_phase:
+			lagging_synth_count += 1  # All slots synthesized when done
+		elif nucleotide_original_x[i] < population_left_edge:
 			if nucleotide_original_x[i] <= target_factory_x:
 				lagging_synth_count += 1
 			else:
@@ -1102,7 +1064,8 @@ func scrub_to(progress: float):
 	var leading_polymerase_x = target_factory_x  # same as factory_x
 	var leading_synth_count = 0
 	for i in range(num_nucleotide_slots):
-		if nucleotide_original_x[i] <= leading_polymerase_x:
+		# When DONE, all leading bases are synthesized regardless of polymerase position
+		if is_done_phase or nucleotide_original_x[i] <= leading_polymerase_x:
 			leading_synth_count += 1
 		else:
 			break
@@ -1136,20 +1099,8 @@ func scrub_to(progress: float):
 	queue_redraw()
 
 func scrub_to_nucleotide_index(index: int):
-	index = clamp(index, 0, num_nucleotide_slots)
-	var start_x = gap_width
-	var total_distance = (nucleotide_original_x[num_nucleotide_slots - 1] + gap_width + pulse_width) - start_x
-
-	var target_helicase_x: float
-	if index == 0:
-		target_helicase_x = gap_width
-	elif index == num_nucleotide_slots:
-		var last_x = nucleotide_original_x[num_nucleotide_slots - 1]
-		target_helicase_x = last_x + gap_width + pulse_width
-	else:
-		target_helicase_x = nucleotide_original_x[index] + gap_width
-
-	var progress = clamp((target_helicase_x - start_x) / total_distance, 0.0, 1.0)
+	index = clamp(index, 0, num_nucleotide_slots - 1)
+	var progress = float(index) / float(num_nucleotide_slots - 1)
 	scrub_to(progress)
 
 func step_forward():
@@ -1157,7 +1108,7 @@ func step_forward():
 	if count < num_nucleotide_slots:
 		scrub_to_nucleotide_index(count + 1)
 	else:
-		scrub_to_nucleotide_index(num_nucleotide_slots)
+		scrub_to_nucleotide_index(num_nucleotide_slots - 1)
 
 func step_backward():
 	var count = get_synthesized_count()
@@ -1171,12 +1122,9 @@ func step_backward():
 # ==========================================
 
 func get_total_progress() -> float:
-	var start_x = gap_width
-	var last_x = nucleotide_original_x[num_nucleotide_slots - 1]
-	var end_helicase_x = last_x + gap_width + pulse_width
-	var total_distance = end_helicase_x - start_x
-	if total_distance <= 0: return 0.0
-	return clamp((helicase_x - start_x) / total_distance, 0.0, 1.0)
+	if num_nucleotide_slots <= 1: return 0.0
+	if helicase_mgr == null: return 0.0
+	return clamp(float(helicase_mgr.get_slot_index()) / float(num_nucleotide_slots - 1), 0.0, 1.0)
 
 func get_synthesized_count() -> int:
 	var count = 0
@@ -1201,6 +1149,36 @@ func get_sequence_rich_text() -> String:
 			text += " "
 	text += "3'"
 	return text
+
+# ==========================================
+# HELICASE SIGNAL HANDLERS
+# ==========================================
+
+func _on_helicase_slot_reached(index: int) -> void:
+	# Fired by helicase_mgr each time it steps to a new slot.
+	# Leading strand synthesis is handled by position in _process;
+	# this is a hook for future per-slot logic (e.g. primase, clamps).
+	print("[HELICASE] slot_reached: %d" % index)
+
+func _on_helicase_phase_changed(new_phase: int) -> void:
+	print("[HELICASE] phase_changed: %d" % new_phase)
+
+# ==========================================
+# OKAZAKI FRAGMENT HELPERS
+# ==========================================
+
+func _assign_to_okazaki_fragment(slot_index: int) -> void:
+	# Fragment boundary uses slot position arithmetic — same as scrub rebuild.
+	# Slots within the same pulse_width window belong to the same fragment.
+	var current_pulse_cycle = int((nucleotide_original_x[slot_index] - nucleotide_original_x[0]) / pulse_width)
+	var needs_new_frag = (current_pulse_cycle != last_synthesis_pulse_cycle)
+	if needs_new_frag:
+		if current_fragment_index >= 0 and not okazaki_fragments[current_fragment_index].complete:
+			_close_okazaki_fragment(current_fragment_index)
+		current_fragment_index = _start_new_okazaki_fragment()
+	okazaki_fragments[current_fragment_index].slots.append(slot_index)
+	last_synthesis_pulse_cycle = current_pulse_cycle
+	print("[OKAZAKI] Slot %d assigned to fragment #%d (pulse_cycle=%d, needs_new=%s)" % [slot_index, current_fragment_index, current_pulse_cycle, str(needs_new_frag)])
 
 # ==========================================
 # SPAWNING FUNCTIONS
@@ -1473,6 +1451,14 @@ func _rebuild_top_rail():
 	var unzipped_y = new_top_template_y
 	var first_slot_x = nucleotide_original_x[0] if nucleotide_original_x.size() > 0 else 0.0
 
+	# When done, top template stays at its unzipped position — it's now paired with the leading strand
+	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
+	if is_done:
+		curve.add_point(Vector2(track_length, unzipped_y))
+		curve.add_point(Vector2(0, unzipped_y))
+		top_rail_path.curve = curve
+		return
+
 	if helicase_x <= first_slot_x:
 		curve.add_point(Vector2(track_length, bonded_y))
 		curve.add_point(Vector2(-gap_width, bonded_y))
@@ -1488,7 +1474,8 @@ func _rebuild_top_rail():
 	top_rail_path.curve = curve
 
 func _rebuild_rail():
-	if phase == Phase.DONE:
+	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
+	if is_done:
 		var flat_curve = Curve2D.new()
 		var rest_y = new_bottom_template_y if baseline_switched else straight_y
 		flat_curve.add_point(Vector2(track_length, rest_y))

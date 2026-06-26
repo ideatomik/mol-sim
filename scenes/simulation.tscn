@@ -14,7 +14,6 @@ num_nucleotide_slots = 36
 dna_ribbons_gap = 60.0
 max_loop_depth = 230.0
 armed_depth_fraction = 0.5
-pulse_nucleotide_count = 5
 settling_threshold = 18.0
 wobble_amplitude = 1.0
 wobble_speed = 1.0
