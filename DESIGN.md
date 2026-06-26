@@ -1,5 +1,5 @@
 # MolSim — Design Document
-_Last updated: v70.2 session_
+_Last updated: v70.3 session_
 
 ---
 
@@ -63,31 +63,93 @@ MolSim follows the **E. coli replication model** for accuracy and visual clarity
 
 ## Architecture
 
-### Current state (v70.2)
-Everything lives in `simulation.gd`. This is intentional for now — premature
-modularization before the feature set is stable adds overhead without benefit.
-
-### Target architecture (SimulationManager refactor)
-The refactor should be driven by the complexity system design first — toggles before
-anything else. Proposed module boundaries follow biological boundaries:
+### Current state (v70.3)
+`helicase.gd` has been extracted as the first sub-manager. `simulation.gd` is now
+a template manager + visual coordinator. The discrete helicase model is live.
 
 ```
-simulation.gd (thin coordinator)
-├── SimulationManager         — owns sequence resource, complexity toggles, phase flow
-├── replication_manager.gd    — helicase, polymerases, Okazaki logic, synthesis states
-├── replisome_visual.gd       — tau body, clamps, enzyme geometry (toggle-aware)
-├── transcription_manager.gd  — RNA Pol, promoter, mRNA strand
-├── translation_manager.gd    — ribosome, tRNA, polypeptide
-└── error_mechanics.gd        — proofreading, MMR; shared by replication + transcription
+simulation.gd  — Template Manager + visual coordinator
+├── helicase.gd  — discrete slot stepping, phase state machine (EXTRACTED ✓)
+└── [synthesis logic still in simulation.gd, pending replication_manager migration]
+```
+
+### replication_manager.gd migration — two-phase plan
+
+**Phase 1 (next):** Move all synthesis state variables and spawning functions into
+`replication_manager.gd`. Keep the calling pattern simple: simulation.gd calls
+`replication_manager.update(delta)` from its `_process`, passing context it needs
+(helicase_x, factory_x, population_left_edge, etc.). Data lives in the right place;
+signal architecture comes in Phase 2.
+
+What moves in Phase 1:
+- All `nucleotide_*` per-slot state arrays
+- `synthesized_bases`, `hydrogen_bonds` (lagging)
+- `leading_synthesized_bases`, `leading_hydrogen_bonds`, `leading_backbone_line`, `leading_strand_bond_marks`
+- `okazaki_fragments`, `current_fragment_index`, `last_synthesis_pulse_cycle`
+- `new_strand_backbone_line`, `new_strand_backbone_delta`
+- `baseline_switched`, `synthesis_circle_faded`, `manual_override`
+- All lagging/leading markers: `marker_new_5p/3p`, `marker_leading_5p/3p`
+- `NucleotideTransferState`, `ProximityState`, `SynthesisCrossState` enums
+- Spawning functions: `_spawn_complement_base`, `_spawn_leading_base`,
+  `_spawn_hydrogen_bonds`, `_spawn_leading_hydrogen_bonds`
+- Fragment functions: `_start_new_okazaki_fragment`, `_close_okazaki_fragment`,
+  `_assign_to_okazaki_fragment`
+- Bond mark functions: `_update_bond_marks_fragment`, `_update_bond_marks_leading`,
+  `_create_bond_mark_sprite`, `_create_bond_mark_sprite_reversed`
+- `get_synthesized_count`, `get_sequence_rich_text`
+- Synthesis logic blocks from `_process` and `scrub_to`
+
+What stays in simulation.gd:
+- Template strand nodes/arrays, geometry, sequence resource
+- `helicase_x`, `factory_x`, `pulse_offset`, `loop_depth`, visual geometry
+- Rail rebuilds, visual rendering, marker tracking for template strands
+- `toggle_play`, `_run_intro`, `scrub_to`, step functions
+- `_setup_*` functions, `_spawn_nucleotide_slots`, `_spawn_top_strand`
+
+**Phase 2 (later, with okazaki_manager):** Convert to proper signal-based
+architecture. Extract Okazaki fragment logic into `okazaki_manager.gd`.
+Signals replace the `update(delta)` calling pattern.
+
+### Target architecture
+```
+ComplexityManager (Node → autoload later)
+│   @export toggles per feature (okazaki_fragments, sliding_clamps, etc.)
+│   is_enabled("feature_name") -> bool
+│
+ThemeManager (Node → autoload later)
+│   @export visual parameters. Same pattern as ComplexityManager.
+│
+simulation.gd  — Template Manager (thin scene coordinator)
+│   Owns original DNA strands, rails, sequence resource, geometry constants.
+│   Exposes slot positions, bases, and geometry to process managers.
+│   Does NOT own any synthesized products.
+│
+├── replication_manager.gd  — thin coordinator for replication
+│   Owns shared per-slot state arrays. Delegates to sub-managers.
+│   │
+│   ├── helicase.gd  ✓ DONE
+│   │   Discrete slot-by-slot stepping. Owns phase state machine.
+│   │   Emits: slot_reached(index), phase_changed(new_phase).
+│   │
+│   ├── okazaki_manager.gd  (Phase 2)
+│   │   Fragment tracking, assignment, open/close logic, sliding clamps (future).
+│   │
+│   ├── primase.gd  (future)
+│   └── ligase.gd  (future)
+│
+├── transcription_manager.gd  (future)
+└── translation_manager.gd    (future)
 ```
 
 ### Key architectural rules
-- **ThemeManager**: scene node on root, Inspector-editable, no autoload
-- **DnaSequenceResource**: will move into SimulationManager
+- **ThemeManager / ComplexityManager**: scene nodes, Inspector-editable, no autoload yet.
+  Convert to autoload once export values settle.
 - **nitrogen_base.gd**: ThemeManager-free, colors injected via `set_colors()` / `set_font()`
 - `add_child()` before `set_colors()` / `set_font()` (so `_ready()` fires first)
 - GDScript: no multiline `or` expressions (put on one line — parser bug)
 - Every new enzyme/visual designed with an on/off switch, even before toggle UI exists
+- **Signal connections**: always guard with `if not signal.is_connected(callable)`
+  before connecting in functions called on re-initialization
 
 ---
 
@@ -99,14 +161,17 @@ simulation.gd (thin coordinator)
 - **Location anchors over line numbers**: use surrounding code snippets as edit anchors
 - **Debug prints stay** until the feature they guard is confirmed stable
 - **True current version**: the uploaded file is always ground truth, not earlier pastes
+- **When combining fixes**: always diff the two versions, identify what changed,
+  apply only the additive fix to the known-good base — never rewrite from memory
 
 ---
 
 ## Roadmap
 
-### Immediate (v70.x)
-- [ ] Remove debug prints (`[OKAZAKI]`, baseline switch) — scrub now confirmed stable
-- [ ] Ligase joining Okazaki fragments into `new_strand_backbone_line` + reveal whole-strand lagging markers
+### Immediate (v70.4)
+- [ ] Remove debug prints (`[OKAZAKI]`, `[HELICASE]`, baseline switch)
+- [ ] replication_manager.gd Phase 1 migration (data + spawning, update() call pattern)
+- [ ] Ligase joining Okazaki fragments + reveal whole-strand lagging markers
 - [ ] RNA primers and primase enzyme
 
 ### Replisome visual
@@ -114,37 +179,31 @@ simulation.gd (thin coordinator)
   - τ (tau) body connecting helicase, leading polymerase, lagging polymerase, clamp loader
   - Replaces current separate synthesis circles
   - Designed as a single visual node, toggle-aware
-- [ ] Sliding clamps (β-clamp):
-  - One per Okazaki fragment on lagging strand
-  - One on leading strand
+- [ ] Sliding clamps (β-clamp): one per Okazaki fragment + one on leading strand
 
 ### Medium term
-- [ ] SimulationManager refactor — complexity toggle system designed first
-- [ ] Modular script breakdown (see architecture above)
+- [ ] replication_manager.gd Phase 2 (signal-based, okazaki_manager.gd extraction)
+- [ ] ComplexityManager node (toggles per feature, Inspector-editable first)
 - [ ] UI controller rebuild
 - [ ] Themes: Dark, Light, Dark Low-Info, Light Low-Info
-  - Low-Info variants: reduced visual complexity for autistic users
-  - Fewer simultaneous animated elements
-  - Muted palette, no high-contrast flashing
-  - Wobble disabled or greatly reduced
 
 ### Long term
 - [ ] Transcription phase
 - [ ] Error mechanics (proofreading on replication, error rates on transcription)
 - [ ] Translation phase
-- [ ] DNA sequence input UI (wire to `dna_sequence.set_from_string()`)
+- [ ] DNA sequence input UI
 
 ---
 
 ## Pinned Issues
 
 - **Scrub edge case**: occasional escaped synthesized base just left of lagging
-  polymerase during scrub. Harder to reproduce after v70.2 fix but not fully closed.
-  May need a stricter boundary condition or a different synthesis eligibility approach.
+  polymerase. Significantly improved in v70.2–v70.3 but not fully closed. Likely
+  disappears after replication_manager discrete stepping refactor.
 
 ---
 
-## Scene Structure (v70.2)
+## Scene Structure (v70.3)
 
 ```
 root (Node2D, simulation.gd)
@@ -164,4 +223,6 @@ root (Node2D, simulation.gd)
 └── UI (CanvasLayer)
     ├── SequenceLoaderPopup
     └── PlayerUI
+
+helicase.gd — added as child of simulation.gd at runtime via initialize_simulation()
 ```
