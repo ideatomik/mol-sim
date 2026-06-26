@@ -1,7 +1,7 @@
 extends Node2D
 
 # ==========================================
-# v 70.0
+# v 70.1
 # - Okazaki fragments: per-fragment Line2D backbones with Y-offset markers
 # - Helicase now fades out with polymerases at Phase.DONE
 # ==========================================
@@ -1185,7 +1185,7 @@ func get_sequence_rich_text() -> String:
 
 	for i in range(seq_string.length()):
 		var base = seq_string[i]
-		if i < synthesized_bases.size() and synthesized_bases[i] != null and is_instance_valid(synthesized_bases[i]):
+		if i < nucleotide_original_x.size() and nucleotide_original_x[i] <= helicase_x:
 			text += "[color=#4CAF50]" + base + "[/color] "
 		else:
 			text += "[color=#FFFFFF]" + base + "[/color] "
