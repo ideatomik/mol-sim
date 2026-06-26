@@ -20,8 +20,6 @@ extends Node
 @export var base_color_c: Color = Color(0.85, 0.6, 0.1, 1.0)
 @export var base_color_g: Color = Color(0.2, 0.8, 0.2, 1.0)
 @export var base_label_color: Color = Color(1.0, 1.0, 1.0, 1.0)
-@export var base_label_font_size: int = 14
-@export var base_label_font: Font = null  # Leave null to use Godot default
 
 @export_group("Backbone")
 @export var backbone_color: Color = Color(0.43137255, 0.72156864, 1.0, 1.0)
@@ -56,6 +54,10 @@ extends Node
 ## Distance in pixels between the end markers and the terminal bases
 ## of their respective strands.
 @export var marker_offset: float = 24.0
+
+@export_group("Okazaki Fragments")
+## Y offset below the backbone tip where 5'/3' markers appear on completed fragments.
+@export var okazaki_marker_y_offset: float = 28.0
 
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:

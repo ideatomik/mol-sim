@@ -1,7 +1,9 @@
 extends Node2D
 
 # ==========================================
-# v 69.3 - Fix leading strand marker orientation (3' left, 5' right)
+# v 70.0
+# - Okazaki fragments: per-fragment Line2D backbones with Y-offset markers
+# - Helicase now fades out with polymerases at Phase.DONE
 # ==========================================
 
 # ---------- SIGNALS ----------
@@ -122,7 +124,6 @@ var settling_loop_depth_start: float = 0.0
 var settle_blend: float = 0.0
 
 var bond_marks: Array[Node2D] = []
-var new_strand_bond_marks: Array[Node2D] = []
 var new_strand_backbone_line: Line2D
 var new_strand_backbone_delta: Array[float] = []
 
@@ -157,6 +158,13 @@ var leading_synthesized_bases: Array = []   # Node2D references for leading stra
 var leading_hydrogen_bonds: Array = []      # Node2D containers for leading H-bonds
 var leading_backbone_line: Line2D           # Backbone for the leading strand
 var leading_strand_bond_marks: Array[Node2D] = []  # Bond marks for leading backbone
+
+# ---------- OKAZAKI FRAGMENTS (Lagging Strand) ----------
+# Each entry: { slots: Array[int], backbone: Line2D, bond_marks: Array[Node2D],
+#               marker_5p: Node2D, marker_3p: Node2D, complete: bool }
+var okazaki_fragments: Array = []
+var current_fragment_index: int = -1  # Index into okazaki_fragments of the active fragment
+var last_synthesis_pulse_cycle: int = -1  # Pulse cycle number when last base was synthesized
 
 # ==========================================
 # LIFECYCLE
@@ -199,6 +207,7 @@ func initialize_simulation(sequence: String):
 	settling_t = 0.0
 	manual_override = true  # Start paused when a new sequence loads
 	synthesis_circle_faded = false
+	last_synthesis_pulse_cycle = -1
 
 	new_bottom_template_y = straight_y + new_bottom_template_offset
 	new_top_template_y = straight_y - dna_ribbons_gap - new_bottom_template_offset
@@ -302,7 +311,6 @@ func teardown_simulation():
 	nodes_to_free.append_array(leading_hydrogen_bonds)
 	nodes_to_free.append_array(template_hydrogen_bonds)
 	nodes_to_free.append_array(bond_marks)
-	nodes_to_free.append_array(new_strand_bond_marks)
 	nodes_to_free.append_array(top_strand_bond_marks)
 	nodes_to_free.append_array(leading_strand_bond_marks)
 
@@ -337,6 +345,20 @@ func teardown_simulation():
 		if is_instance_valid(node) and node != null:
 			node.queue_free()
 
+	# Free Okazaki fragment nodes
+	for frag in okazaki_fragments:
+		if frag.has("backbone") and is_instance_valid(frag.backbone):
+			frag.backbone.queue_free()
+		for mark in frag.bond_marks:
+			if is_instance_valid(mark): mark.queue_free()
+		if frag.has("marker_5p") and frag.marker_5p and is_instance_valid(frag.marker_5p):
+			frag.marker_5p.queue_free()
+		if frag.has("marker_3p") and frag.marker_3p and is_instance_valid(frag.marker_3p):
+			frag.marker_3p.queue_free()
+	okazaki_fragments.clear()
+	current_fragment_index = -1
+
+	last_synthesis_pulse_cycle = -1
 	# Clear arrays
 	template_strand_bottom.clear()
 	nucleotide_bases.clear()
@@ -361,7 +383,6 @@ func teardown_simulation():
 	top_strand_bond_marks.clear()
 	template_hydrogen_bonds.clear()
 	bond_marks.clear()
-	new_strand_bond_marks.clear()
 	leading_strand_bond_marks.clear()
 	marker_leading_5p = null
 	marker_leading_3p = null
@@ -460,6 +481,15 @@ func _process(delta):
 							nucleotide_synthesis_state[j] = SynthesisCrossState.COMPLETED
 							synthesized_bases[j] = _spawn_complement_base(j)
 							hydrogen_bonds[j] = _spawn_hydrogen_bonds(j)
+							# Assign to fragment using pulse cycle boundary
+							var sweep_pulse_cycle = int((nucleotide_original_x[j] - nucleotide_original_x[0]) / pulse_width)
+							var needs_new_frag = (sweep_pulse_cycle != last_synthesis_pulse_cycle)
+							if needs_new_frag:
+								if current_fragment_index >= 0 and not okazaki_fragments[current_fragment_index].complete:
+									_close_okazaki_fragment(current_fragment_index)
+								current_fragment_index = _start_new_okazaki_fragment()
+							okazaki_fragments[current_fragment_index].slots.append(j)
+							last_synthesis_pulse_cycle = sweep_pulse_cycle
 							print("[t=%s] nucleotide_slot[%d] COMPLETED via end-of-run sweep" % [
 								Time.get_ticks_msec(), j
 							])
@@ -472,17 +502,23 @@ func _process(delta):
 					fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, fade_duration)
 					if top_polymerase:
 						fade_tween.parallel().tween_property(top_polymerase, "modulate:a", 0.0, fade_duration)
+					if helicase_node:
+						fade_tween.parallel().tween_property(helicase_node, "modulate:a", 0.0, fade_duration)
 					var last = num_nucleotide_slots - 1
 					var wobble_last = nucleotide_bases[last].position.y
 					marker_new_3p = _spawn_marker("3'", Vector2(
 						nucleotide_original_x[last] + %ThemeManager.marker_offset,
 						new_bottom_template_y + dna_ribbons_gap + wobble_last + new_strand_backbone_delta[last]
 					))
+					marker_new_3p.modulate.a = 0.0  # Hidden until ligase joins fragments
 					# Sweep: catch any leading bases not yet spawned.
 					for i in range(num_nucleotide_slots):
 						if leading_synthesized_bases[i] == null:
 							leading_synthesized_bases[i] = _spawn_leading_base(i, dna_sequence.get_complement(i))
 							leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
+					# Close the last Okazaki fragment
+					if current_fragment_index >= 0 and not okazaki_fragments[current_fragment_index].complete:
+						_close_okazaki_fragment(current_fragment_index)
 
 		# ---- State logic that runs every frame (even if not playing, but we keep it here for clarity) ----
 		synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
@@ -535,6 +571,18 @@ func _process(delta):
 							nucleotide_synthesis_state[i] = SynthesisCrossState.COMPLETED
 							synthesized_bases[i] = _spawn_complement_base(i)
 							hydrogen_bonds[i] = _spawn_hydrogen_bonds(i)
+							# ---- Assign to Okazaki fragment ----
+							# A new fragment starts when we're in a different pulse cycle
+							# than the last synthesized base.
+							var current_pulse_cycle = int((helicase_x - gap_width) / pulse_width)
+							var needs_new_frag = (current_pulse_cycle != last_synthesis_pulse_cycle)
+							if needs_new_frag:
+								if current_fragment_index >= 0 and not okazaki_fragments[current_fragment_index].complete:
+									_close_okazaki_fragment(current_fragment_index)
+								current_fragment_index = _start_new_okazaki_fragment()
+							okazaki_fragments[current_fragment_index].slots.append(i)
+							last_synthesis_pulse_cycle = current_pulse_cycle
+							print("[OKAZAKI] Slot %d assigned to fragment #%d (pulse_cycle=%d, needs_new=%s)" % [i, current_fragment_index, current_pulse_cycle, str(needs_new_frag)])
 
 			nucleotide_previous_x[i] = current_x
 
@@ -609,10 +657,20 @@ func _process(delta):
 	backbone_line.points = backbone_points
 	backbone_line.width = %ThemeManager.backbone_line_width
 
-	# ---- Lagging strand new strand (existing) ----
-	var new_strand_points = PackedVector2Array()
-	for i in range(synthesized_bases.size()):
-		if synthesized_bases[i] != null:
+	# ---- Lagging strand: Okazaki fragments ----
+	# new_strand_backbone_line is kept empty here; ligase will populate it later.
+	new_strand_backbone_line.points = PackedVector2Array()
+
+	var y_off = %ThemeManager.okazaki_marker_y_offset
+
+	for frag_idx in range(okazaki_fragments.size()):
+		var frag = okazaki_fragments[frag_idx]
+		var frag_points = PackedVector2Array()
+
+		for si in range(frag.slots.size()):
+			var i = frag.slots[si]
+			if synthesized_bases[i] == null:
+				continue
 			var template_slot = template_strand_bottom[i]
 			var wobble_y = nucleotide_bases[i].position.y
 			var world_x = template_slot.position.x
@@ -627,10 +685,42 @@ func _process(delta):
 				%ThemeManager.backbone_offset_distance,
 				clamp(%ThemeManager.backbone_offset_smoothing_speed * delta, 0.0, 1.0)
 			)
-			new_strand_points.append(Vector2(world_x, world_y + new_strand_backbone_delta[i]))
-	new_strand_backbone_line.points = new_strand_points
-	new_strand_backbone_line.width = %ThemeManager.backbone_line_width
-	_update_bond_marks_new_strand(new_strand_points)
+			frag_points.append(Vector2(world_x, world_y + new_strand_backbone_delta[i]))
+
+		frag.backbone.points = frag_points
+		frag.backbone.width = %ThemeManager.backbone_line_width
+		_update_bond_marks_fragment(frag, frag_points)
+
+		# Spawn markers once fragment is complete and has at least 1 point.
+		# Single-slot: combined "5'-3'" centered marker.
+		# Multi-slot: 5' on left (origin/index 0), 3' on right (tip/last index).
+		if frag.complete and frag_points.size() >= 1:
+			var tip_pt = frag_points[frag_points.size() - 1]
+			var origin_pt = frag_points[0]
+
+			if frag_points.size() == 1:
+				if frag.marker_5p == null:
+					frag.marker_5p = _spawn_marker("5'-3'", Vector2(tip_pt.x, tip_pt.y + y_off))
+			else:
+				if frag.marker_5p == null:
+					frag.marker_5p = _spawn_marker("5'", Vector2(origin_pt.x, origin_pt.y + y_off))
+				if frag.marker_3p == null:
+					frag.marker_3p = _spawn_marker("3'", Vector2(tip_pt.x, tip_pt.y + y_off))
+
+		# Update marker positions every frame (trombone + scrub tracking).
+		# For single-slot, marker_5p holds the combined "5'-3'" marker at tip_pt.
+		# For multi-slot, marker_5p is at origin (left), marker_3p is at tip (right).
+		if frag_points.size() >= 1:
+			var tip_pt = frag_points[frag_points.size() - 1]
+			var origin_pt = frag_points[0]
+			if frag_points.size() == 1:
+				if frag.marker_5p:
+					frag.marker_5p.position = Vector2(tip_pt.x, tip_pt.y + y_off)
+			else:
+				if frag.marker_5p:
+					frag.marker_5p.position = Vector2(origin_pt.x, origin_pt.y + y_off)
+				if frag.marker_3p:
+					frag.marker_3p.position = Vector2(tip_pt.x, tip_pt.y + y_off)
 
 	_update_bond_marks(backbone_points)
 
@@ -712,6 +802,7 @@ func _process(delta):
 			template_strand_bottom[0].position.x - %ThemeManager.marker_offset,
 			new_bottom_template_y + dna_ribbons_gap + wobble_first + new_strand_backbone_delta[0]
 		))
+		marker_new_5p.modulate.a = 0.0  # Hidden until ligase joins fragments
 	if marker_new_5p:
 		var wobble_first = nucleotide_bases[0].position.y
 		marker_new_5p.position = Vector2(
@@ -739,52 +830,54 @@ func _process(delta):
 			top_strand_slots[last].position.y + top_strand_backbone_delta[last] + wobble_last
 		)
 		# ---- Leading strand markers ----
-
-	# 5' marker: at the growing tip (rightmost synthesized base)
+	# 5' marker: appears when the first leading base is synthesized
 	if marker_leading_5p == null and leading_synthesized_bases[0] != null:
-		var last_synth_index = -1
-		for i in range(leading_synthesized_bases.size()):
-			if leading_synthesized_bases[i] != null:
-				last_synth_index = i
-		if last_synth_index >= 0:
-			var wobble_last = sin(wobble_t * wobble_speed * TAU + last_synth_index * wobble_phase_offset) * wobble_amplitude
-			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
-			marker_leading_5p = _spawn_marker("5'", Vector2(
-				nucleotide_original_x[last_synth_index] + %ThemeManager.marker_offset,
-				leading_y - %ThemeManager.backbone_offset_distance
-			))
-
-	# Update 5' marker position (follows the rightmost synthesized base)
-	if marker_leading_5p:
-		var last_synth_index = -1
-		for i in range(leading_synthesized_bases.size()):
-			if leading_synthesized_bases[i] != null:
-				last_synth_index = i
-		if last_synth_index >= 0:
-			var wobble_last = sin(wobble_t * wobble_speed * TAU + last_synth_index * wobble_phase_offset) * wobble_amplitude
-			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
-			marker_leading_5p.position = Vector2(
-				nucleotide_original_x[last_synth_index] + %ThemeManager.marker_offset,
-				leading_y - %ThemeManager.backbone_offset_distance
-			)
-
-	# 3' marker: fixed at the left end (index 0, the origin of the leading strand)
-	if marker_leading_3p == null and leading_synthesized_bases[0] != null:
 		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
 		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
-		marker_leading_3p = _spawn_marker("3'", Vector2(
+		marker_leading_5p = _spawn_marker("3'", Vector2(
 			nucleotide_original_x[0] - %ThemeManager.marker_offset,
 			leading_y - %ThemeManager.backbone_offset_distance
 		))
-
-	# Update 3' marker position (follows wobble at index 0)
-	if marker_leading_3p:
+	
+	# Update 5' marker position (follows wobble)
+	if marker_leading_5p:
 		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
 		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
-		marker_leading_3p.position = Vector2(
+		marker_leading_5p.position = Vector2(
 			nucleotide_original_x[0] - %ThemeManager.marker_offset,
 			leading_y - %ThemeManager.backbone_offset_distance
 		)
+	
+	# 3' marker: appears at the rightmost synthesized base
+	# For the leading strand, the 3' end is at the growing tip (rightmost synthesized base)
+	# We'll show it when at least one base is synthesized
+	if marker_leading_3p == null and leading_synthesized_bases[0] != null:
+		# Find the rightmost synthesized base
+		var last_synth_index = -1
+		for i in range(leading_synthesized_bases.size()):
+			if leading_synthesized_bases[i] != null:
+				last_synth_index = i
+		if last_synth_index >= 0:
+			var wobble_last = sin(wobble_t * wobble_speed * TAU + last_synth_index * wobble_phase_offset) * wobble_amplitude
+			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
+			marker_leading_3p = _spawn_marker("5'", Vector2(
+				nucleotide_original_x[last_synth_index] + %ThemeManager.marker_offset,
+				leading_y - %ThemeManager.backbone_offset_distance
+			))
+	
+	# Update 3' marker position (follows the rightmost synthesized base)
+	if marker_leading_3p:
+		var last_synth_index = -1
+		for i in range(leading_synthesized_bases.size()):
+			if leading_synthesized_bases[i] != null:
+				last_synth_index = i
+		if last_synth_index >= 0:
+			var wobble_last = sin(wobble_t * wobble_speed * TAU + last_synth_index * wobble_phase_offset) * wobble_amplitude
+			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
+			marker_leading_3p.position = Vector2(
+				nucleotide_original_x[last_synth_index] + %ThemeManager.marker_offset,
+				leading_y - %ThemeManager.backbone_offset_distance
+			)
 
 	background_rect.color = %ThemeManager.background_color
 
@@ -902,14 +995,27 @@ func scrub_to(progress: float):
 	synthesized_bases.resize(num_nucleotide_slots)
 	hydrogen_bonds.resize(num_nucleotide_slots)
 
+	# ---- Clear Okazaki fragments ----
+	for frag in okazaki_fragments:
+		if frag.has("backbone") and is_instance_valid(frag.backbone):
+			frag.backbone.queue_free()
+		for mark in frag.bond_marks:
+			if is_instance_valid(mark): mark.queue_free()
+		if frag.marker_5p and is_instance_valid(frag.marker_5p): frag.marker_5p.queue_free()
+		if frag.marker_3p and is_instance_valid(frag.marker_3p): frag.marker_3p.queue_free()
+	okazaki_fragments.clear()
+	current_fragment_index = -1
+	last_synthesis_pulse_cycle = -1
+
 	# Free new strand markers when scrubbing back before the first base
 	if target_factory_x < nucleotide_original_x[0]:
 		if marker_new_5p and is_instance_valid(marker_new_5p):
 			marker_new_5p.queue_free()
 			marker_new_5p = null
-		if marker_new_3p and is_instance_valid(marker_new_3p):
-			marker_new_3p.queue_free()
-			marker_new_3p = null
+	# marker_new_3p is always freed on scrub; it respawns in Phase.DONE when appropriate
+	if marker_new_3p and is_instance_valid(marker_new_3p):
+		marker_new_3p.queue_free()
+		marker_new_3p = null
 
 	# ---- Clear leading markers when scrubbing back ----
 	if target_factory_x < nucleotide_original_x[0]:
@@ -934,6 +1040,25 @@ func scrub_to(progress: float):
 		nucleotide_synthesis_state[i] = SynthesisCrossState.COMPLETED
 		nucleotide_transfer_state[i] = NucleotideTransferState.TRANSFERRED
 		nucleotide_proximity_state[i] = ProximityState.OUTSIDE
+
+	# ---- Rebuild Okazaki fragments from synthesized slots ----
+	# Use the same pulse cycle logic as normal synthesis.
+	# pulse cycle = how many full pulse_widths fit between slot 0 and slot i.
+	for i in range(lagging_synth_count):
+		var scrub_pulse_cycle = int((nucleotide_original_x[i] - nucleotide_original_x[0]) / pulse_width)
+		var needs_new_frag = (scrub_pulse_cycle != last_synthesis_pulse_cycle)
+		if needs_new_frag:
+			if current_fragment_index >= 0:
+				_close_okazaki_fragment(current_fragment_index)
+			current_fragment_index = _start_new_okazaki_fragment()
+		okazaki_fragments[current_fragment_index].slots.append(i)
+		last_synthesis_pulse_cycle = scrub_pulse_cycle
+	# Close all fragments except the last (which may still be growing)
+	for fi in range(okazaki_fragments.size() - 1):
+		okazaki_fragments[fi].complete = true
+	# Close last fragment too if we're past the last slot
+	if current_fragment_index >= 0 and target_factory_x > nucleotide_original_x[num_nucleotide_slots - 1]:
+		_close_okazaki_fragment(current_fragment_index)
 
 	for i in range(lagging_synth_count, num_nucleotide_slots):
 		nucleotide_synthesis_state[i] = SynthesisCrossState.NONE
@@ -1105,7 +1230,6 @@ func _spawn_nucleotide_slots():
 			_get_base_fill(base_char),
 			%ThemeManager.base_label_color
 		)
-		nitrogen_base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 
 		var x = row_start_x + i * nucleotide_slot_spacing
 		nucleotide_original_x.append(x)
@@ -1147,7 +1271,6 @@ func _spawn_top_strand():
 		var base_char = dna_sequence.get_base(i)
 		base.set_base_type(base_char)
 		base.set_colors(_get_base_fill(base_char), %ThemeManager.base_label_color)
-		base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 
 		top_strand_slots.append(slot)
 		top_strand_bases.append(base)
@@ -1168,7 +1291,6 @@ func _spawn_complement_base(template_index: int) -> Node2D:
 		_get_base_fill(base_type),
 		%ThemeManager.base_label_color
 	)
-	base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 	return base
 
 func _spawn_leading_base(index: int, base_type: String) -> Node2D:
@@ -1185,8 +1307,36 @@ func _spawn_leading_base(index: int, base_type: String) -> Node2D:
 		_get_base_fill(base_type),
 		%ThemeManager.base_label_color
 	)
-	base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 	return base
+
+func _start_new_okazaki_fragment() -> int:
+	var backbone = Line2D.new()
+	backbone.default_color = %ThemeManager.backbone_color
+	backbone.width = %ThemeManager.backbone_line_width
+	backbone.z_index = -1
+	backbone.joint_mode = Line2D.LINE_JOINT_ROUND
+	backbone.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	backbone.end_cap_mode = Line2D.LINE_CAP_ROUND
+	add_child(backbone)
+	var frag = {
+		slots = [],
+		backbone = backbone,
+		bond_marks = [],
+		marker_5p = null,
+		marker_3p = null,
+		complete = false
+	}
+	okazaki_fragments.append(frag)
+	return okazaki_fragments.size() - 1
+	print("[OKAZAKI] Started fragment #%d" % (okazaki_fragments.size() - 1))
+
+func _close_okazaki_fragment(frag_index: int) -> void:
+	# Called when a fragment is complete. Markers are spawned in the rendering
+	# loop on the next frame once backbone points are available.
+	if frag_index < 0 or frag_index >= okazaki_fragments.size():
+		return
+	okazaki_fragments[frag_index].complete = true
+	print("[OKAZAKI] Closed fragment #%d — slots: %s" % [frag_index, str(okazaki_fragments[frag_index].slots)])
 
 func _spawn_hydrogen_bonds(template_index: int) -> Node2D:
 	var base_type = dna_sequence.get_base(template_index)
@@ -1261,7 +1411,6 @@ func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
 	add_child(marker)
 	marker.set_base_type(marker_type)
 	marker.set_colors(%ThemeManager.marker_color, %ThemeManager.marker_font_color)
-	marker.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 	return marker
 
 func _get_base_fill(base_type: String) -> Color:
@@ -1476,6 +1625,24 @@ func _on_synthesis_area_entered(area: Area2D):
 	if not nucleotide_slot.is_in_group(UNZIPPED_POPULATION_GROUP):
 		nucleotide_slot.add_to_group(UNZIPPED_POPULATION_GROUP)
 
+func _update_bond_marks_fragment(frag: Dictionary, points: PackedVector2Array) -> void:
+	var needed = max(0, points.size() - 1)
+	while frag.bond_marks.size() < needed:
+		frag.bond_marks.append(_create_bond_mark_sprite_reversed())
+	while frag.bond_marks.size() > needed:
+		var extra = frag.bond_marks.pop_back()
+		if is_instance_valid(extra): extra.queue_free()
+	for i in range(needed):
+		var a = points[i]
+		var b = points[i + 1]
+		var mid = (a + b) / 2.0
+		var segment = b - a
+		var mark = frag.bond_marks[i]
+		mark.position = mid
+		mark.visible = segment.length() > 0.0
+		if mark.visible:
+			mark.rotation = segment.angle()
+
 func _update_bond_marks(points: PackedVector2Array):
 	var needed = max(0, points.size() - 1)
 	while bond_marks.size() < needed:
@@ -1489,24 +1656,6 @@ func _update_bond_marks(points: PackedVector2Array):
 		var mid = (a + b) / 2.0
 		var segment = b - a
 		var mark = bond_marks[i]
-		mark.position = mid
-		mark.visible = segment.length() > 0.0
-		if mark.visible:
-			mark.rotation = segment.angle()
-
-func _update_bond_marks_new_strand(points: PackedVector2Array):
-	var needed = max(0, points.size() - 1)
-	while new_strand_bond_marks.size() < needed:
-		new_strand_bond_marks.append(_create_bond_mark_sprite_reversed())
-	while new_strand_bond_marks.size() > needed:
-		var extra = new_strand_bond_marks.pop_back()
-		extra.queue_free()
-	for i in range(needed):
-		var a = points[i]
-		var b = points[i + 1]
-		var mid = (a + b) / 2.0
-		var segment = b - a
-		var mark = new_strand_bond_marks[i]
 		mark.position = mid
 		mark.visible = segment.length() > 0.0
 		if mark.visible:
