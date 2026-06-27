@@ -84,6 +84,8 @@ func _process(delta: float) -> void:
 			# Step past the last slot, emitting slot_reached so leading bases
 			# spawn naturally via the position-based synthesis path.
 			# Accelerates each step. Self-transitions to SETTLING when done.
+			if step_t == 0.0 and extra_steps_done == 0:
+				print("[HELICASE] FINISHING_LAST_PULSE first tick — step_duration=%.4f extra_steps_total=%d" % [step_duration, extra_steps_total])
 			step_t += delta / step_duration
 			if step_t >= 1.0:
 				step_t -= 1.0
@@ -91,6 +93,7 @@ func _process(delta: float) -> void:
 				emit_signal("slot_reached", current_slot_index)
 				step_duration = max(step_duration * finishing_acceleration, 0.05)
 				extra_steps_done += 1
+				print("[HELICASE] FINISHING step %d/%d — step_duration now=%.4f" % [extra_steps_done, extra_steps_total, step_duration])
 				if extra_steps_done >= extra_steps_total:
 					settling_t = 0.0
 					_set_phase(Phase.SETTLING)
@@ -111,6 +114,10 @@ func _process(delta: float) -> void:
 func start_intro() -> void:
 	phase = Phase.INTRO
 	is_running = false  # Intro is driven by tween in simulation.gd
+	extra_steps_total = 0
+	extra_steps_done = 0
+	step_duration = base_step_duration / speed_multiplier  # Reset speed after finishing acceleration
+	print("[HELICASE] start_intro — step_duration reset to %.3f" % step_duration)
 
 func finish_intro() -> void:
 	# Called by simulation.gd when the intro tween completes
@@ -185,5 +192,7 @@ func is_done() -> bool:
 # ==========================================
 
 func _set_phase(new_phase: int) -> void:
+	if new_phase == phase:
+		return
 	phase = new_phase
 	emit_signal("phase_changed", new_phase)

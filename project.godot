@@ -15,6 +15,10 @@ run/main_scene="uid://c6lmtknskx8xm"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 config/icon="res://icon.svg"
 
+[autoload]
+
+ReplicationManager="*uid://dqiarpockixap"
+
 [debug]
 
 gdscript/warnings/enable=false
