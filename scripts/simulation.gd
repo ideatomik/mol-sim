@@ -542,8 +542,9 @@ func toggle_play():
 	manual_override = !manual_override
 	if replication_mgr != null:
 		replication_mgr.manual_override = manual_override
+	print("[TOGGLE] toggle_play — manual_override now=%s helicase_phase=%d is_done=%s" % [str(manual_override), helicase_mgr.get_phase() if helicase_mgr else -1, str(helicase_mgr.is_done() if helicase_mgr else false)])
 	if not manual_override and helicase_mgr != null:
-		if helicase_mgr.is_done() or synthesis_circle_faded:
+		if helicase_mgr.is_done():
 			scrub_to_nucleotide_index(0)
 			helicase_mgr.start_intro()
 		if helicase_mgr.get_phase() == helicase_mgr.Phase.INTRO:

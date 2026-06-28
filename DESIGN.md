@@ -1,5 +1,5 @@
 # MolSim — Design Document
-_Last updated: v70.3 session_
+_Last updated: v70.4 session_
 
 ---
 
@@ -63,50 +63,23 @@ MolSim follows the **E. coli replication model** for accuracy and visual clarity
 
 ## Architecture
 
-### Current state (v70.3)
-`helicase.gd` has been extracted as the first sub-manager. `simulation.gd` is now
-a template manager + visual coordinator. The discrete helicase model is live.
+### Current state (v70.4)
+`helicase.gd` and `replication_manager.gd` have been extracted. `simulation.gd` is now
+a template manager + visual coordinator. Phase 1 migration is complete.
 
 ```
 simulation.gd  — Template Manager + visual coordinator
 ├── helicase.gd  — discrete slot stepping, phase state machine (EXTRACTED ✓)
-└── [synthesis logic still in simulation.gd, pending replication_manager migration]
+└── replication_manager.gd  — synthesis state, spawning, update(), scrub_rebuild(), render() (EXTRACTED ✓)
 ```
 
 ### replication_manager.gd migration — two-phase plan
 
-**Phase 1 (next):** Move all synthesis state variables and spawning functions into
-`replication_manager.gd`. Keep the calling pattern simple: simulation.gd calls
-`replication_manager.update(delta)` from its `_process`, passing context it needs
-(helicase_x, factory_x, population_left_edge, etc.). Data lives in the right place;
-signal architecture comes in Phase 2.
+**Phase 1 ✓ DONE (v70.4):** All synthesis state variables and spawning functions live in
+`replication_manager.gd`. simulation.gd calls `replication_manager.update(delta)` from
+its `_process`, passing context. Data lives in the right place.
 
-What moves in Phase 1:
-- All `nucleotide_*` per-slot state arrays
-- `synthesized_bases`, `hydrogen_bonds` (lagging)
-- `leading_synthesized_bases`, `leading_hydrogen_bonds`, `leading_backbone_line`, `leading_strand_bond_marks`
-- `okazaki_fragments`, `current_fragment_index`, `last_synthesis_pulse_cycle`
-- `new_strand_backbone_line`, `new_strand_backbone_delta`
-- `baseline_switched`, `synthesis_circle_faded`, `manual_override`
-- All lagging/leading markers: `marker_new_5p/3p`, `marker_leading_5p/3p`
-- `NucleotideTransferState`, `ProximityState`, `SynthesisCrossState` enums
-- Spawning functions: `_spawn_complement_base`, `_spawn_leading_base`,
-  `_spawn_hydrogen_bonds`, `_spawn_leading_hydrogen_bonds`
-- Fragment functions: `_start_new_okazaki_fragment`, `_close_okazaki_fragment`,
-  `_assign_to_okazaki_fragment`
-- Bond mark functions: `_update_bond_marks_fragment`, `_update_bond_marks_leading`,
-  `_create_bond_mark_sprite`, `_create_bond_mark_sprite_reversed`
-- `get_synthesized_count`, `get_sequence_rich_text`
-- Synthesis logic blocks from `_process` and `scrub_to`
-
-What stays in simulation.gd:
-- Template strand nodes/arrays, geometry, sequence resource
-- `helicase_x`, `factory_x`, `pulse_offset`, `loop_depth`, visual geometry
-- Rail rebuilds, visual rendering, marker tracking for template strands
-- `toggle_play`, `_run_intro`, `scrub_to`, step functions
-- `_setup_*` functions, `_spawn_nucleotide_slots`, `_spawn_top_strand`
-
-**Phase 2 (later, with okazaki_manager):** Convert to proper signal-based
+**Phase 2 (medium term, with okazaki_manager):** Convert to proper signal-based
 architecture. Extract Okazaki fragment logic into `okazaki_manager.gd`.
 Signals replace the `update(delta)` calling pattern.
 
@@ -168,9 +141,7 @@ simulation.gd  — Template Manager (thin scene coordinator)
 
 ## Roadmap
 
-### Immediate (v70.4)
-- [ ] Remove debug prints (`[OKAZAKI]`, `[HELICASE]`, baseline switch)
-- [ ] replication_manager.gd Phase 1 migration (data + spawning, update() call pattern)
+### Immediate (v70.5)
 - [ ] Ligase joining Okazaki fragments + reveal whole-strand lagging markers
 - [ ] RNA primers and primase enzyme
 
@@ -203,7 +174,7 @@ simulation.gd  — Template Manager (thin scene coordinator)
 
 ---
 
-## Scene Structure (v70.3)
+## Scene Structure (v70.4)
 
 ```
 root (Node2D, simulation.gd)
@@ -225,4 +196,5 @@ root (Node2D, simulation.gd)
     └── PlayerUI
 
 helicase.gd — added as child of simulation.gd at runtime via initialize_simulation()
+replication_manager.gd — added as child of simulation.gd at runtime via initialize_simulation()
 ```
