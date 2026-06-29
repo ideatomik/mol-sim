@@ -13,18 +13,9 @@ var sim: Node = null  # Set by initialize(). Used for add_child(), geometry, etc
 var tm: Node = null   # ThemeManager reference, cached in initialize()
 
 # ---------- ENUMS ----------
-enum NucleotideTransferState { WAITING, ARMED, TRANSFERRED }
-enum ProximityState { OUTSIDE, INSIDE }
 enum SynthesisCrossState { NONE, COMPLETED }
 
 # ---------- PER-SLOT STATE ARRAYS ----------
-var nucleotide_transfer_state: Array = []
-var nucleotide_max_y_reached: Array[float] = []
-var nucleotide_previous_y: Array[float] = []
-var nucleotide_crossing_count: Array[int] = []
-var nucleotide_previous_x: Array[float] = []
-var nucleotide_entered_push_direction: Array[bool] = []
-var nucleotide_proximity_state: Array = []
 var nucleotide_synthesis_state: Array = []
 var nucleotide_backbone_delta: Array[float] = []
 
@@ -82,13 +73,6 @@ func reset(num_slots: int) -> void:
 	current_fragment_index = -1
 	last_logged_extra_steps = -1
 
-	nucleotide_transfer_state.clear()
-	nucleotide_max_y_reached.clear()
-	nucleotide_previous_y.clear()
-	nucleotide_crossing_count.clear()
-	nucleotide_previous_x.clear()
-	nucleotide_entered_push_direction.clear()
-	nucleotide_proximity_state.clear()
 	nucleotide_synthesis_state.clear()
 	nucleotide_backbone_delta.clear()
 	synthesized_bases.clear()
@@ -100,13 +84,6 @@ func reset(num_slots: int) -> void:
 	okazaki_fragments.clear()
 
 	for i in range(num_slots):
-		nucleotide_transfer_state.append(NucleotideTransferState.WAITING)
-		nucleotide_max_y_reached.append(sim.straight_y)
-		nucleotide_previous_y.append(sim.straight_y)
-		nucleotide_crossing_count.append(0)
-		nucleotide_previous_x.append(sim.nucleotide_original_x[i])
-		nucleotide_entered_push_direction.append(false)
-		nucleotide_proximity_state.append(ProximityState.OUTSIDE)
 		nucleotide_synthesis_state.append(SynthesisCrossState.NONE)
 		nucleotide_backbone_delta.append(tm.backbone_offset_distance)
 		synthesized_bases.append(null)
@@ -184,13 +161,11 @@ func teardown() -> void:
 
 func update(delta: float, ctx: Dictionary) -> void:
 	# ctx keys provided by simulation.gd:
-	#   helicase_x, factory_x, population_left_edge, loop_depth,
-	#   straight_y, new_bottom_template_y, dna_ribbons_gap,
-	#   new_bottom_template_offset, wobble_t, phase, helicase_mgr,
-	#   num_slots, pulse_width
+	#   helicase_x, factory_x, loop_depth, straight_y, new_bottom_template_y,
+	#   dna_ribbons_gap, new_bottom_template_offset, wobble_t, phase,
+	#   helicase_mgr, num_slots, pulse_width
 	var helicase_x: float = ctx.helicase_x
 	var factory_x: float = ctx.factory_x
-	var population_left_edge: float = ctx.population_left_edge
 	var straight_y: float = ctx.straight_y
 	var new_bottom_template_y: float = ctx.new_bottom_template_y
 	var phase = ctx.phase
@@ -240,49 +215,16 @@ func update(delta: float, ctx: Dictionary) -> void:
 		))
 		marker_new_3p.modulate.a = 0.0  # Hidden until ligase joins fragments
 
-	# ---- Lagging strand: trombone + proximity synthesis ----
-	for i in range(template_strand_bottom.size()):
-		var nucleotide_y = template_strand_bottom[i].position.y
-		if nucleotide_y > nucleotide_max_y_reached[i]:
-			nucleotide_max_y_reached[i] = nucleotide_y
-
-		if not baseline_switched and nucleotide_y >= new_bottom_template_y:
-			baseline_switched = true
-			baseline_switch_nucleotide_index = i
-			print(">>> BASELINE SWITCH TRIGGERED by nucleotide_slot[%d] at y=%.1f" % [i, nucleotide_y])
-
-		match nucleotide_transfer_state[i]:
-			NucleotideTransferState.WAITING:
-				if nucleotide_max_y_reached[i] >= straight_y + sim.max_loop_depth * sim.armed_depth_fraction:
-					nucleotide_transfer_state[i] = NucleotideTransferState.ARMED
-			NucleotideTransferState.ARMED:
-				if nucleotide_y < new_bottom_template_y:
-					nucleotide_transfer_state[i] = NucleotideTransferState.TRANSFERRED
-			NucleotideTransferState.TRANSFERRED:
-				pass
-
-		if nucleotide_synthesis_state[i] == SynthesisCrossState.COMPLETED:
-			continue
-
-		var current_x = template_strand_bottom[i].position.x
-		var distance_to_polymerase = template_strand_bottom[i].position.distance_to(sim.synthesis_circle.position)
-		match nucleotide_proximity_state[i]:
-			ProximityState.OUTSIDE:
-				if distance_to_polymerase < sim.synthesis_inside_threshold:
-					nucleotide_proximity_state[i] = ProximityState.INSIDE
-					var moving_left = current_x < nucleotide_previous_x[i]
-					nucleotide_entered_push_direction[i] = moving_left
-			ProximityState.INSIDE:
-				if distance_to_polymerase > sim.synthesis_outside_threshold:
-					nucleotide_proximity_state[i] = ProximityState.OUTSIDE
-					nucleotide_crossing_count[i] += 1
-					if nucleotide_entered_push_direction[i] and nucleotide_synthesis_state[i] == SynthesisCrossState.NONE:
-						nucleotide_synthesis_state[i] = SynthesisCrossState.COMPLETED
-						synthesized_bases[i] = _spawn_complement_base(i)
-						hydrogen_bonds[i] = _spawn_hydrogen_bonds(i)
-						_assign_to_okazaki_fragment(i, nucleotide_original_x, pulse_width)
-
-		nucleotide_previous_x[i] = current_x
+	# ---- Lagging strand: baseline switch detection ----
+	# Proximity synthesis removed — lagging synthesis is now triggered
+	# deterministically by synthesize_lagging_slot() via loop release animation.
+	if not baseline_switched:
+		for i in range(sim.template_strand_bottom.size()):
+			if sim.template_strand_bottom[i].position.y >= new_bottom_template_y:
+				baseline_switched = true
+				baseline_switch_nucleotide_index = i
+				print(">>> BASELINE SWITCH by slot[%d]" % i)
+				break
 
 	# ---- Leading strand synthesis ----
 	var leading_synth_count = 0
@@ -296,16 +238,30 @@ func update(delta: float, ctx: Dictionary) -> void:
 			leading_synthesized_bases[i] = _spawn_leading_base(i, sim.dna_sequence.get_complement(i))
 			leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
+func synthesize_lagging_slot(slot_index: int, ctx: Dictionary) -> void:
+	# Called by simulation.gd release animation when a slot exits through factory_x.
+	var pulse_width: float = ctx.pulse_width
+	var nucleotide_original_x = sim.nucleotide_original_x
+	var num_slots = nucleotide_synthesis_state.size()
+	if slot_index < 0 or slot_index >= num_slots:
+		return
+	if nucleotide_synthesis_state[slot_index] == SynthesisCrossState.COMPLETED:
+		return
+	nucleotide_synthesis_state[slot_index] = SynthesisCrossState.COMPLETED
+	synthesized_bases[slot_index] = _spawn_complement_base(slot_index)
+	hydrogen_bonds[slot_index] = _spawn_hydrogen_bonds(slot_index)
+	_assign_to_okazaki_fragment(slot_index, nucleotide_original_x, pulse_width)
+	print("[LAGGING] synthesized slot %d via loop release" % slot_index)
+
 # ==========================================
 # SCRUB REBUILD — called from simulation.gd scrub_to()
 # ==========================================
 
 func scrub_rebuild(ctx: Dictionary) -> void:
-	# ctx keys: target_factory_x, population_left_edge, helicase_x,
+	# ctx keys: target_factory_x, helicase_x,
 	#           is_done_phase, num_slots, pulse_width,
 	#           nucleotide_original_x, straight_y, helicase_mgr
 	var target_factory_x: float = ctx.target_factory_x
-	var population_left_edge: float = ctx.population_left_edge
 	var helicase_x: float = ctx.helicase_x
 	var is_done_phase: bool = ctx.is_done_phase
 	var num_slots: int = ctx.num_slots
@@ -356,13 +312,8 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	# ---- Rebuild lagging synthesis state ----
 	var lagging_synth_count = 0
 	for i in range(num_slots):
-		if is_done_phase:
+		if is_done_phase or nucleotide_original_x[i] <= target_factory_x:
 			lagging_synth_count += 1
-		elif nucleotide_original_x[i] < population_left_edge:
-			if nucleotide_original_x[i] <= target_factory_x:
-				lagging_synth_count += 1
-			else:
-				break
 		else:
 			break
 
@@ -371,8 +322,6 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 			synthesized_bases[i] = _spawn_complement_base(i)
 			hydrogen_bonds[i] = _spawn_hydrogen_bonds(i)
 		nucleotide_synthesis_state[i] = SynthesisCrossState.COMPLETED
-		nucleotide_transfer_state[i] = NucleotideTransferState.TRANSFERRED
-		nucleotide_proximity_state[i] = ProximityState.OUTSIDE
 
 	# ---- Rebuild Okazaki fragments ----
 	for i in range(lagging_synth_count):
@@ -391,11 +340,6 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 
 	for i in range(lagging_synth_count, num_slots):
 		nucleotide_synthesis_state[i] = SynthesisCrossState.NONE
-		nucleotide_transfer_state[i] = NucleotideTransferState.WAITING
-		nucleotide_proximity_state[i] = ProximityState.OUTSIDE
-		nucleotide_crossing_count[i] = 0
-		nucleotide_entered_push_direction[i] = false
-		nucleotide_max_y_reached[i] = straight_y
 
 	# ---- Rebuild leading strand ----
 	for base in leading_synthesized_bases:

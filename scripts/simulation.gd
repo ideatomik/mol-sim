@@ -1,10 +1,13 @@
 extends Node2D
 
 # ==========================================
-# v 70.4
-# - replication_manager.gd Phase 1: synthesis state and spawning extracted
-# - simulation.gd now delegates to replication_mgr.update() and scrub_rebuild()
-# - simulation.gd is now purely template manager + visual coordinator
+# v 70.5
+# - Deterministic slot positions: PathFollow2D no longer drives slot motion
+# - _get_slot_position() replaces _rebuild_rail() for slot placement
+# - Catmull-Rom spline for loop backbone (from loop_test.gd)
+# - pulse_ratio derived from fmod(slot_index, pulse_nucleotide_count)
+# - Removed pulse_offset, population_left_edge (proximity synthesis gone)
+# - Lagging synthesis now triggered via on_slot_reached() in replication_mgr
 # ==========================================
 
 # ---------- SIGNALS ----------
@@ -46,10 +49,8 @@ var track_length: float = 0.0
 @export var loop_floor_depth: float = 15.0
 @export var max_loop_depth: float = 220.0
 @export var gap_width: float = 168.0
-@export var neck_depth_fraction: float = 0.15
-@export var waist_flare_shallow: float = 0.45
-@export var waist_flare_deep: float = 0.22
-@export var armed_depth_fraction: float = 0.7
+@export var peak_bias: float = 1.5        # > 1.0 shifts loop peak toward factory_x
+@export var smoothstep_strength: float = 0.4  # 0.0 = pure sine, 1.0 = flat bottom
 
 @export_group("Speeds & Timing")
 @export var pulse_nucleotide_count: int = 6  # Slots per Okazaki fragment (boundary arithmetic only)
@@ -85,9 +86,19 @@ var factory_x: float = 0.0   # Derived: helicase_x - gap_width
 # Phase is now owned by helicase_mgr. Use helicase_mgr.get_phase() or
 # helicase_mgr.Phase.* constants for phase checks.
 # pulse_width is kept for Okazaki fragment boundary arithmetic.
-var pulse_offset: float = 0.0  # Continuous loop animation value, driven visually
+var pulse_ratio: float = 0.0  # 0.0→1.0 within each Okazaki fragment cycle
+var loop_slots_extra: int = 0  # Slots pulled into loop beyond base; resets each fragment
 
-var population_left_edge: float = 0.0
+# ---------- LOOP QUEUE ----------
+var loop_queue: Array[int] = []     # slot indices in loop, factory-end first
+var loop_releasing: bool = false    # true during release animation
+var release_timer: float = 0.0      # accumulates during release
+var release_interval: float = 0.0        # step_duration / pulse_nucleotide_count
+var release_depth_start: float = 0.0     # loop_depth at start of release
+var step_duration_snapshot: float = 0.5  # helicase step_duration at release start
+var synthesis_order: Array[int] = []     # synthesis_order[i] = rank (0=first/rightmost synthesized)
+var synthesis_count: int = 0             # total slots synthesized so far
+
 var loop_depth: float = 0.0
 var loop_length: float = 0.0
 var settle_blend: float = 0.0
@@ -157,8 +168,7 @@ func initialize_simulation(sequence: String):
 	# 4. RESET all state variables
 	helicase_x = gap_width
 	factory_x = 0.0
-	loop_depth = max_loop_depth
-	pulse_offset = 0.0
+	loop_depth = loop_floor_depth
 	settle_blend = 0.0
 	manual_override = true  # Start paused when a new sequence loads
 
@@ -226,13 +236,25 @@ func initialize_simulation(sequence: String):
 
 	_spawn_top_strand()
 	_rebuild_top_rail()
-	for i in range(top_strand_slots.size()):
-		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
+	# top_strand_slots positions are set by _rebuild_top_rail sampling; no progress needed
 
 	# Initialize replication manager for this sequence
 	replication_mgr.reset(num_nucleotide_slots)
 	replication_mgr.setup_backbones()
 	new_strand_backbone_line = replication_mgr.new_strand_backbone_line
+	# Resize and seed synthesis tracking
+	synthesis_order.resize(num_nucleotide_slots)
+	synthesis_order.fill(-1)
+	synthesis_count = 0
+	# Seed loop_queue with slots already in the gap at startup
+	loop_queue.clear()
+	var base_ls_init = int(gap_width / nucleotide_slot_spacing)
+	for i in range(num_nucleotide_slots):
+		if loop_queue.size() < base_ls_init:
+			loop_queue.append(i)
+		else:
+			break
+	loop_slots_extra = 0
 
 	# Strand end markers
 	var first_x = nucleotide_original_x[0]
@@ -337,25 +359,19 @@ func _process(delta):
 		factory_x = helicase_x - gap_width
 		settle_blend = helicase_mgr.get_settling_blend()
 
-		# Trombone loop: pulse_offset animates continuously based on slot progress.
-		# Each full slot step = one full pulse cycle.
-		var slot_frac = fmod(float(idx) + eased, 2.0) / 2.0
-		if slot_frac < 0.5:
-			pulse_offset = slot_frac * 2.0 * nucleotide_slot_spacing
-		else:
-			pulse_offset = (1.0 - (slot_frac - 0.5) * 2.0) * nucleotide_slot_spacing
-		var pulse_ratio = pulse_offset / nucleotide_slot_spacing
-
+		# pulse_ratio: how far into the current Okazaki fragment cycle we are.
+		# Derived deterministically from slot index + eased sub-step progress.
 		var phase = helicase_mgr.get_phase()
 		if phase == helicase_mgr.Phase.DONE:
+			pulse_ratio = 0.0
 			loop_depth = 0.0
 			settle_blend = 1.0
 		elif phase == helicase_mgr.Phase.SETTLING:
 			loop_depth = lerp(settling_loop_depth_start, 0.0, settle_blend)
 		else:
+			var slot_in_fragment = fmod(float(idx) + eased, float(pulse_nucleotide_count))
+			pulse_ratio = slot_in_fragment / float(pulse_nucleotide_count)
 			loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio)
-
-		population_left_edge = factory_x - pulse_offset
 
 	# wobble_t computed once here — used by both state update and rendering sections
 	var wobble_t = helicase_x / nucleotide_slot_spacing
@@ -371,25 +387,37 @@ func _process(delta):
 		if helicase_node:
 			helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
 
+		# ---- Loop release animation ----
+		if loop_releasing and release_interval > 0.0:
+			release_timer += delta
+			# Collapse loop_depth toward floor over full step duration
+			var release_t = clamp(release_timer / step_duration_snapshot, 0.0, 1.0)
+			loop_depth = lerp(release_depth_start, loop_floor_depth, release_t)
+			var base_ls = int(gap_width / nucleotide_slot_spacing)
+			while release_timer >= release_interval and loop_queue.size() > base_ls:
+				release_timer -= release_interval
+				var exiting = loop_queue[0]
+				loop_queue.remove_at(0)
+				loop_slots_extra = max(0, loop_queue.size() - base_ls)
+				if exiting < synthesis_order.size():
+					synthesis_order[exiting] = synthesis_count
+					synthesis_count += 1
+				if replication_mgr != null:
+					replication_mgr.synthesize_lagging_slot(exiting, { pulse_width = pulse_width })
+			if loop_queue.size() <= base_ls:
+				loop_releasing = false
+				release_timer = 0.0
+				loop_depth = loop_floor_depth
+
+		# ---- Direct slot position writes ----
 		if phase != helicase_mgr.Phase.DONE:
 			for i in range(template_strand_bottom.size()):
-				template_strand_bottom[i].progress = track_length - nucleotide_original_x[i]
-
-		# ---- Loop population groups ----
-		for i in range(template_strand_bottom.size()):
-			var nucleotide_slot = template_strand_bottom[i]
-			var x = nucleotide_original_x[i]
-			var in_loop = (phase != helicase_mgr.Phase.DONE) and x >= population_left_edge and x <= helicase_x
-			if in_loop and not nucleotide_slot.is_in_group(LOOP_POPULATION_GROUP):
-				nucleotide_slot.add_to_group(LOOP_POPULATION_GROUP)
-			elif not in_loop and nucleotide_slot.is_in_group(LOOP_POPULATION_GROUP):
-				nucleotide_slot.remove_from_group(LOOP_POPULATION_GROUP)
+				template_strand_bottom[i].position = _get_slot_position_queued(i, helicase_x, factory_x, loop_depth)
 
 		# ---- Delegate synthesis logic to replication_mgr ----
 		replication_mgr.update(delta, {
 			helicase_x = helicase_x,
 			factory_x = factory_x,
-			population_left_edge = population_left_edge,
 			loop_depth = loop_depth,
 			straight_y = straight_y,
 			new_bottom_template_y = new_bottom_template_y,
@@ -415,15 +443,18 @@ func _process(delta):
 	_rebuild_rail()
 	_rebuild_top_rail()
 
+	# ---- Backbone for bottom template ----
+	# Slot positions are written by _get_slot_position() in state update.
+	# Backbone uses Catmull-Rom through slot anchor positions for smooth loop curve.
 	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
-
-
-
-	# ---- Backbone for bottom template (existing) ----
-	var backbone_points = PackedVector2Array()
+	var slot_anchors = PackedVector2Array()
 	for i in range(template_strand_bottom.size()):
-		var nucleotide_slot = template_strand_bottom[i]
-		var slot_y = nucleotide_slot.position.y
+		var slot_x = nucleotide_original_x[i]
+		var slot_y: float
+		if is_done:
+			slot_y = new_bottom_template_y if baseline_switched else straight_y
+		else:
+			slot_y = template_strand_bottom[i].position.y
 		var wobble_y = 0.0
 		if wobble_amplitude > 0.0:
 			var near_top = abs(slot_y - straight_y) < wobble_amplitude * 4.0
@@ -432,18 +463,60 @@ func _process(delta):
 				wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
 		nucleotide_bases[i].position.y = wobble_y
 
-		var on_rail_visual = abs(slot_y - straight_y) < 1.0
 		var on_new_bottom = abs(slot_y - new_bottom_template_y) < 1.0
-		var target_delta: float
-		if on_rail_visual:
-			target_delta = %ThemeManager.backbone_offset_distance
-		elif on_new_bottom:
-			target_delta = -%ThemeManager.backbone_offset_distance
-		else:
-			target_delta = %ThemeManager.backbone_offset_distance
-
+		var target_delta: float = -%ThemeManager.backbone_offset_distance if on_new_bottom else %ThemeManager.backbone_offset_distance
 		nucleotide_backbone_delta[i] = lerp(nucleotide_backbone_delta[i], target_delta, clamp(%ThemeManager.backbone_offset_smoothing_speed * delta, 0.0, 1.0))
-		backbone_points.append(Vector2(nucleotide_slot.position.x, slot_y + nucleotide_backbone_delta[i] + wobble_y))
+		slot_anchors.append(Vector2(template_strand_bottom[i].position.x, slot_y + nucleotide_backbone_delta[i] + wobble_y))
+
+	# Build backbone: flat straight lines for left/right zones, Catmull-Rom only
+	# through the loop zone anchors. This avoids curving the flat regions.
+	var backbone_points = PackedVector2Array()
+	var n = slot_anchors.size()
+	if n >= 2:
+		# Identify loop zone slots by queue membership
+		var loop_start_idx = -1
+		var loop_end_idx = -1
+		for i in range(n):
+			if loop_queue.has(i):
+				if loop_start_idx == -1:
+					loop_start_idx = i
+				loop_end_idx = i
+
+		if loop_start_idx == -1 or is_done:
+			# No loop — straight line through all anchors
+			backbone_points = slot_anchors
+		else:
+			# Zone 3 (left of factory): straight
+			for i in range(loop_start_idx):
+				backbone_points.append(slot_anchors[i])
+
+			# Zone 2 (loop): Catmull-Rom
+			# Include one anchor outside each end as context for tangents
+			var lo = max(0, loop_start_idx - 1)
+			var hi = min(n - 1, loop_end_idx + 1)
+			var loop_anchors: Array[Vector2] = []
+			for i in range(lo, hi + 1):
+				loop_anchors.append(slot_anchors[i])
+			var ln = loop_anchors.size()
+			# Ghost points: flat continuation at each end
+			var ghost_l = Vector2(loop_anchors[0].x - nucleotide_slot_spacing, loop_anchors[0].y)
+			var ghost_r = Vector2(loop_anchors[ln - 1].x + nucleotide_slot_spacing, loop_anchors[ln - 1].y)
+			const SPLINE_RES := 8
+			for seg in range(ln - 1):
+				var p0 = ghost_l if seg == 0 else loop_anchors[seg - 1]
+				var p1 = loop_anchors[seg]
+				var p2 = loop_anchors[seg + 1]
+				var p3 = ghost_r if seg == ln - 2 else loop_anchors[seg + 2]
+				for step in range(SPLINE_RES):
+					var t = float(step) / float(SPLINE_RES)
+					backbone_points.append(_catmull_rom(p0, p1, p2, p3, t))
+			backbone_points.append(loop_anchors[ln - 1])
+
+			# Zone 1 (right of helicase): straight
+			for i in range(loop_end_idx + 1, n):
+				backbone_points.append(slot_anchors[i])
+	else:
+		backbone_points = slot_anchors
 
 	backbone_line.points = backbone_points
 	backbone_line.width = %ThemeManager.backbone_line_width
@@ -544,8 +617,9 @@ func toggle_play():
 		replication_mgr.manual_override = manual_override
 	print("[TOGGLE] toggle_play — manual_override now=%s helicase_phase=%d is_done=%s" % [str(manual_override), helicase_mgr.get_phase() if helicase_mgr else -1, str(helicase_mgr.is_done() if helicase_mgr else false)])
 	if not manual_override and helicase_mgr != null:
-		if helicase_mgr.is_done():
+		if helicase_mgr.is_done() or synthesis_circle_faded:
 			scrub_to_nucleotide_index(0)
+			synthesis_circle_faded = false
 			helicase_mgr.start_intro()
 		if helicase_mgr.get_phase() == helicase_mgr.Phase.INTRO:
 			_run_intro()
@@ -556,7 +630,7 @@ func toggle_play():
 			if helicase_node:
 				helicase_node.modulate.a = 1.0
 			helicase_mgr.resume()
-		synthesis_circle_faded = false
+			synthesis_circle_faded = false
 	elif helicase_mgr != null:
 		helicase_mgr.pause()
 
@@ -611,19 +685,30 @@ func scrub_to(progress: float):
 	helicase_x = target_helicase_x
 	factory_x = target_factory_x
 
-	# Compute pulse_offset from slot position for trombone visual
-	var slot_frac = fmod(float(target_slot), 2.0) / 2.0
-	if slot_frac < 0.5:
-		pulse_offset = slot_frac * 2.0 * nucleotide_slot_spacing
-	else:
-		pulse_offset = (1.0 - (slot_frac - 0.5) * 2.0) * nucleotide_slot_spacing
-	var pulse_ratio = pulse_offset / nucleotide_slot_spacing
+	# Derive pulse_ratio, loop_depth and loop_slots_extra for this scrub position
+	var slot_in_fragment = fmod(float(target_slot), float(pulse_nucleotide_count))
+	pulse_ratio = slot_in_fragment / float(pulse_nucleotide_count)
 	loop_depth = lerp(loop_floor_depth, max_loop_depth, pulse_ratio)
-	population_left_edge = factory_x - pulse_offset
+	loop_slots_extra = int(slot_in_fragment)
 
 	baseline_switched = (target_factory_x >= nucleotide_original_x[0])
 	if replication_mgr != null:
 		replication_mgr.baseline_switched = baseline_switched
+	# Rebuild loop queue for this scrub position
+	loop_queue.clear()
+	loop_releasing = false
+	release_timer = 0.0
+	synthesis_count = 0
+	if synthesis_order.size() > 0:
+		synthesis_order.fill(-1)
+	var base_ls_scrub = int(gap_width / nucleotide_slot_spacing)
+	var slots_in_loop = base_ls_scrub + int(slot_in_fragment)
+	var added = 0
+	for i in range(num_nucleotide_slots):
+		if nucleotide_original_x[i] > target_factory_x and added < slots_in_loop:
+			loop_queue.append(i)
+			added += 1
+	loop_slots_extra = max(0, loop_queue.size() - base_ls_scrub)
 
 	# Set phase on helicase_mgr based on scrub position
 	if helicase_mgr != null:
@@ -654,7 +739,6 @@ func scrub_to(progress: float):
 	if replication_mgr != null:
 		replication_mgr.scrub_rebuild({
 			target_factory_x = target_factory_x,
-			population_left_edge = population_left_edge,
 			helicase_x = helicase_x,
 			is_done_phase = is_done_phase,
 			num_slots = num_nucleotide_slots,
@@ -669,13 +753,12 @@ func scrub_to(progress: float):
 		if template_hydrogen_bonds[i] != null:
 			template_hydrogen_bonds[i].visible = (nucleotide_original_x[i] >= helicase_x)
 
-	# Force immediate rail rebuild
+	# Force immediate visual update — write slot positions directly
+	for i in range(template_strand_bottom.size()):
+		template_strand_bottom[i].position = _get_slot_position(
+			nucleotide_original_x[i], helicase_x, factory_x, loop_depth)
 	_rebuild_rail()
 	_rebuild_top_rail()
-	for i in range(template_strand_bottom.size()):
-		template_strand_bottom[i].progress = track_length - nucleotide_original_x[i]
-	for i in range(top_strand_slots.size()):
-		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
 
 	synthesis_circle.modulate.a = 1.0
 	if top_polymerase:
@@ -734,10 +817,22 @@ func get_sequence_rich_text() -> String:
 # ==========================================
 
 func _on_helicase_slot_reached(index: int) -> void:
-	# Fired by helicase_mgr each time it steps to a new slot.
-	# Leading strand synthesis is handled by position in _process;
-	# this is a hook for future per-slot logic (e.g. primase, clamps).
-	print("[HELICASE] slot_reached: %d" % index)
+	print("[HELICASE] slot_reached: %d  queue_size=%d" % [index, loop_queue.size()])
+	if index < 0 or index >= num_nucleotide_slots:
+		return
+	# Add slot to right end of loop queue
+	loop_queue.append(index)
+	var base_ls = int(gap_width / nucleotide_slot_spacing)
+	loop_slots_extra = max(0, loop_queue.size() - base_ls)
+	# When queue fills base + fragment slots, start release
+	if loop_queue.size() >= base_ls + pulse_nucleotide_count and not loop_releasing:
+		loop_releasing = true
+		release_timer = 0.0
+		release_depth_start = loop_depth
+		var step_dur = helicase_mgr.step_duration if helicase_mgr else 0.5
+		step_duration_snapshot = step_dur
+		release_interval = step_dur / float(pulse_nucleotide_count)
+		print("[LOOP] Release — queue=%d interval=%.3fs" % [loop_queue.size(), release_interval])
 
 func _on_helicase_phase_changed(new_phase: int) -> void:
 	print("[HELICASE] phase_changed: %d" % new_phase)
@@ -781,7 +876,8 @@ func _spawn_nucleotide_slots():
 
 		var x = row_start_x + i * nucleotide_slot_spacing
 		nucleotide_original_x.append(x)
-		nucleotide_slot.progress = track_length - x
+		# Position written directly — no longer driven by PathFollow2D progress
+		nucleotide_slot.position = Vector2(x, straight_y)
 		template_strand_bottom.append(nucleotide_slot)
 		nucleotide_backbone_delta.append(%ThemeManager.backbone_offset_distance)
 
@@ -908,75 +1004,26 @@ func _rebuild_top_rail():
 	top_rail_path.curve = curve
 
 func _rebuild_rail():
+	# Slots are now positioned directly by _get_slot_position() in _process.
+	# _rebuild_rail() only updates template_strand_original_track (the visual backbone line)
+	# by sampling slot positions that were already written this frame.
 	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
-	if is_done:
-		var flat_curve = Curve2D.new()
-		var rest_y = new_bottom_template_y if baseline_switched else straight_y
-		flat_curve.add_point(Vector2(track_length, rest_y))
-		flat_curve.add_point(Vector2(0, rest_y))
-		loop_length = 0.0
-		rail_path.curve = flat_curve
-		template_strand_original_track.points = flat_curve.get_baked_points()
-		return
+	var rest_y = new_bottom_template_y if baseline_switched else straight_y
 
-	var helicase_at_end = helicase_x >= track_length - 1.0
-	var curve = Curve2D.new()
-	var blended_straight_y = lerp(straight_y, new_bottom_template_y, settle_blend) if baseline_switched else straight_y
+	var track_points = PackedVector2Array()
+	for i in range(template_strand_bottom.size()):
+		track_points.append(template_strand_bottom[i].position)
 
-	if not helicase_at_end:
-		curve.add_point(Vector2(track_length, blended_straight_y))
-		curve.add_point(Vector2(helicase_x, blended_straight_y))
-
-	var bulge_y = blended_straight_y + loop_depth
-	var handle_x = max(40.0, loop_depth * 0.6)
-
-	curve.add_point(
-		Vector2(helicase_x, blended_straight_y),
-		Vector2.ZERO,
-		Vector2(-handle_x, loop_depth * 0.5)
-	)
-	var mid_x = (factory_x + helicase_x) / 2.0
-	var anchor_rest_y = new_bottom_template_y if baseline_switched else blended_straight_y
-
-	var depth_ratio = loop_depth / gap_width
-	var max_depth_ratio = max_loop_depth / gap_width
-	var flare_t = clamp(depth_ratio / max_depth_ratio, 0.0, 1.0) if max_depth_ratio > 0.0 else 0.0
-	var omega_flare = lerp(waist_flare_shallow, waist_flare_deep, flare_t)
-	var mid_handle_x = max(1.0, (helicase_x - factory_x) * omega_flare)
-
-	curve.add_point(
-		Vector2(mid_x, bulge_y),
-		Vector2(mid_handle_x, 0),
-		Vector2(-mid_handle_x, 0)
-	)
-
-	curve.add_point(
-		Vector2(factory_x, anchor_rest_y),
-		Vector2(handle_x, loop_depth * 0.5),
-		Vector2.ZERO
-	)
-
-	var loop_only_curve = Curve2D.new()
-	loop_only_curve.add_point(
-		Vector2(helicase_x, blended_straight_y),
-		Vector2.ZERO,
-		Vector2(-handle_x, loop_depth * 0.5)
-	)
-	loop_only_curve.add_point(
-		Vector2(mid_x, bulge_y),
-		Vector2(mid_handle_x, 0),
-		Vector2(-mid_handle_x, 0)
-	)
-	loop_only_curve.add_point(
-		Vector2(factory_x, anchor_rest_y),
-		Vector2(handle_x, loop_depth * 0.5),
-		Vector2.ZERO)
-	loop_length = loop_only_curve.get_baked_length()
-
-	curve.add_point(Vector2(0, anchor_rest_y))
-
-	rail_path.curve = curve
-	template_strand_original_track.points = curve.get_baked_points()
+	# Extend to full track edges
+	if track_points.size() > 0:
+		var first = track_points[0]
+		var last_pt = track_points[track_points.size() - 1]
+		var extended = PackedVector2Array()
+		extended.append(Vector2(0.0, first.y))
+		extended.append_array(track_points)
+		extended.append(Vector2(track_length, last_pt.y))
+		template_strand_original_track.points = extended
+	loop_length = 0.0
 
 func _setup_synthesis_circle():
 	synthesis_circle.z_index = 2
@@ -1182,6 +1229,91 @@ func _create_bond_mark_sprite_reversed() -> Node2D:
 	holder.z_index = 1
 	add_child(holder)
 	return holder
+
+# ==========================================
+# DETERMINISTIC SLOT POSITION — transplanted from loop_test.gd
+# ==========================================
+
+func _get_slot_position_queued(slot_idx: int, h_x: float, f_x: float, depth: float) -> Vector2:
+	# Train/track model: the curve is a fixed path between f_x and h_x.
+	# Each slot in the queue rides the path at queue_pos * slot_spacing arc-length from f_x.
+	# Slots not in queue: flat zones by original x.
+	var x = nucleotide_original_x[slot_idx]
+	var blended_straight_y = lerp(straight_y, new_bottom_template_y, settle_blend) if baseline_switched else straight_y
+	var queue_pos = loop_queue.find(slot_idx)
+	if queue_pos >= 0:
+		# Find t on the curve corresponding to queue_pos * slot_spacing arc-length from exit
+		var target_arc = float(queue_pos) * nucleotide_slot_spacing
+		var t = _arc_length_to_t(target_arc, f_x, h_x, depth, blended_straight_y)
+		var pt_x = lerp(f_x, h_x, t)
+		var pt_y = _sine_loop_y(t, depth, blended_straight_y)
+		return Vector2(pt_x, pt_y)
+	elif x >= h_x:
+		return Vector2(x, blended_straight_y)
+	else:
+		# Synthesized: world x = factory_x - (slots_after + 1) * slot_spacing
+		var rank = synthesis_order[slot_idx] if slot_idx < synthesis_order.size() else -1
+		if rank >= 0:
+			var slots_after = synthesis_count - 1 - rank
+			return Vector2(f_x - (slots_after + 1) * nucleotide_slot_spacing, new_bottom_template_y)
+		return Vector2(x, new_bottom_template_y)
+
+func _arc_length_to_t(target_arc: float, f_x: float, h_x: float, depth: float, entry_y: float) -> float:
+	# Numerically integrate arc length of the curve from t=0 to find t where arc=target_arc.
+	# Uses fixed 64-step integration — fast enough for per-frame use.
+	const STEPS := 64
+	var arc: float = 0.0
+	var prev = Vector2(f_x, _sine_loop_y(0.0, depth, entry_y))
+	for s in range(1, STEPS + 1):
+		var t: float = float(s) / float(STEPS)
+		var cx = lerp(f_x, h_x, t)
+		var cy = _sine_loop_y(t, depth, entry_y)
+		var curr = Vector2(cx, cy)
+		arc += prev.distance_to(curr)
+		if arc >= target_arc:
+			# Interpolate back to exact t
+			var over = arc - target_arc
+			var seg_len = prev.distance_to(curr)
+			if seg_len > 0.0:
+				return t - (over / seg_len) / float(STEPS)
+			return t
+		prev = curr
+	return 1.0  # Target beyond arc — clamp to end
+
+func _get_slot_position(x: float, h_x: float, f_x: float, depth: float) -> Vector2:
+	# Four zones:
+	# Right of helicase:          bonded, flat at straight_y
+	# Between loop_right_x and H: unzipped but not yet looped, flat at straight_y
+	# Between factory and loop_right_x: loop arc
+	# Left of factory:            synthesized, flat at new_bottom_template_y
+	var blended_straight_y = lerp(straight_y, new_bottom_template_y, settle_blend) if baseline_switched else straight_y
+	var base_loop_slots = int(gap_width / nucleotide_slot_spacing)
+	var loop_right_x = minf(f_x + (base_loop_slots + loop_slots_extra) * nucleotide_slot_spacing, h_x)
+	if x >= loop_right_x:
+		return Vector2(x, blended_straight_y)
+	elif x <= f_x:
+		return Vector2(x, new_bottom_template_y)
+	else:
+		var t: float = (x - f_x) / (loop_right_x - f_x)
+		return Vector2(x, _sine_loop_y(t, depth, blended_straight_y))
+
+func _sine_loop_y(t: float, depth: float, entry_y: float) -> float:
+	# t = 0.0 at factory_x (exit → new_bottom_template_y)
+	# t = 1.0 at helicase_x (entry → entry_y / straight_y)
+	var base_y := lerp(new_bottom_template_y, entry_y, t)
+	var raw := sin(pow(t, peak_bias) * PI)
+	var shaped := lerp(raw, smoothstep(0.0, 1.0, raw), smoothstep_strength)
+	return base_y + shaped * depth
+
+func _catmull_rom(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, t: float) -> Vector2:
+	var t2 := t * t
+	var t3 := t2 * t
+	return 0.5 * (
+		(2.0 * p1) +
+		(-p0 + p2) * t +
+		(2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
+		(-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+	)
 
 # ==========================================
 # SMOOTHSTEP HELPER

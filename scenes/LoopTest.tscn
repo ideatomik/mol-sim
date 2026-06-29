@@ -5,4 +5,5 @@
 [node name="LoopTest" type="Node2D" unique_id=1180545743]
 script = ExtResource("1_looptest")
 num_slots = 40
+gap_width = 270.0
 auto_play = true
