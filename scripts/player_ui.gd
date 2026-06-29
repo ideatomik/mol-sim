@@ -213,13 +213,13 @@ func _update_ui():
 	_update_button_states()
 
 func _update_button_states():
-	var count = simulation.get_synthesized_count()
+	#var count = simulation.get_synthesized_count()
 	var total = simulation.num_nucleotide_slots
 
-	backward.disabled = (count <= 0)
-	forward.disabled = (count >= total)
-	fast_backward.disabled = (count <= 0)
-	fast_forward.disabled = (count >= total)
+	#backward.disabled = (count <= 0)
+	#forward.disabled = (count >= total)
+	#fast_backward.disabled = (count <= 0)
+	#fast_forward.disabled = (count >= total)
 
 	# Stop button is always enabled
 	# Eject button is always enabled
