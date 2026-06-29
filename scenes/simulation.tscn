@@ -43,11 +43,10 @@ curve = SubResource("Curve2D_mwrr7")
 [node name="TemplateStrandOriginalTrack" type="Line2D" parent="." unique_id=498789482]
 points = PackedVector2Array(656, -10)
 width = 2.0
-default_color = Color(0, 1, 0, 0)
+default_color = Color(0, 1, 0, 1)
 
 [node name="NewStrandLine" type="Line2D" parent="." unique_id=1075958164]
 width = 3.0
-default_color = Color(1, 1, 1, 0)
 
 [node name="SynthesisCircle" type="Node2D" parent="." unique_id=550376968]
 
@@ -57,7 +56,7 @@ default_color = Color(1, 1, 1, 0)
 
 [node name="TemplateStrandNewTrack" type="Line2D" parent="." unique_id=1670290036]
 width = 3.0
-default_color = Color(0.76862746, 0, 0, 0)
+default_color = Color(0.76862746, 0, 0, 1)
 
 [node name="TopTemplateStrandNewTrack" type="Line2D" parent="." unique_id=635682591]
 default_color = Color(1, 1, 1, 0)

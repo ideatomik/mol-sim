@@ -46,6 +46,7 @@ var track_length: float = 0.0
 @export var loop_floor_depth: float = 15.0
 @export var max_loop_depth: float = 220.0
 @export var gap_width: float = 168.0
+@export var pll_slot_count: int = 4  # ADD — slots along the PLL diagonal (factory → helicase)
 @export var neck_depth_fraction: float = 0.15
 @export var waist_flare_shallow: float = 0.45
 @export var waist_flare_deep: float = 0.22
@@ -79,8 +80,12 @@ var synthesis_circle_faded: bool = false
 var top_polymerase: Node2D = null
 var helicase_node: Node2D = null
 
+var debug_gap_line: Line2D = null 
+
 var helicase_x: float = 0.0   # Derived each frame from helicase_mgr
 var factory_x: float = 0.0   # Derived: helicase_x - gap_width
+var factory_y: float = 0.0   # Derived: new_bottom_template_y (lagging polymerase y)
+
 
 # Phase is now owned by helicase_mgr. Use helicase_mgr.get_phase() or
 # helicase_mgr.Phase.* constants for phase checks.
@@ -234,6 +239,15 @@ func initialize_simulation(sequence: String):
 	replication_mgr.setup_backbones()
 	new_strand_backbone_line = replication_mgr.new_strand_backbone_line
 
+	# ADD — debug gap line
+	if debug_gap_line and is_instance_valid(debug_gap_line):
+		debug_gap_line.queue_free()
+	debug_gap_line = Line2D.new()
+	debug_gap_line.default_color = Color.MAGENTA
+	debug_gap_line.width = 2.0
+	debug_gap_line.z_index = 10
+	add_child(debug_gap_line)
+
 	# Strand end markers
 	var first_x = nucleotide_original_x[0]
 	var last_x = nucleotide_original_x[num_nucleotide_slots - 1]
@@ -248,6 +262,9 @@ func initialize_simulation(sequence: String):
 	# Force an immediate visual update
 	queue_redraw()
 	print("[INIT] Simulation initialized with %d bases: %s" % [num_nucleotide_slots, dna_sequence._to_string()])
+	var pll_diagonal = sqrt(gap_width * gap_width + new_bottom_template_offset * new_bottom_template_offset)
+	var pll_slots = pll_diagonal / nucleotide_slot_spacing
+	print("[INIT] PLL diagonal=%.1f px — fits %.2f slots" % [pll_diagonal, pll_slots])
 
 func teardown_simulation():
 	# Clear all dynamic nodes
@@ -280,6 +297,10 @@ func teardown_simulation():
 		nodes_to_free.append(top_polymerase)
 	if helicase_node:
 		nodes_to_free.append(helicase_node)
+
+	if debug_gap_line:  # ADD
+		nodes_to_free.append(debug_gap_line)
+		debug_gap_line = null
 
 	for node in nodes_to_free:
 		if is_instance_valid(node) and node != null:
@@ -335,6 +356,7 @@ func _process(delta):
 		else:
 			helicase_x = lerp(nucleotide_original_x[idx], nucleotide_original_x[idx + 1], eased)
 		factory_x = helicase_x - gap_width
+		factory_y = new_bottom_template_y
 		settle_blend = helicase_mgr.get_settling_blend()
 
 		# Trombone loop: pulse_offset animates continuously based on slot progress.
@@ -414,6 +436,13 @@ func _process(delta):
 	# ---------- 3. VISUAL RENDERING (Always runs, even when paused) ----------
 	_rebuild_rail()
 	_rebuild_top_rail()
+
+	# ADD — debug gap line: factory_x to helicase_x
+	if debug_gap_line:
+		debug_gap_line.points = PackedVector2Array([
+			Vector2(factory_x, factory_y),
+			Vector2(helicase_x, straight_y),
+		])
 
 	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
 

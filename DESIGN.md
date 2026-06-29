@@ -142,6 +142,7 @@ simulation.gd  — Template Manager (thin scene coordinator)
 ## Roadmap
 
 ### Immediate (v70.5)
+- [ ] Change loop mechanics from physics based to deterministic model based on helicase steps
 - [ ] Ligase joining Okazaki fragments + reveal whole-strand lagging markers
 - [ ] RNA primers and primase enzyme
 
