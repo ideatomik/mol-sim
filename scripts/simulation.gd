@@ -98,9 +98,6 @@ var nucleotide_original_x: Array[float] = []
 
 var nucleotide_backbone_delta: Array[float] = []
 
-var baseline_switched: bool = false  # Mirror of replication_mgr.baseline_switched; used by _rebuild_rail
-var baseline_switch_nucleotide_index: int = -1
-
 var bond_marks: Array[Node2D] = []
 var new_strand_backbone_line: Line2D  # kept for ligase; managed by replication_mgr
 
@@ -401,9 +398,6 @@ func _process(delta):
 		})
 		manual_override = replication_mgr.manual_override
 
-		# Sync mirrored state from replication_mgr
-		if replication_mgr != null:
-			baseline_switched = replication_mgr.baseline_switched
 
 		# Emit progress for the UI
 		progress_changed.emit(get_total_progress())
@@ -662,9 +656,6 @@ func scrub_to(progress: float):
 	factory_x = target_factory_x
 
 
-	baseline_switched = (target_factory_x >= nucleotide_original_x[0])
-	if replication_mgr != null:
-		replication_mgr.baseline_switched = baseline_switched
 
 	# Set phase on helicase_mgr based on scrub position
 	if helicase_mgr != null:
@@ -949,7 +940,8 @@ func _rebuild_top_rail():
 func _rebuild_rail():
 	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
 	var curve = Curve2D.new()
-	var rest_y = new_bottom_template_y if (is_done or baseline_switched) else straight_y
+	#var rest_y = new_bottom_template_y if is_done else straight_y
+	var rest_y = straight_y
 	curve.add_point(Vector2(track_length, rest_y))
 	curve.add_point(Vector2(0, rest_y))
 	rail_path.curve = curve

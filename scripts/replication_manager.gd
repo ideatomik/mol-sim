@@ -16,8 +16,6 @@ var tm: Node = null   # ThemeManager reference, cached in initialize()
 var nucleotide_backbone_delta: Array[float] = []
 
 # ---------- SYNTHESIS STATE ----------
-var baseline_switched: bool = false
-var baseline_switch_nucleotide_index: int = -1
 var manual_override: bool = true
 
 # ---------- CACHED CONTEXT (updated each frame in update()) ----------
@@ -56,8 +54,6 @@ func initialize(p_sim: Node) -> void:
 func reset(num_slots: int) -> void:
 	# Called by simulation.gd after teardown, before spawning new slots.
 	# Resets all per-slot arrays to match the new sequence length.
-	baseline_switched = false
-	baseline_switch_nucleotide_index = -1
 	manual_override = true
 
 	for i in range(num_slots):
@@ -145,16 +141,15 @@ func update(delta: float, ctx: Dictionary) -> void:
 			fade_tween.parallel().tween_property(sim.top_polymerase, "modulate:a", 0.0, sim.fade_duration)
 		if sim.helicase_node:
 			fade_tween.parallel().tween_property(sim.helicase_node, "modulate:a", 0.0, sim.fade_duration)
-		var last = num_slots - 1
-		var wobble_last = sim.nucleotide_bases[last].position.y
+		#var last = num_slots - 1
+		#var wobble_last = sim.nucleotide_bases[last].position.y
 
-	# ---- Lagging strand: baseline switch detection only ----
-	for i in range(template_strand_bottom.size()):
-		var nucleotide_y = template_strand_bottom[i].position.y
-		if not baseline_switched and nucleotide_y >= new_bottom_template_y:
-			baseline_switched = true
-			baseline_switch_nucleotide_index = i
-			print(">>> BASELINE SWITCH TRIGGERED by nucleotide_slot[%d] at y=%.1f" % [i, nucleotide_y])
+	if phase == helicase_mgr.Phase.FINISHING_LAST_PULSE and helicase_mgr.extra_steps_total == 0:
+		var remaining_leading = 0
+		for i in range(num_slots):
+			if nucleotide_original_x[i] > factory_x:
+				remaining_leading += 1
+		helicase_mgr.start_finishing(remaining_leading)
 
 	# ---- Leading strand synthesis ----
 	var leading_synth_count = 0
@@ -318,6 +313,7 @@ func render(delta: float, ctx: Dictionary) -> void:
 # ==========================================
 # QUERY FUNCTIONS
 # ==========================================
+
 
 
 func get_sequence_rich_text(helicase_x: float, nucleotide_original_x: Array) -> String:
