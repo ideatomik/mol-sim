@@ -10,12 +10,9 @@
 
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_5eski")
-num_nucleotide_slots = 36
-polymerase_y_offset = 150.0
-dna_ribbons_gap = 60.0
-settling_threshold = 18.0
-wobble_amplitude = 1.0
+wobble_amplitude = 0.9
 wobble_speed = 1.0
+wobble_phase_offset = 1.0
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=1322865765]
 position = Vector2(640, 360)

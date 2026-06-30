@@ -2,6 +2,28 @@ extends Node
 
 # ==========================================
 # replication_manager.gd
+# v70.5.6: synthesis_circle -> lagging_polymerase, top_polymerase -> leading_polymerase
+# (naming clarity pass). Polymerase y-positions now sit exactly on their
+# template strand's bonded row (template_strand_y for lagging,
+# template_strand_y - dna_ribbons_gap for leading) instead of the
+# polymerase_y_lagging/polymerase_y_leading offsets, so each polymerase visually
+# aligns with the row of bases it's synthesizing alongside.
+#
+# v70.5.5: Self-containment refactor (no behavior change). All leading-strand
+# logic is grouped into clearly-named _leading_* functions
+# (_leading_reset, _leading_setup_backbones, _leading_teardown, _leading_update,
+# _leading_scrub_rebuild, _leading_render), called from the public lifecycle/
+# update/render/scrub functions, which are thin dispatchers. This mirrors
+# the structure the lagging strand will use, so future Okazaki-fragment work
+# only touches _lagging_* functions without threading more conditionals into
+# leading-strand code. Public API (initialize, reset, setup_backbones,
+# teardown, update, render, scrub_rebuild, resume_enzymes, run_intro,
+# get_sequence_rich_text, manual_override) is unchanged.
+#
+# Also removed in v70.5.5: a dead `lagging_synth_count` computation in the
+# old scrub_rebuild() that was computed but never used (leftover from the
+# pre-removal lagging strand).
+#
 # Phase 1 + Phase 2 complete: owns all synthesis state, spawning, synthesis
 # rendering, and enzyme animation. simulation.gd calls update(delta, ctx) each
 # frame and scrub_rebuild(ctx) on scrub. Nodes are added as children of sim
@@ -44,93 +66,38 @@ var leading_synthesized_bases: Array = []
 var leading_hydrogen_bonds: Array = []
 var leading_backbone_line: Line2D = null
 var leading_strand_bond_marks: Array[Node2D] = []
-var top_polymerase: Node2D = null  # ADD
-var synthesis_circle: Node2D = null  # ADD — reference to scene node, set in initialize()
-var synthesis_circle_faded: bool = false  # ADD
-const TOP_POLYMERASE_RADIUS: float = 16.0  # ADD — was sim.synthesis_circle_radius
+var leading_polymerase: Node2D = null  # renamed from top_polymerase
+var lagging_polymerase: Node2D = null  # renamed from synthesis_circle — reference to scene node, set in initialize()
+var lagging_polymerase_faded: bool = false  # renamed from synthesis_circle_faded
+const LEADING_POLYMERASE_RADIUS: float = 16.0  # renamed from TOP_POLYMERASE_RADIUS
 # ---------- MARKERS ----------
 var marker_leading_5p: Node2D = null
 var marker_leading_3p: Node2D = null
 
 # ==========================================
-# LIFECYCLE
+# LIFECYCLE — public dispatchers
 # ==========================================
 
 func initialize(p_sim: Node) -> void:
 	# Called once when simulation.gd first creates this node.
 	sim = p_sim
 	tm = p_sim.get_node("%ThemeManager")
-	synthesis_circle = p_sim.synthesis_circle
-	synthesis_circle_faded = false  # ADD
-	synthesis_circle.modulate.a = 0.0  # ADD — start invisible
+	lagging_polymerase = p_sim.synthesis_circle
+	lagging_polymerase_faded = false
+	lagging_polymerase.modulate.a = 0.0  # start invisible
 
 func reset(num_slots: int) -> void:
 	# Called by simulation.gd after teardown, before spawning new slots.
-	# Resets all per-slot arrays to match the new sequence length.
 	manual_override = true
-
-	for i in range(num_slots):
-		leading_synthesized_bases.append(null)
-		leading_hydrogen_bonds.append(null)
+	_leading_reset(num_slots)
 
 func setup_backbones() -> void:
-	# Creates the Line2D backbone nodes owned by replication_manager.
 	# Called after reset() during initialize_simulation().
-
-	leading_backbone_line = Line2D.new()
-	leading_backbone_line.default_color = tm.backbone_color
-	leading_backbone_line.width = tm.backbone_line_width
-	leading_backbone_line.z_index = -1
-	leading_backbone_line.joint_mode = Line2D.LINE_JOINT_ROUND
-	leading_backbone_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
-	leading_backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
-	sim.add_child(leading_backbone_line)
-
-	#Top polymerase visual
-	if top_polymerase and is_instance_valid(top_polymerase):
-		top_polymerase.queue_free()
-	top_polymerase = Node2D.new()
-	top_polymerase.z_index = 2
-	var poly = Polygon2D.new()
-	var points = PackedVector2Array()
-	const SEGMENTS = 32
-	for i in range(SEGMENTS):
-		var angle = (float(i) / SEGMENTS) * TAU
-		points.append(Vector2(cos(angle), sin(angle)) * TOP_POLYMERASE_RADIUS)
-	poly.polygon = points
-	poly.color = Color(0.2, 0.4, 1.0, 1.0)
-	top_polymerase.add_child(poly)
-	top_polymerase.position = Vector2(sim.polymerase_x, sim.polymerase_y_leading)
-	top_polymerase.modulate.a = 0.0
-	sim.add_child(top_polymerase)
+	_leading_setup_backbones()
 
 func teardown() -> void:
 	# Free all owned nodes. Called by simulation.gd teardown_simulation().
-
-	for base in leading_synthesized_bases:
-		if base != null and is_instance_valid(base): base.queue_free()
-	for bond in leading_hydrogen_bonds:
-		if bond != null and is_instance_valid(bond): bond.queue_free()
-	for mark in leading_strand_bond_marks:
-		if mark != null and is_instance_valid(mark): mark.queue_free()
-
-
-	if leading_backbone_line and is_instance_valid(leading_backbone_line):
-		leading_backbone_line.queue_free()
-	if top_polymerase and is_instance_valid(top_polymerase):  # ADD
-		top_polymerase.queue_free()
-		top_polymerase = null
-
-	if marker_leading_5p and is_instance_valid(marker_leading_5p): marker_leading_5p.queue_free()
-	if marker_leading_3p and is_instance_valid(marker_leading_3p): marker_leading_3p.queue_free()
-
-	# Reset refs — reset() will repopulate arrays next initialize_simulation()
-
-	leading_backbone_line = null
-
-	marker_leading_5p = null
-	marker_leading_3p = null
-
+	_leading_teardown()
 
 # ==========================================
 # UPDATE — called from simulation.gd _process
@@ -141,17 +108,8 @@ func update(delta: float, ctx: Dictionary) -> void:
 	#   helicase_x, polymerase_x, center_y, template_strand_y,
 	#   polymerase_y_lagging, polymerase_y_leading, dna_ribbons_gap,
 	#   polymerase_y_offset, wobble_t, phase, helicase_mgr, num_slots
-	var helicase_x: float = ctx.helicase_x
-	var polymerase_x: float = ctx.polymerase_x
-	var center_y: float = ctx.center_y
-	var polymerase_y_lagging: float = ctx.polymerase_y_lagging
-	var polymerase_y_leading: float = ctx.polymerase_y_leading
 	var phase = ctx.phase
 	var helicase_mgr = ctx.helicase_mgr
-	var num_slots: int = ctx.num_slots
-
-	var template_strand_bottom = sim.template_strand_bottom
-	var nucleotide_original_x = sim.nucleotide_original_x
 
 	# Cache context for use in signal handlers
 	ctx_polymerase_x = ctx.polymerase_x
@@ -167,34 +125,173 @@ func update(delta: float, ctx: Dictionary) -> void:
 	ctx_num_slots = ctx.num_slots
 	ctx_nucleotide_original_x = sim.nucleotide_original_x
 
-
-
-	# ---- DONE: fade enzymes, spawn final markers ----
-	if phase == helicase_mgr.Phase.DONE and not synthesis_circle_faded:
-		synthesis_circle_faded = true
+	# ---- DONE: fade enzymes ----
+	if phase == helicase_mgr.Phase.DONE and not lagging_polymerase_faded:
+		lagging_polymerase_faded = true
 		var fade_tween = sim.create_tween()
-		fade_tween.tween_property(synthesis_circle, "modulate:a", 0.0, sim.fade_duration)
-		if top_polymerase:
-			fade_tween.parallel().tween_property(top_polymerase, "modulate:a", 0.0, sim.fade_duration)
+		fade_tween.tween_property(lagging_polymerase, "modulate:a", 0.0, sim.fade_duration)
+		if leading_polymerase:
+			fade_tween.parallel().tween_property(leading_polymerase, "modulate:a", 0.0, sim.fade_duration)
 		if sim.helicase_node:
 			fade_tween.parallel().tween_property(sim.helicase_node, "modulate:a", 0.0, sim.fade_duration)
 
-	# ADD — top polymerase position
-	if top_polymerase and phase != helicase_mgr.Phase.DONE:
-		top_polymerase.position = Vector2(polymerase_x, polymerase_y_leading)
+	# ---- Enzyme positions: each polymerase sits on its own template strand's row ----
+	if leading_polymerase and phase != helicase_mgr.Phase.DONE:
+		leading_polymerase.position = Vector2(ctx.polymerase_x, ctx.new_top_template_y)
+		#print("[DEBUG] leading_polymerase.position=", leading_polymerase.position, " template_strand_y=", ctx.template_strand_y, " dna_ribbons_gap=", ctx.dna_ribbons_gap, " global_pos=", leading_polymerase.global_position)
+	if lagging_polymerase and phase != helicase_mgr.Phase.DONE:
+		lagging_polymerase.position = Vector2(ctx.polymerase_x, ctx.template_strand_y)
 
-	# ADD — synthesis circle position
-	if synthesis_circle and phase != helicase_mgr.Phase.DONE:
-		synthesis_circle.position = Vector2(polymerase_x, polymerase_y_lagging)
-
+	# ---- Helicase finishing trigger (driven by leading strand's remaining slots) ----
 	if phase == helicase_mgr.Phase.FINISHING_LAST_PULSE and helicase_mgr.extra_steps_total == 0:
 		var remaining_leading = 0
-		for i in range(num_slots):
-			if nucleotide_original_x[i] > polymerase_x:
+		for i in range(ctx.num_slots):
+			if sim.nucleotide_original_x[i] > ctx.polymerase_x:
 				remaining_leading += 1
 		helicase_mgr.start_finishing(remaining_leading)
 
-	# ---- Leading strand synthesis ----
+	_leading_update(ctx.polymerase_x, ctx.num_slots, sim.nucleotide_original_x)
+
+# ==========================================
+# SCRUB REBUILD — called from simulation.gd scrub_to()
+# ==========================================
+
+func scrub_rebuild(ctx: Dictionary) -> void:
+	# ctx keys: target_polymerase_x, helicase_x, is_done_phase, num_slots,
+	#           nucleotide_original_x, template_strand_y, helicase_mgr
+	var target_polymerase_x: float = ctx.target_polymerase_x
+	var nucleotide_original_x = ctx.nucleotide_original_x
+
+	# ---- Enzyme visibility/position on scrub: each polymerase sits on its own template strand's row ----
+	if leading_polymerase:
+		leading_polymerase.modulate.a = 1.0 if not ctx.is_done_phase else 0.0
+		leading_polymerase.position = Vector2(target_polymerase_x, ctx.new_top_template_y)
+	if lagging_polymerase:
+		lagging_polymerase_faded = ctx.is_done_phase
+		lagging_polymerase.modulate.a = 0.0 if ctx.is_done_phase else 1.0
+		lagging_polymerase.position = Vector2(target_polymerase_x, sim.template_strand_y)
+
+	_leading_scrub_rebuild(ctx)
+
+# ==========================================
+# ENZYME ANIMATION — called from simulation.gd toggle_play() / _run_intro()
+# ==========================================
+
+func resume_enzymes() -> void:
+	lagging_polymerase.modulate.a = 1.0
+	lagging_polymerase_faded = false
+	if leading_polymerase:
+		leading_polymerase.modulate.a = 1.0
+
+func run_intro(intro_x: float, fade_time: float, slide_time: float, tween: Tween) -> void:
+	var polymerase_x_offset = sim.polymerase_x_offset_slots * sim.nucleotide_slot_spacing
+	lagging_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.template_strand_y)
+	tween.tween_property(lagging_polymerase, "modulate:a", 1.0, fade_time)
+	tween.tween_property(lagging_polymerase, "position",
+		Vector2(sim.polymerase_x, sim.template_strand_y), slide_time).set_delay(fade_time)
+
+	if leading_polymerase:
+		leading_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.new_top_template_y)
+		tween.tween_property(leading_polymerase, "modulate:a", 1.0, fade_time)
+		tween.tween_property(leading_polymerase, "position",
+			Vector2(sim.polymerase_x, sim.new_top_template_y), slide_time).set_delay(fade_time)
+
+# ==========================================
+# RENDER — called from simulation.gd _process visual section
+# ==========================================
+
+func render(delta: float, ctx: Dictionary) -> void:
+	# Updates positions and backbones for all synthesized nodes.
+	# ctx keys: wobble_t, polymerase_y_lagging, dna_ribbons_gap,
+	#           polymerase_y_offset, center_y, template_strand_y,
+	#           new_top_template_y, num_slots,
+	#           nucleotide_original_x, template_strand_bottom,
+	#           nucleotide_bases, top_strand_slots
+	_leading_render(ctx)
+
+# ==========================================
+# QUERY FUNCTIONS
+# ==========================================
+
+func get_sequence_rich_text(helicase_x: float, nucleotide_original_x: Array) -> String:
+	var text = "5' "
+	var seq_string = sim.dna_sequence._to_string()
+	if seq_string.is_empty():
+		return "5' [empty] 3'"
+	for i in range(seq_string.length()):
+		var base = seq_string[i]
+		if i < nucleotide_original_x.size() and nucleotide_original_x[i] <= helicase_x:
+			text += "[color=#4CAF50]" + base + "[/color] "
+		else:
+			text += "[color=#FFFFFF]" + base + "[/color] "
+		if (i + 1) % 10 == 0:
+			text += " "
+	text += "3'"
+	return text
+
+# ==========================================
+# LEADING STRAND — self-contained section
+# ==========================================
+# Owns: leading_synthesized_bases, leading_hydrogen_bonds, leading_backbone_line,
+# leading_strand_bond_marks, leading_polymerase, marker_leading_5p/3p.
+# Synthesis trigger: simple position check, nucleotide_original_x[i] <= polymerase_x.
+# No queue, no fragment boundaries — continuous synthesis, same as a real leading strand.
+
+func _leading_reset(num_slots: int) -> void:
+	for i in range(num_slots):
+		leading_synthesized_bases.append(null)
+		leading_hydrogen_bonds.append(null)
+
+func _leading_setup_backbones() -> void:
+	leading_backbone_line = Line2D.new()
+	leading_backbone_line.default_color = tm.backbone_color
+	leading_backbone_line.width = tm.backbone_line_width
+	leading_backbone_line.z_index = -1
+	leading_backbone_line.joint_mode = Line2D.LINE_JOINT_ROUND
+	leading_backbone_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	leading_backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
+	sim.add_child(leading_backbone_line)
+
+	# Leading polymerase visual
+	if leading_polymerase and is_instance_valid(leading_polymerase):
+		leading_polymerase.queue_free()
+	leading_polymerase = Node2D.new()
+	leading_polymerase.z_index = 2
+	var poly = Polygon2D.new()
+	var points = PackedVector2Array()
+	const SEGMENTS = 32
+	for i in range(SEGMENTS):
+		var angle = (float(i) / SEGMENTS) * TAU
+		points.append(Vector2(cos(angle), sin(angle)) * LEADING_POLYMERASE_RADIUS)
+	poly.polygon = points
+	poly.color = Color(0.2, 0.4, 1.0, 1.0)
+	leading_polymerase.add_child(poly)
+	leading_polymerase.position = Vector2(sim.polymerase_x, sim.new_top_template_y)
+	leading_polymerase.modulate.a = 0.0
+	sim.add_child(leading_polymerase)
+
+func _leading_teardown() -> void:
+	for base in leading_synthesized_bases:
+		if base != null and is_instance_valid(base): base.queue_free()
+	for bond in leading_hydrogen_bonds:
+		if bond != null and is_instance_valid(bond): bond.queue_free()
+	for mark in leading_strand_bond_marks:
+		if mark != null and is_instance_valid(mark): mark.queue_free()
+
+	if leading_backbone_line and is_instance_valid(leading_backbone_line):
+		leading_backbone_line.queue_free()
+	if leading_polymerase and is_instance_valid(leading_polymerase):
+		leading_polymerase.queue_free()
+		leading_polymerase = null
+
+	if marker_leading_5p and is_instance_valid(marker_leading_5p): marker_leading_5p.queue_free()
+	if marker_leading_3p and is_instance_valid(marker_leading_3p): marker_leading_3p.queue_free()
+
+	leading_backbone_line = null
+	marker_leading_5p = null
+	marker_leading_3p = null
+
+func _leading_update(polymerase_x: float, num_slots: int, nucleotide_original_x: Array) -> void:
 	var leading_synth_count = 0
 	for i in range(num_slots):
 		if nucleotide_original_x[i] <= polymerase_x:
@@ -206,23 +303,11 @@ func update(delta: float, ctx: Dictionary) -> void:
 			leading_synthesized_bases[i] = _spawn_leading_base(i, sim.dna_sequence.get_complement(i))
 			leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
-# ==========================================
-# SCRUB REBUILD — called from simulation.gd scrub_to()
-# ==========================================
-
-func scrub_rebuild(ctx: Dictionary) -> void:
-	# ctx keys: target_polymerase_x, helicase_x, is_done_phase, num_slots,
-	#           nucleotide_original_x, template_strand_y, helicase_mgr
+func _leading_scrub_rebuild(ctx: Dictionary) -> void:
 	var target_polymerase_x: float = ctx.target_polymerase_x
-	var helicase_x: float = ctx.helicase_x
 	var is_done_phase: bool = ctx.is_done_phase
 	var num_slots: int = ctx.num_slots
 	var nucleotide_original_x = ctx.nucleotide_original_x
-	# ADD — reset top polymerase visibility on scrub
-	if top_polymerase:
-		top_polymerase.modulate.a = 1.0 if not ctx.is_done_phase else 0.0
-		top_polymerase.position = Vector2(ctx.target_polymerase_x, sim.polymerase_y_leading)
-
 
 	# ---- Free leading markers when before first base ----
 	if target_polymerase_x < nucleotide_original_x[0]:
@@ -232,22 +317,6 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 		if marker_leading_3p and is_instance_valid(marker_leading_3p):
 			marker_leading_3p.queue_free()
 			marker_leading_3p = null
-
-	# ADD — synthesis circle scrub
-	if synthesis_circle:
-		synthesis_circle_faded = ctx.is_done_phase
-		synthesis_circle.modulate.a = 0.0 if ctx.is_done_phase else 1.0
-		synthesis_circle.position = Vector2(ctx.target_polymerase_x, sim.polymerase_y_lagging)
-
-	# ---- Rebuild lagging synthesis state ----
-	var lagging_synth_count = 0
-	for i in range(num_slots):
-		if is_done_phase:
-			lagging_synth_count += 1
-		elif nucleotide_original_x[i] <= target_polymerase_x:
-			lagging_synth_count += 1
-		else:
-			break
 
 	# ---- Rebuild leading strand ----
 	for base in leading_synthesized_bases:
@@ -275,53 +344,13 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 			leading_synthesized_bases[i] = _spawn_leading_base(i, sim.dna_sequence.get_complement(i))
 			leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
-# ==========================================
-# ENZYME ANIMATION — called from simulation.gd toggle_play() / _run_intro()
-# ==========================================
-
-func resume_enzymes() -> void:
-	synthesis_circle.modulate.a = 1.0
-	synthesis_circle_faded = false
-	if top_polymerase:
-		top_polymerase.modulate.a = 1.0
-
-func run_intro(intro_x: float, fade_time: float, slide_time: float, tween: Tween) -> void:
-	var polymerase_x_offset = sim.polymerase_x_offset_slots * sim.nucleotide_slot_spacing
-	synthesis_circle.position = Vector2(intro_x - polymerase_x_offset, sim.polymerase_y_lagging)
-	tween.tween_property(synthesis_circle, "modulate:a", 1.0, fade_time)
-	tween.tween_property(synthesis_circle, "position",
-		Vector2(sim.polymerase_x, sim.polymerase_y_lagging), slide_time).set_delay(fade_time)
-
-	if top_polymerase:
-		top_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.polymerase_y_leading)
-		tween.tween_property(top_polymerase, "modulate:a", 1.0, fade_time)
-		tween.tween_property(top_polymerase, "position",
-			Vector2(sim.polymerase_x, sim.polymerase_y_leading), slide_time).set_delay(fade_time)
-
-# ==========================================
-# RENDER — called from simulation.gd _process visual section
-# ==========================================
-
-func render(delta: float, ctx: Dictionary) -> void:
-	# Updates positions and backbones for all synthesized nodes.
-	# ctx keys: wobble_t, polymerase_y_lagging, dna_ribbons_gap,
-	#           polymerase_y_offset, center_y, template_strand_y,
-	#           new_top_template_y, num_slots,
-	#           nucleotide_original_x, template_strand_bottom,
-	#           nucleotide_bases, top_strand_slots
+func _leading_render(ctx: Dictionary) -> void:
 	var wobble_t: float = ctx.wobble_t
 	var dna_ribbons_gap: float = ctx.dna_ribbons_gap
-	var polymerase_y_offset: float = ctx.polymerase_y_offset
-	var center_y: float = ctx.center_y
 	var new_top_template_y: float = ctx.new_top_template_y
-	var num_slots: int = ctx.num_slots
 	var nucleotide_original_x = ctx.nucleotide_original_x
-	var template_strand_bottom = ctx.template_strand_bottom
-	var nucleotide_bases = ctx.nucleotide_bases
-	var top_strand_slots = ctx.top_strand_slots
 
-
-	# ---- Leading strand ----
+	# ---- Leading strand backbone ----
 	var leading_points = PackedVector2Array()
 	for i in range(leading_synthesized_bases.size()):
 		if leading_synthesized_bases[i] != null:
@@ -337,7 +366,6 @@ func render(delta: float, ctx: Dictionary) -> void:
 	leading_backbone_line.points = leading_points
 	leading_backbone_line.width = tm.backbone_line_width
 	_update_bond_marks_leading(leading_points)
-
 
 	# ---- Leading strand markers ----
 	if marker_leading_5p == null and leading_synthesized_bases[0] != null:
@@ -377,30 +405,6 @@ func render(delta: float, ctx: Dictionary) -> void:
 				leading_y - tm.backbone_offset_distance
 			)
 
-# ==========================================
-# QUERY FUNCTIONS
-# ==========================================
-
-func get_sequence_rich_text(helicase_x: float, nucleotide_original_x: Array) -> String:
-	var text = "5' "
-	var seq_string = sim.dna_sequence._to_string()
-	if seq_string.is_empty():
-		return "5' [empty] 3'"
-	for i in range(seq_string.length()):
-		var base = seq_string[i]
-		if i < nucleotide_original_x.size() and nucleotide_original_x[i] <= helicase_x:
-			text += "[color=#4CAF50]" + base + "[/color] "
-		else:
-			text += "[color=#FFFFFF]" + base + "[/color] "
-		if (i + 1) % 10 == 0:
-			text += " "
-	text += "3'"
-	return text
-
-# ==========================================
-# SPAWNING FUNCTIONS
-# ==========================================
-
 func _spawn_leading_base(index: int, base_type: String) -> Node2D:
 	var base = sim.NewNitrogenBaseScene.instantiate()
 	var world_x = sim.nucleotide_original_x[index]
@@ -433,15 +437,6 @@ func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
 	sim.hydrogen_bonds_container.add_child(container)
 	return container
 
-func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
-	var marker = sim.NewNitrogenBaseScene.instantiate()
-	marker.position = world_pos
-	marker.z_index = 3
-	sim.add_child(marker)
-	marker.set_base_type(marker_type)
-	marker.set_colors(tm.marker_color, tm.marker_font_color)
-	return marker
-
 func _update_bond_marks_leading(points: PackedVector2Array) -> void:
 	var needed = max(0, points.size() - 1)
 	while leading_strand_bond_marks.size() < needed:
@@ -459,6 +454,19 @@ func _update_bond_marks_leading(points: PackedVector2Array) -> void:
 		mark.visible = segment.length() > 0.0
 		if mark.visible:
 			mark.rotation = segment.angle()
+
+# ==========================================
+# SHARED SPAWNING HELPERS
+# ==========================================
+
+func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
+	var marker = sim.NewNitrogenBaseScene.instantiate()
+	marker.position = world_pos
+	marker.z_index = 3
+	sim.add_child(marker)
+	marker.set_base_type(marker_type)
+	marker.set_colors(tm.marker_color, tm.marker_font_color)
+	return marker
 
 func _create_bond_mark_sprite() -> Node2D:
 	var holder = Node2D.new()

@@ -568,6 +568,7 @@ func scrub_to(progress: float):
 			num_slots = num_nucleotide_slots,
 			nucleotide_original_x = nucleotide_original_x,
 			template_strand_y = template_strand_y,
+			new_top_template_y = new_top_template_y,
 			helicase_mgr = helicase_mgr,
 		})
 
