@@ -149,6 +149,9 @@ func scrub_to_slot(index: int) -> void:
 	current_slot_index = clamp(index, 0, last_slot_index)
 	step_t = 0.0
 	is_running = false
+	extra_steps_total = 0  # ADD — clear stale finishing state from a previous run
+	extra_steps_done = 0   # ADD
+	step_duration = base_step_duration / speed_multiplier  # ADD — undo finishing acceleration
 	# Phase is set by simulation.gd's scrub_to() after calling this
 
 func set_phase(new_phase: int) -> void:

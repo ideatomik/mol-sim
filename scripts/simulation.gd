@@ -19,9 +19,9 @@ const NewNitrogenBaseScene := preload("res://scenes/nitrogen_base.tscn")
 @onready var background_rect: ColorRect = $CanvasLayer/ColorRect
 @onready var rail_path: Path2D = $RailPath
 @onready var template_strand_original_track: Line2D = $TemplateStrandOriginalTrack
-@onready var new_strand_line: Line2D = $NewStrandLine
+
 @onready var synthesis_circle: Node2D = $SynthesisCircle
-@onready var template_strand_new_track: Line2D = $TemplateStrandNewTrack
+
 @onready var backbone_line: Line2D = $BackboneLine
 @onready var hydrogen_bonds_container: Node2D = $HydrogenBondsContainer
 @onready var template_hydrogen_bonds_container: Node2D = $TemplateHydrogenBondsContainer
@@ -170,13 +170,6 @@ func initialize_simulation(sequence: String):
 	if helicase_node:
 		helicase_node.modulate.a = 0.0
 
-	template_strand_original_track.visible = true
-	template_strand_new_track.points = PackedVector2Array([
-		Vector2(0, new_bottom_template_y),
-		Vector2(track_length, new_bottom_template_y)
-	])
-	template_strand_new_track.visible = true
-
 	backbone_line.default_color = %ThemeManager.backbone_color
 	backbone_line.width = %ThemeManager.backbone_line_width
 	backbone_line.z_index = -1
@@ -192,8 +185,6 @@ func initialize_simulation(sequence: String):
 	top_strand_backbone_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
 	top_strand_backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
 	add_child(top_strand_backbone_line)
-
-	top_template_new_track.visible = false
 
 	_spawn_top_strand()
 	_rebuild_top_rail()
