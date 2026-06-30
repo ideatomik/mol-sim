@@ -15,9 +15,6 @@ dna_ribbons_gap = 60.0
 settling_threshold = 18.0
 wobble_amplitude = 1.0
 wobble_speed = 1.0
-synthesis_circle_radius = 32.0
-synthesis_inside_threshold = 32.0
-synthesis_outside_threshold = 40.0
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=1322865765]
 position = Vector2(640, 360)
@@ -40,9 +37,10 @@ color = Color(0.15294118, 0.22745098, 0.44705883, 1)
 curve = SubResource("Curve2D_mwrr7")
 
 [node name="TemplateStrandOriginalTrack" type="Line2D" parent="." unique_id=498789482]
+visible = false
 points = PackedVector2Array(656, -10)
 width = 2.0
-default_color = Color(0, 1, 0, 1)
+default_color = Color(0, 1, 0, 0)
 
 [node name="NewStrandLine" type="Line2D" parent="." unique_id=1075958164]
 width = 3.0
@@ -54,8 +52,9 @@ width = 3.0
 [node name="SynthesisCollisionShape" type="CollisionShape2D" parent="SynthesisCircle/SynthesisArea" unique_id=1640759733]
 
 [node name="TemplateStrandNewTrack" type="Line2D" parent="." unique_id=1670290036]
+visible = false
 width = 3.0
-default_color = Color(0.76862746, 0, 0, 1)
+default_color = Color(0.76862746, 0, 0, 0)
 
 [node name="TopTemplateStrandNewTrack" type="Line2D" parent="." unique_id=635682591]
 default_color = Color(1, 1, 1, 0)

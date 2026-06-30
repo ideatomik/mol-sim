@@ -5,7 +5,7 @@
 [ext_resource type="FontFile" uid="uid://db3ngjh8pre76" path="res://fonts/Font Awesome/Font Awesome 7 Free-Solid-900.otf" id="4_08kqy"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_wxbm6"]
-bg_color = Color(1, 1, 1, 0.8)
+bg_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_08kqy"]
 bg_color = Color(1, 1, 1, 1)
@@ -59,7 +59,7 @@ size_flags_vertical = 3
 [node name="SequenceLabel" type="RichTextLabel" parent="Panel/MarginContainer/VBoxContainer/VBoxContainer" unique_id=1224318101]
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
-theme_override_colors/default_color = Color(0, 0, 0, 1)
+theme_override_colors/default_color = Color(1, 1, 1, 1)
 theme_override_fonts/normal_font = ExtResource("2_wxbm6")
 theme_override_font_sizes/normal_font_size = 18
 bbcode_enabled = true
@@ -80,15 +80,15 @@ layout_mode = 2
 size_flags_horizontal = 4
 alignment = 1
 
-[node name="Menu" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1733611362]
-custom_minimum_size = Vector2(24, 0)
-layout_mode = 2
-theme_override_fonts/font = ExtResource("4_08kqy")
-text = ""
-
 [node name="LeftSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=723413838]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
+
+[node name="PlayPauseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1403819340]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+text = "▶"
 
 [node name="LeftSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1861830833]
 custom_minimum_size = Vector2(32, 0)
@@ -107,11 +107,11 @@ layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 text = ""
 
-[node name="PlayPauseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1403819340]
-custom_minimum_size = Vector2(40, 0)
+[node name="StopButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=112233449]
+custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
-text = "▶"
+text = "⏹"
 
 [node name="Forward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=736944061]
 custom_minimum_size = Vector2(24, 0)
@@ -125,12 +125,6 @@ layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 text = "⏭"
 
-[node name="StopButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=112233449]
-custom_minimum_size = Vector2(32, 0)
-layout_mode = 2
-theme_override_fonts/font = ExtResource("4_08kqy")
-text = "⏹"
-
 [node name="EjectSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1939655509]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
@@ -140,6 +134,12 @@ custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 text = ""
+
+[node name="Menu" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1733611362]
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+text = ""
 
 [node name="Button" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=415854509]
 visible = false

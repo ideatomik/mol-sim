@@ -21,7 +21,6 @@ const NewNitrogenBaseScene := preload("res://scenes/nitrogen_base.tscn")
 @onready var template_strand_original_track: Line2D = $TemplateStrandOriginalTrack
 @onready var new_strand_line: Line2D = $NewStrandLine
 @onready var synthesis_circle: Node2D = $SynthesisCircle
-@onready var synthesis_area: Area2D = $SynthesisCircle/SynthesisArea
 @onready var template_strand_new_track: Line2D = $TemplateStrandNewTrack
 @onready var backbone_line: Line2D = $BackboneLine
 @onready var hydrogen_bonds_container: Node2D = $HydrogenBondsContainer
@@ -57,21 +56,10 @@ var track_length: float = 0.0
 @export var wobble_speed: float = 1.5
 @export var wobble_phase_offset: float = 0.8
 
-@export_group("Synthesis Circle")
-@export var synthesis_circle_radius: float = 16.0
-@export var synthesis_inside_threshold: float = 16.0
-@export var synthesis_outside_threshold: float = 24.0
 
 # ---------- STATE VARIABLES ----------
 var new_bottom_template_y: float = 0.0
 var new_top_template_y: float = 0.0
-var new_synthesized_strand_y: float = 0.0
-var new_strand_y: float = 0.0
-var synthesis_circle_y: float = 0.0
-var pulse_width: float = 0.0
-
-var synthesis_circle_faded: bool = false
-var top_polymerase: Node2D = null
 var helicase_node: Node2D = null
 
 var debug_gap_line: Line2D = null
@@ -144,7 +132,6 @@ func initialize_simulation(sequence: String):
 	# 3. Update parameters from the resource
 	num_nucleotide_slots = dna_sequence.get_length()
 	track_length = (num_nucleotide_slots - 1) * nucleotide_slot_spacing + 2.0 * gap_width
-	pulse_width = pulse_nucleotide_count * nucleotide_slot_spacing  # For Okazaki boundary arithmetic
 
 	# 4. RESET all state variables
 	helicase_x = gap_width
@@ -173,20 +160,13 @@ func initialize_simulation(sequence: String):
 
 	new_bottom_template_y = straight_y + new_bottom_template_offset
 	new_top_template_y = straight_y - dna_ribbons_gap - new_bottom_template_offset
-	new_synthesized_strand_y = new_bottom_template_y + new_bottom_template_offset
-	new_strand_y = straight_y + nucleotide_slot_size.y
-	synthesis_circle_y = straight_y
 
 	# 5. REBUILD all visual elements
 	_rebuild_rail()
 	_spawn_nucleotide_slots()
-	_setup_top_polymerase()
 	_setup_helicase()
 
 	# All enzymes start invisible; they fade in on first play.
-	synthesis_circle.modulate.a = 0.0
-	if top_polymerase:
-		top_polymerase.modulate.a = 0.0
 	if helicase_node:
 		helicase_node.modulate.a = 0.0
 
@@ -288,8 +268,7 @@ func teardown_simulation():
 		nodes_to_free.append(marker_top_5p)
 	if marker_top_3p:
 		nodes_to_free.append(marker_top_3p)
-	if top_polymerase:
-		nodes_to_free.append(top_polymerase)
+
 	if helicase_node:
 		nodes_to_free.append(helicase_node)
 
@@ -372,9 +351,6 @@ func _process(delta):
 		var phase = helicase_mgr.get_phase()
 
 		# ---- Enzyme positions ----
-		synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
-		if top_polymerase:
-			top_polymerase.position = Vector2(factory_x, straight_y - dna_ribbons_gap - new_bottom_template_offset)
 		if helicase_node:
 			helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
 
@@ -394,7 +370,6 @@ func _process(delta):
 			phase = phase,
 			helicase_mgr = helicase_mgr,
 			num_slots = num_nucleotide_slots,
-			pulse_width = pulse_width,
 		})
 		manual_override = replication_mgr.manual_override
 
@@ -594,13 +569,10 @@ func toggle_play():
 		if helicase_mgr.get_phase() == helicase_mgr.Phase.INTRO:
 			_run_intro()
 		else:
-			synthesis_circle.modulate.a = 1.0
-			if top_polymerase:
-				top_polymerase.modulate.a = 1.0
+			replication_mgr.resume_enzymes()
 			if helicase_node:
 				helicase_node.modulate.a = 1.0
 			helicase_mgr.resume()
-		synthesis_circle_faded = false
 	elif helicase_mgr != null:
 		helicase_mgr.pause()
 
@@ -610,24 +582,14 @@ func _run_intro():
 	var fade_time = 0.4
 	var slide_time = 0.5
 
-	synthesis_circle.position = Vector2(intro_x - gap_width, new_bottom_template_y)
-	if top_polymerase:
-		top_polymerase.position = Vector2(intro_x - gap_width, straight_y - dna_ribbons_gap - new_bottom_template_offset)
 	if helicase_node:
 		helicase_node.position = Vector2(intro_x, straight_y - dna_ribbons_gap / 2.0)
 
 	var tween = create_tween().set_parallel(true)
-	tween.tween_property(synthesis_circle, "modulate:a", 1.0, fade_time)
-	if top_polymerase:
-		tween.tween_property(top_polymerase, "modulate:a", 1.0, fade_time)
+	replication_mgr.run_intro(intro_x, fade_time, slide_time, tween)
+
 	if helicase_node:
 		tween.tween_property(helicase_node, "modulate:a", 1.0, fade_time)
-	tween.tween_property(synthesis_circle, "position",
-		Vector2(factory_x, new_bottom_template_y), slide_time).set_delay(fade_time)
-	if top_polymerase:
-		tween.tween_property(top_polymerase, "position",
-			Vector2(factory_x, straight_y - dna_ribbons_gap - new_bottom_template_offset), slide_time).set_delay(fade_time)
-	if helicase_node:
 		tween.tween_property(helicase_node, "position",
 			Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0), slide_time).set_delay(fade_time)
 	# Notify helicase_mgr when intro tween completes → starts SWEEPING
@@ -655,8 +617,6 @@ func scrub_to(progress: float):
 	helicase_x = target_helicase_x
 	factory_x = target_factory_x
 
-
-
 	# Set phase on helicase_mgr based on scrub position
 	if helicase_mgr != null:
 		if target_slot >= num_nucleotide_slots - 1:
@@ -666,10 +626,6 @@ func scrub_to(progress: float):
 			helicase_x = last_x + gap_width
 			factory_x = last_x
 			settle_blend = 1.0
-			synthesis_circle_faded = true
-			synthesis_circle.modulate.a = 0.0
-			if top_polymerase:
-				top_polymerase.modulate.a = 0.0
 			if helicase_node:
 				helicase_node.modulate.a = 0.0
 		elif target_factory_x > nucleotide_original_x[num_nucleotide_slots - 1]:
@@ -688,7 +644,6 @@ func scrub_to(progress: float):
 			helicase_x = helicase_x,
 			is_done_phase = is_done_phase,
 			num_slots = num_nucleotide_slots,
-			pulse_width = pulse_width,
 			nucleotide_original_x = nucleotide_original_x,
 			straight_y = straight_y,
 			helicase_mgr = helicase_mgr,
@@ -707,15 +662,10 @@ func scrub_to(progress: float):
 	for i in range(top_strand_slots.size()):
 		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
 
-	synthesis_circle.modulate.a = 1.0
-	if top_polymerase:
-		top_polymerase.modulate.a = 1.0
+
 	if helicase_node:
 		helicase_node.modulate.a = 1.0
 
-	synthesis_circle.position = Vector2(factory_x, new_bottom_template_y)
-	if top_polymerase:
-		top_polymerase.position = Vector2(factory_x, straight_y - dna_ribbons_gap - new_bottom_template_offset)
 	if helicase_node:
 		helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
 
@@ -726,19 +676,6 @@ func scrub_to_nucleotide_index(index: int):
 	var progress = float(index) / float(num_nucleotide_slots - 1)
 	scrub_to(progress)
 
-#func step_forward():
-#	var count = get_synthesized_count()
-#	if count < num_nucleotide_slots:
-#		scrub_to_nucleotide_index(count + 1)
-#	else:
-#		scrub_to_nucleotide_index(num_nucleotide_slots - 1)
-
-#func step_backward():
-#	var count = get_synthesized_count()
-#	if count > 0:
-#		scrub_to_nucleotide_index(count - 1)
-#	else:
-#		scrub_to_nucleotide_index(0)
 
 # ==========================================
 # UI HELPER FUNCTIONS
@@ -978,23 +915,6 @@ func _setup_helicase():
 	helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
 	add_child(helicase_node)
 
-func _setup_top_polymerase():
-	top_polymerase = Node2D.new()
-	top_polymerase.z_index = 2
-	var poly = Polygon2D.new()
-	var points = PackedVector2Array()
-	const SEGMENTS = 32
-	for i in range(SEGMENTS):
-		var angle = (float(i) / SEGMENTS) * TAU
-		points.append(Vector2(cos(angle), sin(angle)) * synthesis_circle_radius)
-	poly.polygon = points
-	poly.color = Color(0.2, 0.4, 1.0, 1.0)
-	top_polymerase.add_child(poly)
-	top_polymerase.position = Vector2(factory_x, straight_y - dna_ribbons_gap - new_bottom_template_offset)
-	add_child(top_polymerase)
-
-
-
 func _update_bond_marks_fragment(frag: Dictionary, points: PackedVector2Array) -> void:
 	var needed = max(0, points.size() - 1)
 	while frag.bond_marks.size() < needed:
@@ -1044,27 +964,6 @@ func _update_bond_marks_top_strand(points: PackedVector2Array):
 		var mid = (a + b) / 2.0
 		var segment = b - a
 		var mark = top_strand_bond_marks[i]
-		mark.position = mid
-		mark.visible = segment.length() > 0.0
-		if mark.visible:
-			mark.rotation = segment.angle()
-
-func _update_bond_marks_leading(points: PackedVector2Array):
-	if replication_mgr == null:
-		return
-	var leading_strand_bond_marks = replication_mgr.leading_strand_bond_marks
-	var needed = max(0, points.size() - 1)
-	while leading_strand_bond_marks.size() < needed:
-		leading_strand_bond_marks.append(_create_bond_mark_sprite())
-	while leading_strand_bond_marks.size() > needed:
-		var extra = leading_strand_bond_marks.pop_back()
-		extra.queue_free()
-	for i in range(needed):
-		var a = points[i]
-		var b = points[i + 1]
-		var mid = (a + b) / 2.0
-		var segment = b - a
-		var mark = leading_strand_bond_marks[i]
 		mark.position = mid
 		mark.visible = segment.length() > 0.0
 		if mark.visible:
