@@ -2,10 +2,14 @@ extends Node
 
 # ==========================================
 # replication_manager.gd
-# Phase 1 migration: owns all synthesis state, spawning, and synthesis rendering.
-# simulation.gd calls update(delta, ctx) each frame and scrub_rebuild(ctx) on scrub.
-# Nodes are added as children of sim (simulation.gd) so scene tree is unchanged.
-# Phase 2 will introduce signals and extract okazaki_manager.gd.
+# Phase 1 + Phase 2 complete: owns all synthesis state, spawning, synthesis
+# rendering, and enzyme animation. simulation.gd calls update(delta, ctx) each
+# frame and scrub_rebuild(ctx) on scrub. Nodes are added as children of sim
+# (simulation.gd) so the scene tree shape is unchanged.
+# v70.5: straight_y renamed to center_y (screen-center anchor) in simulation.gd;
+# template_strand_y (center_y + dna_ribbons_gap/2.0) is what straight_y used to
+# mean literally. All formulas here updated to match.
+# Lagging strand (Okazaki fragments, trombone loop) removed; clean slate for rebuild.
 # ==========================================
 
 # ---------- PARENT REFERENCE ----------
@@ -21,7 +25,8 @@ var manual_override: bool = true
 # ---------- CACHED CONTEXT (updated each frame in update()) ----------
 var ctx_factory_x: float = 0.0
 var ctx_helicase_x: float = 0.0
-var ctx_straight_y: float = 0.0
+var ctx_center_y: float = 0.0
+var ctx_template_strand_y: float = 0.0
 var ctx_new_bottom_template_y: float = 0.0
 var ctx_dna_ribbons_gap: float = 0.0
 var ctx_new_bottom_template_offset: float = 0.0
@@ -93,7 +98,7 @@ func setup_backbones() -> void:
 	poly.polygon = points
 	poly.color = Color(0.2, 0.4, 1.0, 1.0)
 	top_polymerase.add_child(poly)
-	top_polymerase.position = Vector2(sim.factory_x, sim.straight_y - sim.dna_ribbons_gap - sim.new_bottom_template_offset)
+	top_polymerase.position = Vector2(sim.factory_x, sim.center_y - sim.dna_ribbons_gap / 2.0 - sim.new_bottom_template_offset)
 	top_polymerase.modulate.a = 0.0
 	sim.add_child(top_polymerase)
 
@@ -130,9 +135,13 @@ func teardown() -> void:
 # ==========================================
 
 func update(delta: float, ctx: Dictionary) -> void:
+	# ctx keys provided by simulation.gd:
+	#   helicase_x, factory_x, center_y, template_strand_y, new_bottom_template_y,
+	#   dna_ribbons_gap, new_bottom_template_offset, wobble_t, phase, helicase_mgr,
+	#   num_slots
 	var helicase_x: float = ctx.helicase_x
 	var factory_x: float = ctx.factory_x
-	var straight_y: float = ctx.straight_y
+	var center_y: float = ctx.center_y
 	var new_bottom_template_y: float = ctx.new_bottom_template_y
 	var phase = ctx.phase
 	var helicase_mgr = ctx.helicase_mgr
@@ -144,7 +153,8 @@ func update(delta: float, ctx: Dictionary) -> void:
 	# Cache context for use in signal handlers
 	ctx_factory_x = ctx.factory_x
 	ctx_helicase_x = ctx.helicase_x
-	ctx_straight_y = ctx.straight_y
+	ctx_center_y = ctx.center_y
+	ctx_template_strand_y = ctx.template_strand_y
 	ctx_new_bottom_template_y = ctx.new_bottom_template_y
 	ctx_dna_ribbons_gap = ctx.dna_ribbons_gap
 	ctx_new_bottom_template_offset = ctx.new_bottom_template_offset
@@ -167,7 +177,7 @@ func update(delta: float, ctx: Dictionary) -> void:
 
 	# ADD — top polymerase position
 	if top_polymerase and phase != helicase_mgr.Phase.DONE:
-		top_polymerase.position = Vector2(factory_x, sim.straight_y - sim.dna_ribbons_gap - sim.new_bottom_template_offset)
+		top_polymerase.position = Vector2(factory_x, sim.center_y - sim.dna_ribbons_gap / 2.0 - sim.new_bottom_template_offset)
 
 	# ADD — synthesis circle position
 	if synthesis_circle and phase != helicase_mgr.Phase.DONE:
@@ -198,17 +208,16 @@ func update(delta: float, ctx: Dictionary) -> void:
 
 func scrub_rebuild(ctx: Dictionary) -> void:
 	# ctx keys: target_factory_x, helicase_x, is_done_phase, num_slots,
-	#           nucleotide_original_x, straight_y, helicase_mgr
+	#           nucleotide_original_x, template_strand_y, helicase_mgr
 	var target_factory_x: float = ctx.target_factory_x
 	var helicase_x: float = ctx.helicase_x
 	var is_done_phase: bool = ctx.is_done_phase
 	var num_slots: int = ctx.num_slots
 	var nucleotide_original_x = ctx.nucleotide_original_x
-	var straight_y: float = ctx.straight_y
 	# ADD — reset top polymerase visibility on scrub
 	if top_polymerase:
 		top_polymerase.modulate.a = 1.0 if not ctx.is_done_phase else 0.0
-		top_polymerase.position = Vector2(ctx.target_factory_x, sim.straight_y - sim.dna_ribbons_gap - sim.new_bottom_template_offset)
+		top_polymerase.position = Vector2(ctx.target_factory_x, sim.center_y - sim.dna_ribbons_gap / 2.0 - sim.new_bottom_template_offset)
 
 
 	# ---- Free leading markers when before first base ----
@@ -279,10 +288,10 @@ func run_intro(intro_x: float, fade_time: float, slide_time: float, tween: Tween
 		Vector2(sim.factory_x, sim.new_bottom_template_y), slide_time).set_delay(fade_time)
 
 	if top_polymerase:
-		top_polymerase.position = Vector2(intro_x - sim.gap_width, sim.straight_y - sim.dna_ribbons_gap - sim.new_bottom_template_offset)
+		top_polymerase.position = Vector2(intro_x - sim.gap_width, sim.center_y - sim.dna_ribbons_gap / 2.0 - sim.new_bottom_template_offset)
 		tween.tween_property(top_polymerase, "modulate:a", 1.0, fade_time)
 		tween.tween_property(top_polymerase, "position",
-			Vector2(sim.factory_x, sim.straight_y - sim.dna_ribbons_gap - sim.new_bottom_template_offset), slide_time).set_delay(fade_time)
+			Vector2(sim.factory_x, sim.center_y - sim.dna_ribbons_gap / 2.0 - sim.new_bottom_template_offset), slide_time).set_delay(fade_time)
 
 # ==========================================
 # RENDER — called from simulation.gd _process visual section
@@ -291,14 +300,14 @@ func run_intro(intro_x: float, fade_time: float, slide_time: float, tween: Tween
 func render(delta: float, ctx: Dictionary) -> void:
 	# Updates positions and backbones for all synthesized nodes.
 	# ctx keys: wobble_t, new_bottom_template_y, dna_ribbons_gap,
-	#           new_bottom_template_offset, straight_y, num_slots,
+	#           new_bottom_template_offset, center_y, template_strand_y, num_slots,
 	#           nucleotide_original_x, template_strand_bottom,
 	#           nucleotide_bases, top_strand_slots
 	var wobble_t: float = ctx.wobble_t
 	var new_bottom_template_y: float = ctx.new_bottom_template_y
 	var dna_ribbons_gap: float = ctx.dna_ribbons_gap
 	var new_bottom_template_offset: float = ctx.new_bottom_template_offset
-	var straight_y: float = ctx.straight_y
+	var center_y: float = ctx.center_y
 	var num_slots: int = ctx.num_slots
 	var nucleotide_original_x = ctx.nucleotide_original_x
 	var template_strand_bottom = ctx.template_strand_bottom
@@ -312,10 +321,10 @@ func render(delta: float, ctx: Dictionary) -> void:
 		if leading_synthesized_bases[i] != null:
 			var wobble_y = sin(wobble_t * sim.wobble_speed * TAU + i * sim.wobble_phase_offset) * sim.wobble_amplitude
 			var world_x = nucleotide_original_x[i]
-			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_y
+			var leading_y = center_y - dna_ribbons_gap / 2.0 - new_bottom_template_offset - dna_ribbons_gap + wobble_y
 			leading_synthesized_bases[i].position = Vector2(world_x, leading_y)
 			if leading_hydrogen_bonds[i] != null:
-				var top_template_y = straight_y - dna_ribbons_gap - new_bottom_template_offset + wobble_y
+				var top_template_y = center_y - dna_ribbons_gap / 2.0 - new_bottom_template_offset + wobble_y
 				leading_hydrogen_bonds[i].position = Vector2(world_x, top_template_y)
 				sim._update_hydrogen_bond_height(leading_hydrogen_bonds[i], leading_y - top_template_y)
 			leading_points.append(Vector2(world_x, leading_y - tm.backbone_offset_distance))
@@ -327,14 +336,14 @@ func render(delta: float, ctx: Dictionary) -> void:
 	# ---- Leading strand markers ----
 	if marker_leading_5p == null and leading_synthesized_bases[0] != null:
 		var wobble_first = sin(wobble_t * sim.wobble_speed * TAU) * sim.wobble_amplitude
-		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
+		var leading_y = center_y - dna_ribbons_gap / 2.0 - new_bottom_template_offset - dna_ribbons_gap + wobble_first
 		marker_leading_5p = _spawn_marker("3'", Vector2(
 			nucleotide_original_x[0] - tm.marker_offset,
 			leading_y - tm.backbone_offset_distance
 		))
 	if marker_leading_5p:
 		var wobble_first = sin(wobble_t * sim.wobble_speed * TAU) * sim.wobble_amplitude
-		var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_first
+		var leading_y = center_y - dna_ribbons_gap / 2.0 - new_bottom_template_offset - dna_ribbons_gap + wobble_first
 		marker_leading_5p.position = Vector2(
 			nucleotide_original_x[0] - tm.marker_offset,
 			leading_y - tm.backbone_offset_distance
@@ -345,7 +354,7 @@ func render(delta: float, ctx: Dictionary) -> void:
 			if leading_synthesized_bases[i] != null: last_synth = i
 		if last_synth >= 0:
 			var wobble_last = sin(wobble_t * sim.wobble_speed * TAU + last_synth * sim.wobble_phase_offset) * sim.wobble_amplitude
-			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
+			var leading_y = center_y - dna_ribbons_gap / 2.0 - new_bottom_template_offset - dna_ribbons_gap + wobble_last
 			marker_leading_3p = _spawn_marker("5'", Vector2(
 				nucleotide_original_x[last_synth] + tm.marker_offset,
 				leading_y - tm.backbone_offset_distance
@@ -356,7 +365,7 @@ func render(delta: float, ctx: Dictionary) -> void:
 			if leading_synthesized_bases[i] != null: last_synth = i
 		if last_synth >= 0:
 			var wobble_last = sin(wobble_t * sim.wobble_speed * TAU + last_synth * sim.wobble_phase_offset) * sim.wobble_amplitude
-			var leading_y = straight_y - dna_ribbons_gap - new_bottom_template_offset - dna_ribbons_gap + wobble_last
+			var leading_y = center_y - dna_ribbons_gap / 2.0 - new_bottom_template_offset - dna_ribbons_gap + wobble_last
 			marker_leading_3p.position = Vector2(
 				nucleotide_original_x[last_synth] + tm.marker_offset,
 				leading_y - tm.backbone_offset_distance
@@ -389,7 +398,7 @@ func get_sequence_rich_text(helicase_x: float, nucleotide_original_x: Array) -> 
 func _spawn_leading_base(index: int, base_type: String) -> Node2D:
 	var base = sim.NewNitrogenBaseScene.instantiate()
 	var world_x = sim.nucleotide_original_x[index]
-	var leading_y = sim.straight_y - sim.dna_ribbons_gap - sim.new_bottom_template_offset - sim.dna_ribbons_gap
+	var leading_y = sim.center_y - sim.dna_ribbons_gap / 2.0 - sim.new_bottom_template_offset - sim.dna_ribbons_gap
 	base.position = Vector2(world_x, leading_y)
 	base.z_index = 2
 	sim.add_child(base)

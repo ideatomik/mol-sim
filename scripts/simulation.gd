@@ -1,10 +1,13 @@
 extends Node2D
 
 # ==========================================
-# v 70.4
-# - replication_manager.gd Phase 1: synthesis state and spawning extracted
-# - simulation.gd now delegates to replication_mgr.update() and scrub_rebuild()
-# - simulation.gd is now purely template manager + visual coordinator
+# v 70.5
+# - straight_y renamed to center_y: now the vertical screen-center anchor,
+#   not the bottom template strand's literal position
+# - template_strand_y introduced as a derived state var (center_y + dna_ribbons_gap/2.0):
+#   this is what straight_y used to mean literally
+# - replication_manager.gd Phase 1 + Phase 2 complete; simulation.gd is purely
+#   template manager + visual coordinator
 # ==========================================
 
 # ---------- SIGNALS ----------
@@ -35,7 +38,7 @@ var replication_mgr: Node = null  # replication_manager.gd instance, persists ac
 @export_group("Track Layout")
 @export var nucleotide_slot_spacing: float = 54.0
 @export var num_nucleotide_slots: int = 30  # Default length; can be overridden by sequence
-@export var straight_y: float = 300.0
+@export var center_y: float = 360.0  # Vertical screen-center anchor; all strand/enzyme y positions derive from this
 @export var nucleotide_slot_size: Vector2 = Vector2(24, 24)
 var track_length: float = 0.0
 @export var new_bottom_template_offset: float = 120.0
@@ -58,6 +61,7 @@ var track_length: float = 0.0
 
 
 # ---------- STATE VARIABLES ----------
+var template_strand_y: float = 0.0  # Derived: center_y + dna_ribbons_gap / 2.0 — bottom template strand's resting y
 var new_bottom_template_y: float = 0.0
 var new_top_template_y: float = 0.0
 var helicase_node: Node2D = null
@@ -158,8 +162,9 @@ func initialize_simulation(sequence: String):
 
 	#replication_mgr.connect_helicase(helicase_mgr)
 
-	new_bottom_template_y = straight_y + new_bottom_template_offset
-	new_top_template_y = straight_y - dna_ribbons_gap - new_bottom_template_offset
+	template_strand_y = center_y + dna_ribbons_gap / 2.0
+	new_bottom_template_y = template_strand_y + new_bottom_template_offset
+	new_top_template_y = center_y - dna_ribbons_gap / 2.0 - new_bottom_template_offset
 
 	# 5. REBUILD all visual elements
 	_rebuild_rail()
@@ -217,10 +222,10 @@ func initialize_simulation(sequence: String):
 	# Strand end markers
 	var first_x = nucleotide_original_x[0]
 	var last_x = nucleotide_original_x[num_nucleotide_slots - 1]
-	marker_template_5p = _spawn_marker("5'", Vector2(last_x + %ThemeManager.marker_offset, straight_y))
-	marker_template_3p = _spawn_marker("3'", Vector2(first_x - %ThemeManager.marker_offset, straight_y))
-	marker_top_5p = _spawn_marker("5'", Vector2(first_x - %ThemeManager.marker_offset, straight_y - dna_ribbons_gap))
-	marker_top_3p = _spawn_marker("3'", Vector2(last_x + %ThemeManager.marker_offset, straight_y - dna_ribbons_gap))
+	marker_template_5p = _spawn_marker("5'", Vector2(last_x + %ThemeManager.marker_offset, template_strand_y))
+	marker_template_3p = _spawn_marker("3'", Vector2(first_x - %ThemeManager.marker_offset, template_strand_y))
+	marker_top_5p = _spawn_marker("5'", Vector2(first_x - %ThemeManager.marker_offset, template_strand_y - dna_ribbons_gap))
+	marker_top_3p = _spawn_marker("3'", Vector2(last_x + %ThemeManager.marker_offset, template_strand_y - dna_ribbons_gap))
 
 	# 6. Emit signal so UI can update its slider max_value and reset
 	simulation_initialized.emit(num_nucleotide_slots)
@@ -343,7 +348,7 @@ func _process(delta):
 
 		# ---- Enzyme positions ----
 		if helicase_node:
-			helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
+			helicase_node.position = Vector2(helicase_x, center_y)
 
 		if phase != helicase_mgr.Phase.DONE:
 			for i in range(template_strand_bottom.size()):
@@ -353,7 +358,8 @@ func _process(delta):
 		replication_mgr.update(delta, {
 			helicase_x = helicase_x,
 			factory_x = factory_x,
-			straight_y = straight_y,
+			center_y = center_y,
+			template_strand_y = template_strand_y,
 			new_bottom_template_y = new_bottom_template_y,
 			dna_ribbons_gap = dna_ribbons_gap,
 			new_bottom_template_offset = new_bottom_template_offset,
@@ -376,7 +382,7 @@ func _process(delta):
 	if debug_gap_line:
 		debug_gap_line.points = PackedVector2Array([
 			Vector2(factory_x, factory_y),
-			Vector2(helicase_x, straight_y),
+			Vector2(helicase_x, template_strand_y),
 		])
 
 	if debug_top_rail_line:
@@ -388,7 +394,7 @@ func _process(delta):
 
 	# ADD — PLL slot zigzag: 5 points, 4 segments of nucleotide_slot_spacing along the diagonal
 	if debug_gap_line:
-		var p_start = Vector2(helicase_x, straight_y)
+		var p_start = Vector2(helicase_x, template_strand_y)
 		var p_end = Vector2(factory_x, factory_y)
 		var diag = p_end - p_start
 		var D = diag.length()
@@ -436,13 +442,13 @@ func _process(delta):
 		var slot_y = nucleotide_slot.position.y
 		var wobble_y = 0.0
 		if wobble_amplitude > 0.0:
-			var near_top = abs(slot_y - straight_y) < wobble_amplitude * 4.0
+			var near_top = abs(slot_y - template_strand_y) < wobble_amplitude * 4.0
 			var near_bottom = abs(slot_y - new_bottom_template_y) < wobble_amplitude * 4.0
 			if near_top or near_bottom:
 				wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
 		nucleotide_bases[i].position.y = wobble_y
 
-		var on_rail_visual = abs(slot_y - straight_y) < 1.0
+		var on_rail_visual = abs(slot_y - template_strand_y) < 1.0
 		var on_new_bottom = abs(slot_y - new_bottom_template_y) < 1.0
 		var target_delta: float
 		if on_rail_visual:
@@ -465,7 +471,8 @@ func _process(delta):
 			new_bottom_template_y = new_bottom_template_y,
 			dna_ribbons_gap = dna_ribbons_gap,
 			new_bottom_template_offset = new_bottom_template_offset,
-			straight_y = straight_y,
+			center_y = center_y,
+			template_strand_y = template_strand_y,
 			num_slots = num_nucleotide_slots,
 			nucleotide_original_x = nucleotide_original_x,
 			template_strand_bottom = template_strand_bottom,
@@ -483,15 +490,15 @@ func _process(delta):
 		var slot_y: float
 		if top_curve != null:
 			var baked = top_curve.get_baked_points()
-			slot_y = _sample_curve_y_at_x(baked, world_x, straight_y - dna_ribbons_gap)
+			slot_y = _sample_curve_y_at_x(baked, world_x, template_strand_y - dna_ribbons_gap)
 		else:
-			slot_y = straight_y - dna_ribbons_gap
+			slot_y = template_strand_y - dna_ribbons_gap
 		top_strand_slots[i].position = Vector2(world_x, slot_y)
 
 		var wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
 		top_strand_bases[i].position = Vector2(0, wobble_y)
 
-		var mid_y = new_top_template_y + (straight_y - dna_ribbons_gap - new_top_template_y) * 0.5
+		var mid_y = new_top_template_y + (template_strand_y - dna_ribbons_gap - new_top_template_y) * 0.5
 		var on_bonded = slot_y > mid_y
 		var target_backbone_delta = -%ThemeManager.backbone_offset_distance if on_bonded else %ThemeManager.backbone_offset_distance
 		top_strand_backbone_delta[i] = lerp(
@@ -574,7 +581,7 @@ func _run_intro():
 	var slide_time = 0.5
 
 	if helicase_node:
-		helicase_node.position = Vector2(intro_x, straight_y - dna_ribbons_gap / 2.0)
+		helicase_node.position = Vector2(intro_x, center_y)
 
 	var tween = create_tween().set_parallel(true)
 	replication_mgr.run_intro(intro_x, fade_time, slide_time, tween)
@@ -582,7 +589,7 @@ func _run_intro():
 	if helicase_node:
 		tween.tween_property(helicase_node, "modulate:a", 1.0, fade_time)
 		tween.tween_property(helicase_node, "position",
-			Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0), slide_time).set_delay(fade_time)
+			Vector2(helicase_x, center_y), slide_time).set_delay(fade_time)
 	# Notify helicase_mgr when intro tween completes → starts SWEEPING
 	tween.chain().tween_callback(func():
 		if helicase_mgr != null:
@@ -636,7 +643,7 @@ func scrub_to(progress: float):
 			is_done_phase = is_done_phase,
 			num_slots = num_nucleotide_slots,
 			nucleotide_original_x = nucleotide_original_x,
-			straight_y = straight_y,
+			template_strand_y = template_strand_y,
 			helicase_mgr = helicase_mgr,
 		})
 
@@ -658,7 +665,7 @@ func scrub_to(progress: float):
 		helicase_node.modulate.a = 1.0
 
 	if helicase_node:
-		helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
+		helicase_node.position = Vector2(helicase_x, center_y)
 
 	queue_redraw()
 
@@ -839,7 +846,7 @@ func _sample_curve_y_at_x(baked: PackedVector2Array, x: float, fallback_y: float
 
 func _rebuild_top_rail():
 	var curve = Curve2D.new()
-	var bonded_y = straight_y - dna_ribbons_gap
+	var bonded_y = template_strand_y - dna_ribbons_gap
 	var unzipped_y = new_top_template_y
 	var first_slot_x = nucleotide_original_x[0] if nucleotide_original_x.size() > 0 else 0.0
 
@@ -868,8 +875,8 @@ func _rebuild_top_rail():
 func _rebuild_rail():
 	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
 	var curve = Curve2D.new()
-	#var rest_y = new_bottom_template_y if is_done else straight_y
-	var rest_y = straight_y
+	#var rest_y = new_bottom_template_y if is_done else template_strand_y
+	var rest_y = template_strand_y
 	curve.add_point(Vector2(track_length, rest_y))
 	curve.add_point(Vector2(0, rest_y))
 	rail_path.curve = curve
@@ -903,7 +910,7 @@ func _setup_helicase():
 		poly.color = outer_color if pass_idx == 0 else inner_color
 		helicase_node.add_child(poly)
 
-	helicase_node.position = Vector2(helicase_x, straight_y - dna_ribbons_gap / 2.0)
+	helicase_node.position = Vector2(helicase_x, center_y)
 	add_child(helicase_node)
 
 func _update_bond_marks_fragment(frag: Dictionary, points: PackedVector2Array) -> void:
