@@ -3,8 +3,9 @@ extends Camera2D
 # ==========================================
 # CAMERA CONTROLLER
 # Frames the nucleotide strand to 90% of the screen width and centers
-# vertically on the midline between the two template strands, so the
-# full double-helix system sits in the center of the screen.
+# vertically on center_y — the helicase's y position and single source of
+# truth for replisome positioning (v70.6 helicase-anchored refactor) — so
+# the helicase sits at the vertical center of the screen.
 # Re-frames automatically on window resize.
 # ==========================================
 
@@ -35,13 +36,10 @@ func _frame_strand():
 		push_warning("camera_controller: track_length is %.1f, cannot frame strand." % track_length)
 		return
 
-	var straight_y: float = simulation.straight_y if "straight_y" in simulation else 300.0
-	var dna_ribbons_gap: float = simulation.dna_ribbons_gap if "dna_ribbons_gap" in simulation else 90.0
-
-	# Vertical center: midpoint between top template strand (straight_y - dna_ribbons_gap)
-	# and bottom template strand (straight_y). This keeps the full double-helix
-	# system centered on screen regardless of dna_ribbons_gap value.
-	var mid_y: float = straight_y - dna_ribbons_gap / 2.0
+	# Vertical center: the helicase is the single source of truth for replisome
+	# positioning (center_y), so the camera centers on that directly rather than
+	# deriving a midpoint from the template strands.
+	var mid_y: float = simulation.center_y if "center_y" in simulation else 360.0
 
 	var viewport_width: float = get_viewport_rect().size.x
 	var target_zoom: float = (viewport_width * STRAND_WIDTH_PERCENTAGE) / track_length

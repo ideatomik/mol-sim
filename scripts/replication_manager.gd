@@ -46,6 +46,12 @@ var nucleotide_backbone_delta: Array[float] = []
 # ---------- SYNTHESIS STATE ----------
 var manual_override: bool = true
 
+# ---------- SYNTHESIZED DATA (Lagging Strand) ----------
+var lagging_fragments: Array = []          # completed fragments
+var lagging_current_fragment = null        # Dictionary or null — fragment in progress
+var lagging_telomere_gap = null      # {start, end, length} of unsynthesized real slots at the strand's end, or null
+var connected_helicase_mgr: Node = null  # cached for Phase enum access in the phase_changed handler
+
 # ---------- CACHED CONTEXT (updated each frame in update()) ----------
 var ctx_polymerase_x: float = 0.0
 var ctx_helicase_x: float = 0.0
@@ -86,10 +92,22 @@ func initialize(p_sim: Node) -> void:
 	lagging_polymerase_faded = false
 	lagging_polymerase.modulate.a = 0.0  # start invisible
 
+	# ADD — build the visible circle, mirroring leading_polymerase's polygon
+	var poly = Polygon2D.new()
+	var points = PackedVector2Array()
+	const SEGMENTS = 32
+	for i in range(SEGMENTS):
+		var angle = (float(i) / SEGMENTS) * TAU
+		points.append(Vector2(cos(angle), sin(angle)) * LEADING_POLYMERASE_RADIUS)
+	poly.polygon = points
+	poly.color = Color(1.0, 0.3, 0.3, 1.0)
+	lagging_polymerase.add_child(poly)
+
 func reset(num_slots: int) -> void:
 	# Called by simulation.gd after teardown, before spawning new slots.
 	manual_override = true
 	_leading_reset(num_slots)
+	_lagging_reset()
 
 func setup_backbones() -> void:
 	# Called after reset() during initialize_simulation().
@@ -140,7 +158,7 @@ func update(delta: float, ctx: Dictionary) -> void:
 		leading_polymerase.position = Vector2(ctx.polymerase_x, ctx.new_top_template_y)
 		#print("[DEBUG] leading_polymerase.position=", leading_polymerase.position, " template_strand_y=", ctx.template_strand_y, " dna_ribbons_gap=", ctx.dna_ribbons_gap, " global_pos=", leading_polymerase.global_position)
 	if lagging_polymerase and phase != helicase_mgr.Phase.DONE:
-		lagging_polymerase.position = Vector2(ctx.polymerase_x, ctx.template_strand_y)
+		lagging_polymerase.position = Vector2(ctx.polymerase_x, ctx.new_bottom_template_y)
 
 	# ---- Helicase finishing trigger (driven by leading strand's remaining slots) ----
 	if phase == helicase_mgr.Phase.FINISHING_LAST_PULSE and helicase_mgr.extra_steps_total == 0:
@@ -161,6 +179,8 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	#           nucleotide_original_x, template_strand_y, helicase_mgr
 	var target_polymerase_x: float = ctx.target_polymerase_x
 	var nucleotide_original_x = ctx.nucleotide_original_x
+	_leading_scrub_rebuild(ctx)
+	_lagging_scrub_rebuild(ctx)
 
 	# ---- Enzyme visibility/position on scrub: each polymerase sits on its own template strand's row ----
 	if leading_polymerase:
@@ -169,7 +189,7 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	if lagging_polymerase:
 		lagging_polymerase_faded = ctx.is_done_phase
 		lagging_polymerase.modulate.a = 0.0 if ctx.is_done_phase else 1.0
-		lagging_polymerase.position = Vector2(target_polymerase_x, sim.template_strand_y)
+		lagging_polymerase.position = Vector2(target_polymerase_x, ctx.new_bottom_template_y)
 
 	_leading_scrub_rebuild(ctx)
 
@@ -185,10 +205,11 @@ func resume_enzymes() -> void:
 
 func run_intro(intro_x: float, fade_time: float, slide_time: float, tween: Tween) -> void:
 	var polymerase_x_offset = sim.polymerase_x_offset_slots * sim.nucleotide_slot_spacing
-	lagging_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.template_strand_y)
+	#lagging_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.template_strand_y)
+	lagging_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.new_bottom_template_y)
 	tween.tween_property(lagging_polymerase, "modulate:a", 1.0, fade_time)
 	tween.tween_property(lagging_polymerase, "position",
-		Vector2(sim.polymerase_x, sim.template_strand_y), slide_time).set_delay(fade_time)
+		Vector2(sim.polymerase_x, sim.new_bottom_template_y), slide_time).set_delay(fade_time)
 
 	if leading_polymerase:
 		leading_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.new_top_template_y)
@@ -405,6 +426,175 @@ func _leading_render(ctx: Dictionary) -> void:
 				leading_y - tm.backbone_offset_distance
 			)
 
+# ==========================================
+# LAGGING STRAND — self-contained section
+# ==========================================
+# Owns: lagging_fragments, lagging_current_fragment.
+# Synthesis trigger: helicase.slot_reached signal (not position-based, since
+# fragments need discrete boundaries at okazaki_fragment_size).
+# Slot mapping: when helicase reaches `index`, the lagging polymerase's
+# trailing position corresponds to slot (index - polymerase_x_offset_slots),
+# matching the polymerase_x formula in simulation.gd exactly.
+
+func connect_helicase(helicase_mgr: Node) -> void:
+	connected_helicase_mgr = helicase_mgr
+	if not helicase_mgr.slot_reached.is_connected(_on_helicase_slot_reached):
+		helicase_mgr.slot_reached.connect(_on_helicase_slot_reached)
+	if not helicase_mgr.phase_changed.is_connected(_on_helicase_phase_changed):
+		helicase_mgr.phase_changed.connect(_on_helicase_phase_changed)
+
+func _lagging_reset() -> void:
+	lagging_fragments.clear()
+	lagging_current_fragment = null
+	lagging_telomere_gap = null
+
+func _on_helicase_slot_reached(index: int) -> void:
+	var lagging_index = index - int(sim.polymerase_x_offset_slots)
+	if lagging_index < 0:
+		return  # not enough unzipped strand behind the helicase yet to start synthesis
+	var max_synthesizable = sim.num_nucleotide_slots - 1 - sim.telomere_primer_footprint
+	if lagging_index > max_synthesizable:
+		return  # terminal footprint reserved for the not-yet-modeled end primer
+	_lagging_advance_to_slot(lagging_index)
+
+func _lagging_advance_to_slot(lagging_index: int) -> void:
+	if lagging_current_fragment == null:
+		_lagging_open_fragment()
+	lagging_current_fragment.slots.append(lagging_index)
+	print("[LAGGING] slot %d added — fragment size %d/%d" % [
+		lagging_index, lagging_current_fragment.slots.size(), sim.okazaki_fragment_size
+	])
+	if lagging_current_fragment.slots.size() >= sim.okazaki_fragment_size:
+		_lagging_close_fragment()
+
+func _lagging_open_fragment() -> void:
+	lagging_current_fragment = {
+		slots = [],
+		loop_queue = [],
+		backbone = null,
+		bond_marks = [],
+		marker_5p = null,
+		marker_3p = null,
+		complete = false,
+	}
+	print("[LAGGING] fragment opened")
+
+func _lagging_close_fragment() -> void:
+	lagging_current_fragment.complete = true
+	lagging_fragments.append(lagging_current_fragment)
+	print("[LAGGING] fragment closed — slots=%s" % [str(lagging_current_fragment.slots)])
+	lagging_current_fragment = null
+
+func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
+	var target_polymerase_x: float = ctx.target_polymerase_x
+	var is_done_phase: bool = ctx.is_done_phase
+	var num_slots: int = ctx.num_slots
+	var nucleotide_original_x = ctx.nucleotide_original_x
+
+	var max_synthesizable = num_slots - 1 - sim.telomere_primer_footprint
+
+	var lagging_synth_count = 0
+	if is_done_phase:
+		lagging_synth_count = max_synthesizable + 1
+	else:
+		for i in range(num_slots):
+			if nucleotide_original_x[i] <= target_polymerase_x:
+				lagging_synth_count += 1
+			else:
+				break
+		lagging_synth_count = min(lagging_synth_count, max_synthesizable + 1)
+	lagging_synth_count = max(lagging_synth_count, 0)
+
+	# ---- Deterministic rebuild: chunk slots 0..lagging_synth_count-1 into fragments ----
+	lagging_fragments.clear()
+	lagging_current_fragment = null
+	lagging_telomere_gap = null
+
+	var frag_size = sim.okazaki_fragment_size
+	var i = 0
+	while i < lagging_synth_count:
+		var chunk_end = min(i + frag_size, lagging_synth_count)
+		var frag = {
+			slots = range(i, chunk_end),
+			loop_queue = [],
+			backbone = null,
+			bond_marks = [],
+			marker_5p = null,
+			marker_3p = null,
+			complete = (chunk_end - i) >= frag_size,
+		}
+		if frag.complete:
+			lagging_fragments.append(frag)
+		else:
+			lagging_current_fragment = frag
+		i = chunk_end
+
+	# ---- At DONE, force-close any trailing partial fragment and record the gap ----
+	if is_done_phase:
+		var last_slot = num_slots - 1
+		var last_synthesized = -1
+		if lagging_current_fragment != null and lagging_current_fragment.slots.size() > 0:
+			last_synthesized = lagging_current_fragment.slots[-1]
+		elif lagging_fragments.size() > 0:
+			last_synthesized = lagging_fragments[-1].slots[-1]
+		var gap_start = last_synthesized + 1
+		if last_slot >= gap_start:
+			lagging_telomere_gap = {
+				start = gap_start,
+				end = last_slot,
+				length = last_slot - gap_start + 1,
+			}
+		if lagging_current_fragment != null:
+			lagging_current_fragment.complete = true
+			lagging_fragments.append(lagging_current_fragment)
+			lagging_current_fragment = null
+
+	print("[LAGGING] scrub rebuild — synth_count=%d fragments=%d current=%s gap=%s" % [
+		lagging_synth_count, lagging_fragments.size(),
+		str(lagging_current_fragment.slots) if lagging_current_fragment != null else "none",
+		str(lagging_telomere_gap)
+	])
+
+func _on_helicase_phase_changed(new_phase: int) -> void:
+	# Scrub-driven DONE transitions are handled entirely by _lagging_scrub_rebuild(),
+	# which runs right after this signal and is the sole source of truth during scrub.
+	# Only force-close here for a live-play DONE transition, where fragment state has
+	# been kept accurate continuously via slot_reached and is safe to finalize now.
+	if new_phase == connected_helicase_mgr.Phase.DONE and not sim.manual_override:
+		_lagging_force_close_at_end()
+
+func _lagging_force_close_at_end() -> void:
+	var last_slot = sim.num_nucleotide_slots - 1
+	var last_synthesized = -1
+	if lagging_current_fragment != null and lagging_current_fragment.slots.size() > 0:
+		last_synthesized = lagging_current_fragment.slots[-1]
+	elif lagging_fragments.size() > 0:
+		last_synthesized = lagging_fragments[-1].slots[-1]
+
+	# Record the telomere gap: real slots that never got assigned to any fragment.
+	var gap_start = last_synthesized + 1
+	if last_slot >= gap_start:
+		lagging_telomere_gap = {
+			start = gap_start,
+			end = last_slot,
+			length = last_slot - gap_start + 1,
+		}
+		print("[LAGGING] telomere gap recorded: slots %d-%d (length %d)" % [
+			gap_start, last_slot, lagging_telomere_gap.length
+		])
+	else:
+		lagging_telomere_gap = null
+		print("[LAGGING] no telomere gap — lagging strand reached the final slot")
+
+	# Force-close whatever fragment was still open, even if short of okazaki_fragment_size.
+	if lagging_current_fragment != null:
+		lagging_current_fragment.complete = true
+		lagging_fragments.append(lagging_current_fragment)
+		print("[LAGGING] fragment force-closed at end — slots=%s (%d/%d)" % [
+			str(lagging_current_fragment.slots), lagging_current_fragment.slots.size(), sim.okazaki_fragment_size
+		])
+		lagging_current_fragment = null
+
 func _spawn_leading_base(index: int, base_type: String) -> Node2D:
 	var base = sim.NewNitrogenBaseScene.instantiate()
 	var world_x = sim.nucleotide_original_x[index]
@@ -414,6 +604,7 @@ func _spawn_leading_base(index: int, base_type: String) -> Node2D:
 	sim.add_child(base)
 	base.set_base_type(base_type)
 	base.set_colors(sim._get_base_fill(base_type), tm.base_label_color)
+	base.set_font(tm.base_label_font_size, tm.base_label_font)
 	return base
 
 func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
@@ -466,6 +657,7 @@ func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
 	sim.add_child(marker)
 	marker.set_base_type(marker_type)
 	marker.set_colors(tm.marker_color, tm.marker_font_color)
+	marker.set_font(tm.marker_font_size, tm.marker_font)
 	return marker
 
 func _create_bond_mark_sprite() -> Node2D:

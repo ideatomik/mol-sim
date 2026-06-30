@@ -3,6 +3,8 @@
 [ext_resource type="Script" uid="uid://bvkapeyriw2xi" path="res://scripts/simulation.gd" id="1_5eski"]
 [ext_resource type="Script" uid="uid://bw6vnkf4in668" path="res://scripts/camera_controller.gd" id="2_ik8a0"]
 [ext_resource type="Script" uid="uid://cvtxqqt1ivx2b" path="res://scripts/theme_manager.gd" id="3_ik8a0"]
+[ext_resource type="FontFile" uid="uid://b5ngkvlh4x883" path="res://fonts/GoogleSans/GoogleSans-SemiBold.ttf" id="4_ehfb2"]
+[ext_resource type="FontFile" uid="uid://cjiwxjmh7dfcy" path="res://fonts/GoogleSans/GoogleSans_17pt-Regular.ttf" id="5_160l5"]
 [ext_resource type="PackedScene" uid="uid://7864n4b58mn6" path="res://scenes/PlayerUI.tscn" id="5_gimvv"]
 [ext_resource type="PackedScene" uid="uid://bkcyhxg58gv21" path="res://scenes/SequenceLoaderPopup.tscn" id="5_mwrr7"]
 
@@ -10,6 +12,8 @@
 
 [node name="root" type="Node2D" unique_id=939910138]
 script = ExtResource("1_5eski")
+num_nucleotide_slots = 34
+dna_ribbons_gap = 60.0
 wobble_amplitude = 0.9
 wobble_speed = 1.0
 wobble_phase_offset = 1.0
@@ -46,8 +50,10 @@ width = 3.0
 [node name="SynthesisCircle" type="Node2D" parent="." unique_id=550376968]
 
 [node name="SynthesisArea" type="Area2D" parent="SynthesisCircle" unique_id=143041538]
+visible = false
 
 [node name="SynthesisCollisionShape" type="CollisionShape2D" parent="SynthesisCircle/SynthesisArea" unique_id=1640759733]
+visible = false
 
 [node name="TemplateStrandNewTrack" type="Line2D" parent="." unique_id=1670290036]
 visible = false
@@ -73,6 +79,8 @@ base_color_a = Color(0.9593466, 0.25030932, 0.20285092, 1)
 base_color_t = Color(0.64573294, 0.2505012, 0.99999994, 1)
 base_color_c = Color(0.8499613, 0.46963003, 0.09985284, 1)
 base_color_g = Color(0.1705673, 0.64293486, 0.16792625, 1)
+base_label_font_size = 20
+base_label_font = ExtResource("4_ehfb2")
 backbone_color = Color(0.68298626, 0.8408255, 1, 1)
 at_bond_color = Color(0.6238186, 1, 0.5938983, 1)
 cg_bond_color = Color(0, 1, 0.9920456, 1)
@@ -80,6 +88,7 @@ hydrogen_bond_width = 3.0
 hydrogen_bond_spacing = 10.0
 helicase_half_width = 24.0
 helicase_height_margin = 20.0
+marker_font = ExtResource("5_160l5")
 
 [node name="UI" type="CanvasLayer" parent="." unique_id=2139151095]
 

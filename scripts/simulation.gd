@@ -56,7 +56,8 @@ var track_length: float = 0.0
 @export var pll_slot_count: int = 4
 
 @export_group("Speeds & Timing")
-@export var pulse_nucleotide_count: int = 6  # Slots per Okazaki fragment (boundary arithmetic only)
+@export var okazaki_fragment_size: int = 6  # Slots per Okazaki fragment (boundary arithmetic only)
+@export var telomere_primer_footprint: int = 2  # Slots at the strand's terminal end the lagging polymerase can never synthesize — end-replication-problem stand-in; primer/primase not modeled yet  # Slots per Okazaki fragment (boundary arithmetic only)
 @export var fade_duration: float = 0.6
 @export var settling_duration: float = 0.5
 @export var settling_threshold: float = 2.0
@@ -70,6 +71,8 @@ var track_length: float = 0.0
 # ---------- STATE VARIABLES ----------
 var template_strand_y: float = 0.0  # Derived: center_y + dna_ribbons_gap / 2.0 — bottom template strand's resting y
 var new_top_template_y: float = 0.0
+var new_bottom_template_y: float = 0.0  # ADD — bottom template's unzipped row, mirrors new_top_template_y
+
 var helicase_node: Node2D = null
 
 var helicase_x: float = 0.0   # Derived each frame from helicase_mgr
@@ -127,9 +130,15 @@ func _ready():
 func initialize_simulation(sequence: String):
 	# Validate and clean the sequence
 	sequence = dna_sequence.clean_sequence(sequence)
+	var min_sequence_length = int(polymerase_x_offset_slots) + okazaki_fragment_size + telomere_primer_footprint + 1
 	if sequence.length() > 57:
 		sequence = sequence.substr(0, 57)
 		print("[WARN] Sequence truncated to 57 bases")
+	elif sequence.length() < min_sequence_length:
+		var pad_chars = "ATCG"
+		while sequence.length() < min_sequence_length:
+			sequence += pad_chars[randi() % pad_chars.length()]
+		print("[WARN] Sequence padded to minimum %d bases" % min_sequence_length)
 
 	# 1. TEARDOWN old simulation
 	teardown_simulation()
@@ -165,10 +174,11 @@ func initialize_simulation(sequence: String):
 		add_child(replication_mgr)
 		replication_mgr.initialize(self)
 
-	#replication_mgr.connect_helicase(helicase_mgr)
+	replication_mgr.connect_helicase(helicase_mgr)
 
 	template_strand_y = center_y + dna_ribbons_gap / 2.0
 	new_top_template_y = center_y - dna_ribbons_gap / 2.0 - polymerase_y_offset
+	new_bottom_template_y = center_y + dna_ribbons_gap / 2.0 + polymerase_y_offset  # ADD
 	polymerase_y_lagging = center_y + polymerase_y_offset
 	polymerase_y_leading = center_y - polymerase_y_offset
 
@@ -337,6 +347,7 @@ func _process(delta):
 			polymerase_y_lagging = polymerase_y_lagging,
 			polymerase_y_leading = polymerase_y_leading,
 			new_top_template_y = new_top_template_y,
+			new_bottom_template_y = new_bottom_template_y,
 			dna_ribbons_gap = dna_ribbons_gap,
 			polymerase_y_offset = polymerase_y_offset,
 			wobble_t = wobble_t,
@@ -360,9 +371,18 @@ func _process(delta):
 
 	# ---- Backbone for bottom template (existing) ----
 	var backbone_points = PackedVector2Array()
+	var bottom_curve = rail_path.curve
 	for i in range(template_strand_bottom.size()):
 		var nucleotide_slot = template_strand_bottom[i]
-		var slot_y = nucleotide_slot.position.y
+		var world_x = nucleotide_original_x[i]
+		var slot_y: float
+		if bottom_curve != null:
+			var baked = bottom_curve.get_baked_points()
+			slot_y = _sample_curve_y_at_x(baked, world_x, template_strand_y)
+		else:
+			slot_y = template_strand_y
+		nucleotide_slot.position = Vector2(world_x, slot_y)
+
 		var wobble_y = 0.0
 		if wobble_amplitude > 0.0:
 			var near_top = abs(slot_y - template_strand_y) < wobble_amplitude * 4.0
@@ -371,18 +391,17 @@ func _process(delta):
 				wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
 		nucleotide_bases[i].position.y = wobble_y
 
-		var on_rail_visual = abs(slot_y - template_strand_y) < 1.0
-		var on_new_bottom = abs(slot_y - polymerase_y_lagging) < 1.0
+		var mid_y = template_strand_y + (new_bottom_template_y - template_strand_y) * 0.5
+		var on_bonded = slot_y < mid_y
 		var target_delta: float
-		if on_rail_visual:
+		if on_bonded:
 			target_delta = %ThemeManager.backbone_offset_distance
-		elif on_new_bottom:
-			target_delta = -%ThemeManager.backbone_offset_distance
 		else:
-			target_delta = %ThemeManager.backbone_offset_distance
+			target_delta = -%ThemeManager.backbone_offset_distance
 
 		nucleotide_backbone_delta[i] = lerp(nucleotide_backbone_delta[i], target_delta, clamp(%ThemeManager.backbone_offset_smoothing_speed * delta, 0.0, 1.0))
-		backbone_points.append(Vector2(nucleotide_slot.position.x, slot_y + nucleotide_backbone_delta[i] + wobble_y))
+		backbone_points.append(Vector2(world_x, slot_y + nucleotide_backbone_delta[i] + wobble_y))
+
 
 	backbone_line.points = backbone_points
 	backbone_line.width = %ThemeManager.backbone_line_width
@@ -397,6 +416,7 @@ func _process(delta):
 			center_y = center_y,
 			template_strand_y = template_strand_y,
 			new_top_template_y = new_top_template_y,
+			new_bottom_template_y = new_bottom_template_y,
 			num_slots = num_nucleotide_slots,
 			nucleotide_original_x = nucleotide_original_x,
 			template_strand_bottom = template_strand_bottom,
@@ -569,6 +589,7 @@ func scrub_to(progress: float):
 			nucleotide_original_x = nucleotide_original_x,
 			template_strand_y = template_strand_y,
 			new_top_template_y = new_top_template_y,
+			new_bottom_template_y = new_bottom_template_y,
 			helicase_mgr = helicase_mgr,
 		})
 
@@ -668,6 +689,7 @@ func _spawn_nucleotide_slots():
 			_get_base_fill(base_char),
 			%ThemeManager.base_label_color
 		)
+		nitrogen_base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 
 		var x = row_start_x + i * nucleotide_slot_spacing
 		nucleotide_original_x.append(x)
@@ -687,6 +709,7 @@ func _spawn_top_strand():
 		var base_char = dna_sequence.get_base(i)
 		base.set_base_type(base_char)
 		base.set_colors(_get_base_fill(base_char), %ThemeManager.base_label_color)
+		base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 
 		top_strand_slots.append(slot)
 		top_strand_bases.append(base)
@@ -721,6 +744,7 @@ func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
 	add_child(marker)
 	marker.set_base_type(marker_type)
 	marker.set_colors(%ThemeManager.marker_color, %ThemeManager.marker_font_color)
+	marker.set_font(%ThemeManager.marker_font_size, %ThemeManager.marker_font)
 	return marker
 
 func _get_base_fill(base_type: String) -> Color:
@@ -798,13 +822,45 @@ func _rebuild_top_rail():
 	curve.add_point(Vector2(-polymerase_x_offset, unzipped_y))
 	top_rail_path.curve = curve
 
+#func _rebuild_rail():
+#	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
+#	var curve = Curve2D.new()
+#	#var rest_y = polymerase_y_lagging if is_done else template_strand_y
+#	var rest_y = template_strand_y
+#	curve.add_point(Vector2(track_length, rest_y))
+#	curve.add_point(Vector2(0, rest_y))
+#	rail_path.curve = curve
+#	template_strand_original_track.points = curve.get_baked_points()
+
 func _rebuild_rail():
-	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
 	var curve = Curve2D.new()
-	#var rest_y = polymerase_y_lagging if is_done else template_strand_y
-	var rest_y = template_strand_y
-	curve.add_point(Vector2(track_length, rest_y))
-	curve.add_point(Vector2(0, rest_y))
+	var bonded_y = template_strand_y
+	var unzipped_y = new_bottom_template_y
+	var first_slot_x = nucleotide_original_x[0] if nucleotide_original_x.size() > 0 else 0.0
+
+	# When done, bottom template stays at its unzipped position — it's now paired with the lagging strand
+	var is_done = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
+	var polymerase_x_offset = polymerase_x_offset_slots * nucleotide_slot_spacing
+	if is_done:
+		curve.add_point(Vector2(track_length, unzipped_y))
+		curve.add_point(Vector2(0, unzipped_y))
+		rail_path.curve = curve
+		template_strand_original_track.points = curve.get_baked_points()
+		return
+
+	if helicase_x <= first_slot_x:
+		curve.add_point(Vector2(track_length, bonded_y))
+		curve.add_point(Vector2(-polymerase_x_offset, bonded_y))
+		rail_path.curve = curve
+		template_strand_original_track.points = curve.get_baked_points()
+		return
+
+	var handle_x = (helicase_x - polymerase_x) * 0.4
+	curve.add_point(Vector2(track_length, bonded_y))
+	curve.add_point(Vector2(helicase_x, bonded_y))
+	curve.add_point(Vector2(helicase_x, bonded_y), Vector2.ZERO, Vector2(-handle_x, 0))
+	curve.add_point(Vector2(polymerase_x, unzipped_y), Vector2(handle_x, 0), Vector2.ZERO)
+	curve.add_point(Vector2(-polymerase_x_offset, unzipped_y))
 	rail_path.curve = curve
 	template_strand_original_track.points = curve.get_baked_points()
 
