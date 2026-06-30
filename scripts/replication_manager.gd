@@ -236,8 +236,6 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 		else:
 			break
 
-
-
 	# ---- Rebuild leading strand ----
 	for base in leading_synthesized_bases:
 		if base != null and is_instance_valid(base): base.queue_free()
@@ -264,7 +262,6 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 			leading_synthesized_bases[i] = _spawn_leading_base(i, sim.dna_sequence.get_complement(i))
 			leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
-
 # ==========================================
 # ENZYME ANIMATION — called from simulation.gd toggle_play() / _run_intro()
 # ==========================================
@@ -286,7 +283,6 @@ func run_intro(intro_x: float, fade_time: float, slide_time: float, tween: Tween
 		tween.tween_property(top_polymerase, "modulate:a", 1.0, fade_time)
 		tween.tween_property(top_polymerase, "position",
 			Vector2(sim.factory_x, sim.straight_y - sim.dna_ribbons_gap - sim.new_bottom_template_offset), slide_time).set_delay(fade_time)
-
 
 # ==========================================
 # RENDER — called from simulation.gd _process visual section

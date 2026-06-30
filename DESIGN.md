@@ -1,5 +1,5 @@
 # MolSim — Design Document
-_Last updated: v70.4 session_
+_Last updated: v70.5 session_
 
 ---
 
@@ -63,25 +63,48 @@ MolSim follows the **E. coli replication model** for accuracy and visual clarity
 
 ## Architecture
 
-### Current state (v70.4)
-`helicase.gd` and `replication_manager.gd` have been extracted. `simulation.gd` is now
-a template manager + visual coordinator. Phase 1 migration is complete.
+### Current state (v70.5)
+`helicase.gd` and `replication_manager.gd` are extracted and stable. `simulation.gd` is
+a thin template manager + visual coordinator that owns no synthesis state.
+
+**Phase 1 and Phase 2 are both complete** (see migration history below). The lagging
+strand itself — Okazaki fragments, the trombone loop, primase, ligase — was fully
+**removed** during a loop-mechanics rebuild attempt and needs to be designed and
+implemented fresh. This is not a regression of the architecture; the architecture is
+in its target shape. It's a clean slate for the one piece of biology that was never
+successfully modeled in the old proximity/transfer state machine.
 
 ```
 simulation.gd  — Template Manager + visual coordinator
-├── helicase.gd  — discrete slot stepping, phase state machine (EXTRACTED ✓)
-└── replication_manager.gd  — synthesis state, spawning, update(), scrub_rebuild(), render() (EXTRACTED ✓)
+├── helicase.gd  — discrete slot stepping, phase state machine, signals (DONE ✓)
+└── replication_manager.gd  — leading strand synthesis only; both polymerase
+                               enzyme visuals; intro/resume animation API (DONE ✓)
+                               Lagging strand: NOT YET BUILT (clean slate)
 ```
 
-### replication_manager.gd migration — two-phase plan
+### replication_manager.gd migration — history
 
-**Phase 1 ✓ DONE (v70.4):** All synthesis state variables and spawning functions live in
-`replication_manager.gd`. simulation.gd calls `replication_manager.update(delta)` from
-its `_process`, passing context. Data lives in the right place.
+**Phase 1 ✓ DONE:** All synthesis state variables and spawning functions moved into
+`replication_manager.gd`. simulation.gd calls `replication_manager.update(delta, ctx)`
+and `scrub_rebuild(ctx)`, passing context. Data lives in the right place.
 
-**Phase 2 (medium term, with okazaki_manager):** Convert to proper signal-based
-architecture. Extract Okazaki fragment logic into `okazaki_manager.gd`.
-Signals replace the `update(delta)` calling pattern.
+**Phase 2 ✓ DONE:** `helicase.gd` exposes real signals (`slot_reached`,
+`phase_changed`) that `replication_manager.gd` connects to directly via
+`connect_helicase()`/`_on_helicase_slot_reached()` (signal wiring exists in the
+codebase already; currently unused while the lagging strand is being rebuilt, but the
+pattern is proven and ready). Enzyme animation became method-based instead of
+`simulation.gd` poking node properties: `replication_mgr.resume_enzymes()` and
+`replication_mgr.run_intro(intro_x, fade_time, slide_time, tween)` are now the only
+ways `simulation.gd` touches `synthesis_circle` / `top_polymerase`. `simulation.gd`
+no longer references either enzyme node directly anywhere.
+
+The originally-planned `okazaki_manager.gd` extraction did not happen as a literal
+file move, because the Okazaki/lagging-strand logic it would have extracted was
+removed entirely rather than carried forward. The signal-based, delegation-clean
+architecture Phase 2 was meant to produce is in place regardless — `okazaki_manager.gd`
+(or equivalent) will be designed fresh when the lagging strand is rebuilt, using the
+deterministic `slot_reached`-driven trigger pattern proven by the leading strand's own
+position-based synthesis check as a reference for how clean a trigger can be.
 
 ### Target architecture
 ```
@@ -104,8 +127,9 @@ simulation.gd  — Template Manager (thin scene coordinator)
 │   │   Discrete slot-by-slot stepping. Owns phase state machine.
 │   │   Emits: slot_reached(index), phase_changed(new_phase).
 │   │
-│   ├── okazaki_manager.gd  (Phase 2)
+│   ├── okazaki_manager.gd  (NEXT — lagging strand rebuild from scratch)
 │   │   Fragment tracking, assignment, open/close logic, sliding clamps (future).
+│   │   Trombone loop geometry and slot positioning along the loop curve.
 │   │
 │   ├── primase.gd  (future)
 │   └── ligase.gd  (future)
@@ -123,6 +147,11 @@ simulation.gd  — Template Manager (thin scene coordinator)
 - Every new enzyme/visual designed with an on/off switch, even before toggle UI exists
 - **Signal connections**: always guard with `if not signal.is_connected(callable)`
   before connecting in functions called on re-initialization
+- **No script reaches into another script's owned visual nodes.** `simulation.gd`
+  never positions, fades, or queries `replication_mgr`'s enzymes directly — it calls
+  methods on `replication_mgr` instead. This rule was tightened during the Phase 2
+  cleanup after repeated regressions where `simulation.gd` quietly grew direct pokes
+  into `replication_mgr.synthesis_circle` / `top_polymerase`.
 
 ---
 
@@ -136,13 +165,25 @@ simulation.gd  — Template Manager (thin scene coordinator)
 - **True current version**: the uploaded file is always ground truth, not earlier pastes
 - **When combining fixes**: always diff the two versions, identify what changed,
   apply only the additive fix to the known-good base — never rewrite from memory
+- **When rebuilding a subsystem from scratch**: remove the old implementation
+  completely first (state, render, scrub paths, signal connections) and confirm a
+  clean, regression-free baseline before writing any new logic on top. Layering new
+  logic over not-fully-removed old logic was the direct cause of the loop-mechanics
+  rebuild's repeated failures.
 
 ---
 
 ## Roadmap
 
-### Immediate (v70.5)
-- [ ] Change loop mechanics from physics based to deterministic model based on helicase steps
+### Immediate (v70.6) — Lagging strand rebuild
+- [ ] Design the trombone loop curve and PLL (Pre-Loop Length) geometry as
+      first-class `replication_manager.gd` logic, not `simulation.gd` debug
+      scaffolding (migrate the existing PLL diagonal/zigzag debug visuals into real
+      geometry math owned by `replication_manager.gd`)
+- [ ] Deterministic, helicase-step-driven loop slot queue and Okazaki fragment
+      assignment (no proximity/transfer state machine — that pattern is retired)
+- [ ] Re-implement lagging strand synthesis, rendering, and scrub rebuild against
+      the clean Phase 2 architecture
 - [ ] Ligase joining Okazaki fragments + reveal whole-strand lagging markers
 - [ ] RNA primers and primase enzyme
 
@@ -154,7 +195,7 @@ simulation.gd  — Template Manager (thin scene coordinator)
 - [ ] Sliding clamps (β-clamp): one per Okazaki fragment + one on leading strand
 
 ### Medium term
-- [ ] replication_manager.gd Phase 2 (signal-based, okazaki_manager.gd extraction)
+- [ ] `okazaki_manager.gd` extraction once the lagging strand above is stable
 - [ ] ComplexityManager node (toggles per feature, Inspector-editable first)
 - [ ] UI controller rebuild
 - [ ] Themes: Dark, Light, Dark Low-Info, Light Low-Info
@@ -169,13 +210,15 @@ simulation.gd  — Template Manager (thin scene coordinator)
 
 ## Pinned Issues
 
-- **Scrub edge case**: occasional escaped synthesized base just left of lagging
-  polymerase. Significantly improved in v70.2–v70.3 but not fully closed. Likely
-  disappears after replication_manager discrete stepping refactor.
+- **Scrub edge case (lagging strand, historical)**: occasional escaped synthesized
+  base just left of lagging polymerase, present in the old proximity/transfer state
+  machine. Moot now that the lagging strand has been removed entirely; flagged here
+  so the rebuilt version is designed to avoid the same class of bug (the deterministic
+  step-count model should make this structurally impossible rather than "improved").
 
 ---
 
-## Scene Structure (v70.4)
+## Scene Structure (v70.5)
 
 ```
 root (Node2D, simulation.gd)
@@ -184,10 +227,8 @@ root (Node2D, simulation.gd)
 ├── RailPath (Path2D)                    — bottom template strand
 ├── TopRailPath (Path2D)                 — top template strand
 ├── TemplateStrandOriginalTrack (Line2D)
-├── NewStrandLine (Line2D)
-├── SynthesisCircle (Node2D) → SynthesisArea (Area2D)
-├── TemplateStrandNewTrack (Line2D)
-├── TopTemplateStrandNewTrack (Line2D)
+├── SynthesisCircle (Node2D)             — lagging-position polymerase visual,
+│                                           driven entirely by replication_mgr
 ├── BackboneLine (Line2D)
 ├── HydrogenBondsContainer (Node2D)
 ├── TemplateHydrogenBondsContainer (Node2D)
@@ -199,3 +240,9 @@ root (Node2D, simulation.gd)
 helicase.gd — added as child of simulation.gd at runtime via initialize_simulation()
 replication_manager.gd — added as child of simulation.gd at runtime via initialize_simulation()
 ```
+
+Removed from the scene during the lagging-strand cleanup (dead proximity-detection
+and unused debug/baseline nodes): `NewStrandLine`, `SynthesisArea` +
+`SynthesisCollisionShape` (children of `SynthesisCircle`), `TemplateStrandNewTrack`,
+`TopTemplateStrandNewTrack`. `top_polymerase` is not a scene node — it's created
+procedurally by `replication_manager.gd` in `setup_backbones()`.
