@@ -14,6 +14,7 @@
 script = ExtResource("1_5eski")
 num_nucleotide_slots = 34
 dna_ribbons_gap = 60.0
+fade_duration = 1.0
 wobble_amplitude = 0.9
 wobble_speed = 1.0
 wobble_phase_offset = 1.0
@@ -74,7 +75,7 @@ default_color = Color(0, 0, 0, 1)
 [node name="ThemeManager" type="Node" parent="." unique_id=264924326]
 unique_name_in_owner = true
 script = ExtResource("3_ik8a0")
-background_color = Color(0.10565551, 0.16901225, 0.33662632, 1)
+background_color = Color(0.088599645, 0.1447326, 0.29568833, 1)
 base_color_a = Color(0.9593466, 0.25030932, 0.20285092, 1)
 base_color_t = Color(0.64573294, 0.2505012, 0.99999994, 1)
 base_color_c = Color(0.8499613, 0.46963003, 0.09985284, 1)

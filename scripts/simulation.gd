@@ -61,6 +61,9 @@ var track_length: float = 0.0
 @export var fade_duration: float = 0.6
 @export var settling_duration: float = 0.5
 @export var settling_threshold: float = 2.0
+@export var lagging_gap_enabled: bool = false  # false: base complexity — lagging polymerase catches up, closing the strand fully. true: reserved for the telomerase tier, where the trailing gap is left standing.
+@export var lagging_catchup_step_duration: float = 0.3  # pace of post-DONE catch-up firing — independent of helicase timing, since there's no fork driving it anymore
+
 
 @export_group("Wobble")
 @export var wobble_amplitude: float = 2.0
@@ -584,6 +587,7 @@ func scrub_to(progress: float):
 	# ---- Delegate synthesis rebuild to replication_mgr ----
 	if replication_mgr != null:
 		replication_mgr.scrub_rebuild({
+			target_slot = target_slot,
 			target_polymerase_x = target_polymerase_x,
 			helicase_x = helicase_x,
 			is_done_phase = is_done_phase,
