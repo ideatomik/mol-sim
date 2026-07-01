@@ -14,7 +14,10 @@ extends Node
 @export_group("Background")
 @export var background_color: Color = Color(0.15377063, 0.22897473, 0.44707716, 1.0)
 
-@export_group("Base Colors")
+@export_group("Wobble")
+@export var wobble_enabled: bool = true
+
+@export_group("Nitrogen Base Settings")
 @export var base_color_a: Color = Color(0.8, 0.2, 0.2, 1.0)
 @export var base_color_t: Color = Color(0.2, 0.2, 0.8, 1.0)
 @export var base_color_c: Color = Color(0.85, 0.6, 0.1, 1.0)
@@ -22,6 +25,7 @@ extends Node
 @export var base_label_color: Color = Color(1.0, 1.0, 1.0, 1.0)
 @export var base_label_font_size: int = 14
 @export var base_label_font: Font = null
+@export var base_radius: float = 15.0
 
 @export_group("Backbone")
 @export var backbone_color: Color = Color(0.43137255, 0.72156864, 1.0, 1.0)

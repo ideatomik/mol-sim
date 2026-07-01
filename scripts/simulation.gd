@@ -75,6 +75,8 @@ var new_bottom_template_y: float = 0.0  # ADD — bottom template's unzipped row
 
 var helicase_node: Node2D = null
 
+var wobble_time: float = 0.0
+
 var helicase_x: float = 0.0   # Derived each frame from helicase_mgr
 var polymerase_x: float = 0.0   # Derived: helicase_x - polymerase_x_offset_slots * nucleotide_slot_spacing
 var polymerase_y_lagging: float = 0.0   # Derived: center_y + polymerase_y_offset (lagging polymerase y)
@@ -324,7 +326,8 @@ func _process(delta):
 			settle_blend = 1.0
 
 	# wobble_t computed once here — used by both state update and rendering sections
-	var wobble_t = helicase_x / nucleotide_slot_spacing
+	wobble_time += delta
+	var wobble_t = wobble_time
 
 	# ---------- 2. STATE UPDATE (only if not manually overridden) ----------
 	if not manual_override and helicase_mgr != null and replication_mgr != null:
@@ -384,11 +387,10 @@ func _process(delta):
 		nucleotide_slot.position = Vector2(world_x, slot_y)
 
 		var wobble_y = 0.0
-		if wobble_amplitude > 0.0:
-			var near_top = abs(slot_y - template_strand_y) < wobble_amplitude * 4.0
-			var near_bottom = abs(slot_y - polymerase_y_lagging) < wobble_amplitude * 4.0
-			if near_top or near_bottom:
-				wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
+		var near_top = abs(slot_y - template_strand_y) < wobble_amplitude * 4.0
+		var near_bottom = abs(slot_y - new_bottom_template_y) < wobble_amplitude * 4.0
+		if near_top or near_bottom:
+			wobble_y = get_wobble_y(i, wobble_t)
 		nucleotide_bases[i].position.y = wobble_y
 
 		var mid_y = template_strand_y + (new_bottom_template_y - template_strand_y) * 0.5
@@ -439,7 +441,7 @@ func _process(delta):
 			slot_y = template_strand_y - dna_ribbons_gap
 		top_strand_slots[i].position = Vector2(world_x, slot_y)
 
-		var wobble_y = sin(wobble_t * wobble_speed * TAU + i * wobble_phase_offset) * wobble_amplitude
+		var wobble_y = get_wobble_y(i, wobble_t)
 		top_strand_bases[i].position = Vector2(0, wobble_y)
 
 		var mid_y = new_top_template_y + (template_strand_y - dna_ribbons_gap - new_top_template_y) * 0.5
@@ -469,26 +471,26 @@ func _process(delta):
 	# ---- Marker positions: template strands (owned by simulation.gd) ----
 	if marker_template_5p:
 		var last = num_nucleotide_slots - 1
-		var wobble_last = nucleotide_bases[last].position.y
+		var wobble_last = get_wobble_y(last, wobble_t)
 		marker_template_5p.position = Vector2(
 			template_strand_bottom[last].position.x + %ThemeManager.marker_offset,
 			template_strand_bottom[last].position.y + nucleotide_backbone_delta[last] + wobble_last
 		)
 	if marker_template_3p:
-		var wobble_first = nucleotide_bases[0].position.y
+		var wobble_first = get_wobble_y(0, wobble_t)
 		marker_template_3p.position = Vector2(
 			template_strand_bottom[0].position.x - %ThemeManager.marker_offset,
 			template_strand_bottom[0].position.y + nucleotide_backbone_delta[0] + wobble_first
 		)
 	if marker_top_5p:
-		var wobble_first = sin(wobble_t * wobble_speed * TAU + 0 * wobble_phase_offset) * wobble_amplitude
+		var wobble_first = get_wobble_y(0, wobble_t)
 		marker_top_5p.position = Vector2(
 			top_strand_slots[0].position.x - %ThemeManager.marker_offset,
 			top_strand_slots[0].position.y + top_strand_backbone_delta[0] + wobble_first
 		)
 	if marker_top_3p:
 		var last = num_nucleotide_slots - 1
-		var wobble_last = sin(wobble_t * wobble_speed * TAU + last * wobble_phase_offset) * wobble_amplitude
+		var wobble_last = get_wobble_y(last, wobble_t)
 		marker_top_3p.position = Vector2(
 			top_strand_slots[last].position.x + %ThemeManager.marker_offset,
 			top_strand_slots[last].position.y + top_strand_backbone_delta[last] + wobble_last
@@ -685,6 +687,7 @@ func _spawn_nucleotide_slots():
 
 		var base_char = dna_sequence.get_complement(i)
 		nitrogen_base.set_base_type(base_char)
+		nitrogen_base.set_radius(%ThemeManager.base_radius)
 		nitrogen_base.set_colors(
 			_get_base_fill(base_char),
 			%ThemeManager.base_label_color
@@ -708,6 +711,7 @@ func _spawn_top_strand():
 		slot.add_child(base)
 		var base_char = dna_sequence.get_base(i)
 		base.set_base_type(base_char)
+		base.set_radius(%ThemeManager.base_radius)
 		base.set_colors(_get_base_fill(base_char), %ThemeManager.base_label_color)
 		base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 
@@ -743,6 +747,7 @@ func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
 	marker.z_index = 3
 	add_child(marker)
 	marker.set_base_type(marker_type)
+	marker.set_radius(%ThemeManager.base_radius)
 	marker.set_colors(%ThemeManager.marker_color, %ThemeManager.marker_font_color)
 	marker.set_font(%ThemeManager.marker_font_size, %ThemeManager.marker_font)
 	return marker
@@ -755,6 +760,30 @@ func _get_base_fill(base_type: String) -> Color:
 		"G": return %ThemeManager.base_color_g
 		"5'", "3'": return %ThemeManager.marker_color
 	return Color.GRAY
+
+## Deterministic pseudo-random [0,1) value from a seed — same input always
+## gives the same output (no per-frame flicker), used to give each slot its
+## own stable "personality" instead of a linear traveling-wave phase.
+func _wobble_hash01(seed: float) -> float:
+	var x = sin(seed) * 43758.5453
+	return x - floor(x)
+
+## Returns this frame's wobble y-offset for a given slot index. Blends two
+## independently-hashed sine waves per index so bases jitter with their own
+## semi-random phase/frequency rather than rippling in sync like a flag.
+## Shared by all four wobbling strands (bottom/top template, leading/lagging)
+## so the "chaotic" feel and the accessibility toggle live in exactly one place.
+func get_wobble_y(index: int, wobble_t: float) -> float:
+	if not %ThemeManager.wobble_enabled or wobble_amplitude <= 0.0:
+		return 0.0
+	var phase_a = _wobble_hash01(float(index) * 12.9898) * TAU
+	var freq_a = 0.85 + _wobble_hash01(float(index) * 78.233) * 0.5
+	var phase_b = _wobble_hash01(float(index) * 39.425) * TAU
+	var freq_b = 1.1 + _wobble_hash01(float(index) * 91.731) * 0.6
+
+	var wave_a = sin(wobble_t * wobble_speed * freq_a * TAU + phase_a)
+	var wave_b = sin(wobble_t * wobble_speed * freq_b * TAU + phase_b)
+	return (wave_a * 0.7 + wave_b * 0.3) * wobble_amplitude
 
 func _update_hydrogen_bond_height(container: Node2D, height: float) -> void:
 	# Rescale bond lines to match the actual distance between paired bases.

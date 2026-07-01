@@ -67,6 +67,19 @@ func set_colors(fill_color: Color, label_color: Color) -> void:
 	if label:
 		label.add_theme_color_override("font_color", label_color)
 
+## Apply a new body radius, rebuilding the circular polygon.
+## Called by the spawner using %ThemeManager.base_radius, keeping this
+## node ThemeManager-free.
+func set_radius(radius: float) -> void:
+	body_radius = radius
+	if body_poly:
+		var points = PackedVector2Array()
+		const SEGMENTS = 24
+		for i in range(SEGMENTS):
+			var angle = (float(i) / SEGMENTS) * TAU
+			points.append(Vector2(cos(angle), sin(angle)) * body_radius)
+		body_poly.polygon = points
+
 ## Apply font size and optional custom font from ThemeManager.
 ## Call after set_colors() during spawning.
 func set_font(font_size: int, font: Font = null) -> void:

@@ -50,6 +50,8 @@ var manual_override: bool = true
 var lagging_fragments: Array = []          # completed fragments
 var lagging_current_fragment = null        # Dictionary or null — fragment in progress
 var lagging_telomere_gap = null      # {start, end, length} of unsynthesized real slots at the strand's end, or null
+var lagging_synthesized_bases: Array = []
+var lagging_hydrogen_bonds: Array = []
 var connected_helicase_mgr: Node = null  # cached for Phase enum access in the phase_changed handler
 
 # ---------- CACHED CONTEXT (updated each frame in update()) ----------
@@ -107,15 +109,17 @@ func reset(num_slots: int) -> void:
 	# Called by simulation.gd after teardown, before spawning new slots.
 	manual_override = true
 	_leading_reset(num_slots)
-	_lagging_reset()
+	_lagging_reset(num_slots)
 
 func setup_backbones() -> void:
 	# Called after reset() during initialize_simulation().
 	_leading_setup_backbones()
+	_lagging_setup_backbones()
 
 func teardown() -> void:
 	# Free all owned nodes. Called by simulation.gd teardown_simulation().
 	_leading_teardown()
+	_lagging_teardown()
 
 # ==========================================
 # UPDATE — called from simulation.gd _process
@@ -229,6 +233,7 @@ func render(delta: float, ctx: Dictionary) -> void:
 	#           nucleotide_original_x, template_strand_bottom,
 	#           nucleotide_bases, top_strand_slots
 	_leading_render(ctx)
+	_lagging_render(ctx)
 
 # ==========================================
 # QUERY FUNCTIONS
@@ -375,7 +380,7 @@ func _leading_render(ctx: Dictionary) -> void:
 	var leading_points = PackedVector2Array()
 	for i in range(leading_synthesized_bases.size()):
 		if leading_synthesized_bases[i] != null:
-			var wobble_y = sin(wobble_t * sim.wobble_speed * TAU + i * sim.wobble_phase_offset) * sim.wobble_amplitude
+			var wobble_y = sim.get_wobble_y(i, wobble_t)
 			var world_x = nucleotide_original_x[i]
 			var leading_y = new_top_template_y - dna_ribbons_gap + wobble_y
 			leading_synthesized_bases[i].position = Vector2(world_x, leading_y)
@@ -390,14 +395,14 @@ func _leading_render(ctx: Dictionary) -> void:
 
 	# ---- Leading strand markers ----
 	if marker_leading_5p == null and leading_synthesized_bases[0] != null:
-		var wobble_first = sin(wobble_t * sim.wobble_speed * TAU) * sim.wobble_amplitude
+		var wobble_first = sim.get_wobble_y(0, wobble_t)
 		var leading_y = new_top_template_y - dna_ribbons_gap + wobble_first
 		marker_leading_5p = _spawn_marker("3'", Vector2(
 			nucleotide_original_x[0] - tm.marker_offset,
 			leading_y - tm.backbone_offset_distance
 		))
 	if marker_leading_5p:
-		var wobble_first = sin(wobble_t * sim.wobble_speed * TAU) * sim.wobble_amplitude
+		var wobble_first = sim.get_wobble_y(0, wobble_t)
 		var leading_y = new_top_template_y - dna_ribbons_gap + wobble_first
 		marker_leading_5p.position = Vector2(
 			nucleotide_original_x[0] - tm.marker_offset,
@@ -408,7 +413,7 @@ func _leading_render(ctx: Dictionary) -> void:
 		for i in range(leading_synthesized_bases.size()):
 			if leading_synthesized_bases[i] != null: last_synth = i
 		if last_synth >= 0:
-			var wobble_last = sin(wobble_t * sim.wobble_speed * TAU + last_synth * sim.wobble_phase_offset) * sim.wobble_amplitude
+			var wobble_last = sim.get_wobble_y(last_synth, wobble_t)
 			var leading_y = new_top_template_y - dna_ribbons_gap + wobble_last
 			marker_leading_3p = _spawn_marker("5'", Vector2(
 				nucleotide_original_x[last_synth] + tm.marker_offset,
@@ -419,12 +424,64 @@ func _leading_render(ctx: Dictionary) -> void:
 		for i in range(leading_synthesized_bases.size()):
 			if leading_synthesized_bases[i] != null: last_synth = i
 		if last_synth >= 0:
-			var wobble_last = sin(wobble_t * sim.wobble_speed * TAU + last_synth * sim.wobble_phase_offset) * sim.wobble_amplitude
+			var wobble_last = sim.get_wobble_y(last_synth, wobble_t)
 			var leading_y = new_top_template_y - dna_ribbons_gap + wobble_last
 			marker_leading_3p.position = Vector2(
 				nucleotide_original_x[last_synth] + tm.marker_offset,
 				leading_y - tm.backbone_offset_distance
 			)
+
+func _spawn_leading_base(index: int, base_type: String) -> Node2D:
+	var base = sim.NewNitrogenBaseScene.instantiate()
+	var world_x = sim.nucleotide_original_x[index]
+	var leading_y = sim.new_top_template_y - sim.dna_ribbons_gap
+	base.position = Vector2(world_x, leading_y)
+	base.z_index = 2
+	sim.add_child(base)
+	base.set_base_type(base_type)
+	base.set_radius(tm.base_radius)
+	base.set_colors(sim._get_base_fill(base_type), tm.base_label_color)
+	base.set_font(tm.base_label_font_size, tm.base_label_font)
+	return base
+
+func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
+	var template_base = sim.dna_sequence.get_base(index)
+	var bond_count = 3 if (template_base == "C" or template_base == "G") else 2
+	var bond_color = tm.cg_bond_color if (template_base == "C" or template_base == "G") else tm.at_bond_color
+	var container = Node2D.new()
+	var total_width = (bond_count - 1) * tm.hydrogen_bond_spacing
+	var start_x = -total_width / 2.0
+	var inset = tm.base_radius - 3.0
+	for b in range(bond_count):
+		var line = Line2D.new()
+		var lx = start_x + b * tm.hydrogen_bond_spacing
+		line.add_point(Vector2(lx, -inset))
+		line.add_point(Vector2(lx, -(sim.dna_ribbons_gap - inset)))
+		line.default_color = bond_color
+		line.width = tm.hydrogen_bond_width
+		line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+		line.end_cap_mode = Line2D.LINE_CAP_ROUND
+		container.add_child(line)
+	sim.hydrogen_bonds_container.add_child(container)
+	return container
+
+func _update_bond_marks_leading(points: PackedVector2Array) -> void:
+	var needed = max(0, points.size() - 1)
+	while leading_strand_bond_marks.size() < needed:
+		leading_strand_bond_marks.append(_create_bond_mark_sprite())
+	while leading_strand_bond_marks.size() > needed:
+		var extra = leading_strand_bond_marks.pop_back()
+		extra.queue_free()
+	for i in range(needed):
+		var a = points[i]
+		var b = points[i + 1]
+		var mid = (a + b) / 2.0
+		var segment = b - a
+		var mark = leading_strand_bond_marks[i]
+		mark.position = mid
+		mark.visible = segment.length() > 0.0
+		if mark.visible:
+			mark.rotation = segment.angle()
 
 # ==========================================
 # LAGGING STRAND — self-contained section
@@ -443,10 +500,43 @@ func connect_helicase(helicase_mgr: Node) -> void:
 	if not helicase_mgr.phase_changed.is_connected(_on_helicase_phase_changed):
 		helicase_mgr.phase_changed.connect(_on_helicase_phase_changed)
 
-func _lagging_reset() -> void:
+func _lagging_reset(num_slots: int) -> void:
 	lagging_fragments.clear()
 	lagging_current_fragment = null
 	lagging_telomere_gap = null
+	lagging_synthesized_bases.clear()
+	lagging_hydrogen_bonds.clear()
+	for i in range(num_slots):
+		lagging_synthesized_bases.append(null)
+		lagging_hydrogen_bonds.append(null)
+
+func _lagging_setup_backbones() -> void:
+	pass  # Each fragment owns its own backbone Line2D, created lazily in
+	# _lagging_render() the first time it has slots — nothing to pre-build here.
+
+func _lagging_teardown() -> void:
+	for base in lagging_synthesized_bases:
+		if base != null and is_instance_valid(base): base.queue_free()
+	for bond in lagging_hydrogen_bonds:
+		if bond != null and is_instance_valid(bond): bond.queue_free()
+	lagging_synthesized_bases.clear()
+	lagging_hydrogen_bonds.clear()
+
+	var all_fragments = lagging_fragments.duplicate()
+	if lagging_current_fragment != null:
+		all_fragments.append(lagging_current_fragment)
+	for frag in all_fragments:
+		if frag.backbone != null and is_instance_valid(frag.backbone):
+			frag.backbone.queue_free()
+		for mark in frag.bond_marks:
+			if mark != null and is_instance_valid(mark): mark.queue_free()
+		if frag.marker_5p != null and is_instance_valid(frag.marker_5p):
+			frag.marker_5p.queue_free()
+		if frag.marker_3p != null and is_instance_valid(frag.marker_3p):
+			frag.marker_3p.queue_free()
+
+	lagging_fragments.clear()
+	lagging_current_fragment = null
 
 func _on_helicase_slot_reached(index: int) -> void:
 	var lagging_index = index - int(sim.polymerase_x_offset_slots)
@@ -461,6 +551,9 @@ func _lagging_advance_to_slot(lagging_index: int) -> void:
 	if lagging_current_fragment == null:
 		_lagging_open_fragment()
 	lagging_current_fragment.slots.append(lagging_index)
+	if lagging_synthesized_bases[lagging_index] == null:
+		lagging_synthesized_bases[lagging_index] = _spawn_lagging_base(lagging_index, sim.dna_sequence.get_base(lagging_index))
+		lagging_hydrogen_bonds[lagging_index] = _spawn_lagging_hydrogen_bonds(lagging_index)
 	print("[LAGGING] slot %d added — fragment size %d/%d" % [
 		lagging_index, lagging_current_fragment.slots.size(), sim.okazaki_fragment_size
 	])
@@ -505,11 +598,39 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 		lagging_synth_count = min(lagging_synth_count, max_synthesizable + 1)
 	lagging_synth_count = max(lagging_synth_count, 0)
 
-	# ---- Deterministic rebuild: chunk slots 0..lagging_synth_count-1 into fragments ----
+	# ---- Free old fragment-owned visual nodes ----
+	var old_fragments = lagging_fragments.duplicate()
+	if lagging_current_fragment != null:
+		old_fragments.append(lagging_current_fragment)
+	for frag in old_fragments:
+		if frag.backbone != null and is_instance_valid(frag.backbone):
+			frag.backbone.queue_free()
+		for mark in frag.bond_marks:
+			if mark != null and is_instance_valid(mark): mark.queue_free()
+		if frag.marker_5p != null and is_instance_valid(frag.marker_5p):
+			frag.marker_5p.queue_free()
+		if frag.marker_3p != null and is_instance_valid(frag.marker_3p):
+			frag.marker_3p.queue_free()
+
 	lagging_fragments.clear()
 	lagging_current_fragment = null
 	lagging_telomere_gap = null
 
+	# ---- Free + re-spawn per-slot bases/bonds ----
+	for base in lagging_synthesized_bases:
+		if base != null and is_instance_valid(base): base.queue_free()
+	for bond in lagging_hydrogen_bonds:
+		if bond != null and is_instance_valid(bond): bond.queue_free()
+	lagging_synthesized_bases.clear()
+	lagging_hydrogen_bonds.clear()
+	lagging_synthesized_bases.resize(num_slots)
+	lagging_hydrogen_bonds.resize(num_slots)
+
+	for i in range(lagging_synth_count):
+		lagging_synthesized_bases[i] = _spawn_lagging_base(i, sim.dna_sequence.get_base(i))
+		lagging_hydrogen_bonds[i] = _spawn_lagging_hydrogen_bonds(i)
+
+	# ---- Deterministic rebuild: chunk slots 0..lagging_synth_count-1 into fragments ----
 	var frag_size = sim.okazaki_fragment_size
 	var i = 0
 	while i < lagging_synth_count:
@@ -595,31 +716,33 @@ func _lagging_force_close_at_end() -> void:
 		])
 		lagging_current_fragment = null
 
-func _spawn_leading_base(index: int, base_type: String) -> Node2D:
+func _spawn_lagging_base(index: int, base_type: String) -> Node2D:
 	var base = sim.NewNitrogenBaseScene.instantiate()
 	var world_x = sim.nucleotide_original_x[index]
-	var leading_y = sim.new_top_template_y - sim.dna_ribbons_gap
-	base.position = Vector2(world_x, leading_y)
+	var lagging_y = sim.new_bottom_template_y + sim.dna_ribbons_gap
+	base.position = Vector2(world_x, lagging_y)
 	base.z_index = 2
 	sim.add_child(base)
 	base.set_base_type(base_type)
+	base.set_radius(tm.base_radius)
 	base.set_colors(sim._get_base_fill(base_type), tm.base_label_color)
 	base.set_font(tm.base_label_font_size, tm.base_label_font)
 	return base
 
-func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
-	var template_base = sim.dna_sequence.get_base(index)
+func _spawn_lagging_hydrogen_bonds(index: int) -> Node2D:
+	var template_base = sim.dna_sequence.get_complement(index)
 	var bond_count = 3 if (template_base == "C" or template_base == "G") else 2
 	var bond_color = tm.cg_bond_color if (template_base == "C" or template_base == "G") else tm.at_bond_color
 	var container = Node2D.new()
+	container.position = Vector2(sim.nucleotide_original_x[index], sim.new_bottom_template_y)
 	var total_width = (bond_count - 1) * tm.hydrogen_bond_spacing
 	var start_x = -total_width / 2.0
-	var inset = 12.0
+	var inset = tm.base_radius - 3.0
 	for b in range(bond_count):
 		var line = Line2D.new()
 		var lx = start_x + b * tm.hydrogen_bond_spacing
-		line.add_point(Vector2(lx, -inset))
-		line.add_point(Vector2(lx, -(sim.dna_ribbons_gap - inset)))
+		line.add_point(Vector2(lx, inset))
+		line.add_point(Vector2(lx, sim.dna_ribbons_gap - inset))
 		line.default_color = bond_color
 		line.width = tm.hydrogen_bond_width
 		line.begin_cap_mode = Line2D.LINE_CAP_ROUND
@@ -628,19 +751,92 @@ func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
 	sim.hydrogen_bonds_container.add_child(container)
 	return container
 
-func _update_bond_marks_leading(points: PackedVector2Array) -> void:
+func _lagging_render(ctx: Dictionary) -> void:
+	var wobble_t: float = ctx.wobble_t
+	var dna_ribbons_gap: float = ctx.dna_ribbons_gap
+	var new_bottom_template_y: float = ctx.new_bottom_template_y
+	var nucleotide_original_x = ctx.nucleotide_original_x
+
+	# ---- Reposition every synthesized lagging base + hydrogen bond ----
+	for i in range(lagging_synthesized_bases.size()):
+		if lagging_synthesized_bases[i] != null:
+			var wobble_y = sim.get_wobble_y(i, wobble_t)
+			var world_x = nucleotide_original_x[i]
+			var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
+			lagging_synthesized_bases[i].position = Vector2(world_x, lagging_y)
+			if lagging_hydrogen_bonds[i] != null:
+				var bottom_template_y = new_bottom_template_y + wobble_y
+				lagging_hydrogen_bonds[i].position = Vector2(world_x, bottom_template_y)
+				sim._update_hydrogen_bond_height(lagging_hydrogen_bonds[i], lagging_y - bottom_template_y)
+
+	# ---- Per-fragment backbone + bond marks + markers ----
+	var all_fragments = lagging_fragments.duplicate()
+	if lagging_current_fragment != null:
+		all_fragments.append(lagging_current_fragment)
+	for frag in all_fragments:
+		_lagging_render_fragment(frag, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
+
+func _lagging_render_fragment(frag: Dictionary, wobble_t: float, dna_ribbons_gap: float, new_bottom_template_y: float, nucleotide_original_x: Array) -> void:
+	if frag.slots.size() == 0:
+		return
+
+	if frag.backbone == null:
+		var line = Line2D.new()
+		line.default_color = tm.backbone_color
+		line.width = tm.backbone_line_width
+		line.z_index = -1
+		line.joint_mode = Line2D.LINE_JOINT_ROUND
+		line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+		line.end_cap_mode = Line2D.LINE_CAP_ROUND
+		sim.add_child(line)
+		frag.backbone = line
+
+	var points = PackedVector2Array()
+	for slot_index in frag.slots:
+		if lagging_synthesized_bases[slot_index] != null:
+			var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
+			var world_x = nucleotide_original_x[slot_index]
+			var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
+			points.append(Vector2(world_x, lagging_y + tm.backbone_offset_distance))
+	frag.backbone.points = points
+	frag.backbone.width = tm.backbone_line_width
+
+	_update_bond_marks_fragment(frag, points)
+
+	if frag.complete:
+		var first_slot = frag.slots[0]
+		var last_slot = frag.slots[-1]
+		var wobble_first = sim.get_wobble_y(first_slot, wobble_t)
+		var wobble_last = sim.get_wobble_y(last_slot, wobble_t)
+		var first_y = new_bottom_template_y + dna_ribbons_gap + wobble_first + tm.backbone_offset_distance
+		var last_y = new_bottom_template_y + dna_ribbons_gap + wobble_last + tm.backbone_offset_distance
+
+		if frag.slots.size() == 1:
+			if frag.marker_5p == null:
+				frag.marker_5p = _spawn_marker("5'-3'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
+			frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+		else:
+			if frag.marker_5p == null:
+				frag.marker_5p = _spawn_marker("5'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
+			frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+
+			if frag.marker_3p == null:
+				frag.marker_3p = _spawn_marker("3'", Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset))
+			frag.marker_3p.position = Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset)
+
+func _update_bond_marks_fragment(frag: Dictionary, points: PackedVector2Array) -> void:
 	var needed = max(0, points.size() - 1)
-	while leading_strand_bond_marks.size() < needed:
-		leading_strand_bond_marks.append(_create_bond_mark_sprite())
-	while leading_strand_bond_marks.size() > needed:
-		var extra = leading_strand_bond_marks.pop_back()
+	while frag.bond_marks.size() < needed:
+		frag.bond_marks.append(sim._create_bond_mark_sprite_reversed())
+	while frag.bond_marks.size() > needed:
+		var extra = frag.bond_marks.pop_back()
 		extra.queue_free()
 	for i in range(needed):
 		var a = points[i]
 		var b = points[i + 1]
 		var mid = (a + b) / 2.0
 		var segment = b - a
-		var mark = leading_strand_bond_marks[i]
+		var mark = frag.bond_marks[i]
 		mark.position = mid
 		mark.visible = segment.length() > 0.0
 		if mark.visible:
@@ -656,6 +852,7 @@ func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
 	marker.z_index = 3
 	sim.add_child(marker)
 	marker.set_base_type(marker_type)
+	marker.set_radius(tm.base_radius)
 	marker.set_colors(tm.marker_color, tm.marker_font_color)
 	marker.set_font(tm.marker_font_size, tm.marker_font)
 	return marker

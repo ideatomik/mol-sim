@@ -5,4 +5,3 @@
 [node name="NewNitrogenBase" type="RigidBody2D" unique_id=153262830]
 z_index = 2
 script = ExtResource("1_cj2ew")
-body_radius = 15.0
