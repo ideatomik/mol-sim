@@ -50,6 +50,8 @@ var manual_override: bool = true
 var lagging_fragments: Array = []          # completed fragments
 var lagging_current_fragment = null        # Dictionary or null — fragment in progress
 var lagging_telomere_gap = null      # {start, end, length} of unsynthesized real slots at the strand's end, or null
+var lagging_backbone_line: Line2D = null
+var lagging_bond_marks: Array[Node2D] = []
 var lagging_synthesized_bases: Array = []
 var lagging_hydrogen_bonds: Array = []
 var connected_helicase_mgr: Node = null  # cached for Phase enum access in the phase_changed handler
@@ -83,7 +85,7 @@ var leading_strand_bond_marks: Array[Node2D] = []
 var leading_polymerase: Node2D = null  # renamed from top_polymerase
 var lagging_polymerase: Node2D = null  # renamed from synthesis_circle — reference to scene node, set in initialize()
 var lagging_polymerase_faded: bool = false  # renamed from synthesis_circle_faded
-const LEADING_POLYMERASE_RADIUS: float = 16.0  # renamed from TOP_POLYMERASE_RADIUS
+const LEADING_POLYMERASE_RADIUS: float = 24.0  # renamed from TOP_POLYMERASE_RADIUS
 # ---------- MARKERS ----------
 var marker_leading_5p: Node2D = null
 var marker_leading_3p: Node2D = null
@@ -160,8 +162,6 @@ func update(delta: float, ctx: Dictionary) -> void:
 	if leading_polymerase and phase != helicase_mgr.Phase.DONE:
 		leading_polymerase.position = Vector2(ctx.polymerase_x, ctx.new_top_template_y)
 		#print("[DEBUG] leading_polymerase.position=", leading_polymerase.position, " template_strand_y=", ctx.template_strand_y, " dna_ribbons_gap=", ctx.dna_ribbons_gap, " global_pos=", leading_polymerase.global_position)
-	if lagging_polymerase and lagging_firing_started and phase != helicase_mgr.Phase.DONE:
-		lagging_polymerase.position = Vector2(lagging_polymerase_x, ctx.new_bottom_template_y)
 
 	# ---- Helicase finishing trigger (driven by leading strand's remaining slots) ----
 	if phase == helicase_mgr.Phase.FINISHING_LAST_PULSE and helicase_mgr.extra_steps_total == 0:
@@ -192,7 +192,7 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	if lagging_polymerase:
 		lagging_polymerase_faded = ctx.is_done_phase
 		lagging_polymerase.modulate.a = 0.0 if ctx.is_done_phase else 1.0
-		lagging_polymerase.position = Vector2(target_polymerase_x, ctx.new_bottom_template_y)
+		lagging_polymerase.position = Vector2(lagging_polymerase_x, ctx.new_bottom_template_y)
 
 	_leading_scrub_rebuild(ctx)
 
@@ -519,8 +519,16 @@ func _lagging_reset(num_slots: int) -> void:
 		lagging_catchup_timer.stop()
 
 func _lagging_setup_backbones() -> void:
-	pass  # Each fragment owns its own backbone Line2D, created lazily in
-	# _lagging_render() the first time it has slots — nothing to pre-build here.
+	if lagging_backbone_line != null and is_instance_valid(lagging_backbone_line):
+		lagging_backbone_line.queue_free()
+	lagging_backbone_line = Line2D.new()
+	lagging_backbone_line.default_color = tm.backbone_color
+	lagging_backbone_line.width = tm.backbone_line_width
+	lagging_backbone_line.z_index = -1
+	lagging_backbone_line.joint_mode = Line2D.LINE_JOINT_ROUND
+	lagging_backbone_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	lagging_backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
+	sim.add_child(lagging_backbone_line)
 
 func _lagging_teardown() -> void:
 	for base in lagging_synthesized_bases:
@@ -542,6 +550,12 @@ func _lagging_teardown() -> void:
 			frag.marker_5p.queue_free()
 		if frag.marker_3p != null and is_instance_valid(frag.marker_3p):
 			frag.marker_3p.queue_free()
+
+	if lagging_backbone_line != null and is_instance_valid(lagging_backbone_line):
+		lagging_backbone_line.queue_free()
+	for mark in lagging_bond_marks:
+		if mark != null and is_instance_valid(mark): mark.queue_free()
+	lagging_bond_marks.clear()
 
 	lagging_fragments.clear()
 	lagging_current_fragment = null
@@ -570,6 +584,8 @@ func _lagging_fire_step() -> void:
 		lagging_hydrogen_bonds[slot_index] = _spawn_lagging_hydrogen_bonds(slot_index)
 
 	lagging_polymerase_x = sim.nucleotide_original_x[slot_index]  # snap — polymerase is now independently positioned, not helicase-relative
+	if lagging_polymerase:
+		lagging_polymerase.position = Vector2(lagging_polymerase_x, sim.new_bottom_template_y)
 
 	print("[LAGGING] slot %d fired — fragment size %d/%d" % [
 		slot_index, lagging_current_fragment.slots.size(), sim.okazaki_fragment_size
@@ -610,33 +626,27 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 	var nucleotide_original_x = ctx.nucleotide_original_x
 	var threshold = sim.okazaki_fragment_size + sim.pll_slot_count
 
-	var effective_index: int
-	if is_done_phase:
-		# Reproduce the same finishing-step math the live trigger relies on, so
-		# scrub-to-end matches a live play-through exactly.
-		var last_slot_index = num_slots - 1
-		var offset_px = sim.polymerase_x_offset_slots * sim.nucleotide_slot_spacing
-		var polymerase_x_at_last_slot = nucleotide_original_x[last_slot_index] - offset_px
-		var remaining_leading = 0
-		for i in range(num_slots):
-			if nucleotide_original_x[i] > polymerase_x_at_last_slot:
-				remaining_leading += 1
-		effective_index = last_slot_index + max(1, remaining_leading)
-	else:
-		effective_index = ctx.target_slot
-
-	var exposed_count = max(0, effective_index)
 	var attempted_consumed = 0
-	if exposed_count >= threshold:
-		attempted_consumed = exposed_count - threshold + 1
-	attempted_consumed = clamp(attempted_consumed, 0, num_slots)
+	if is_done_phase:
+		attempted_consumed = _lagging_natural_done_consumed(num_slots, nucleotide_original_x)
+	else:
+		var exposed_count = max(0, ctx.target_slot)
+		if exposed_count >= threshold:
+			attempted_consumed = exposed_count - threshold + 1
+		attempted_consumed = clamp(attempted_consumed, 0, num_slots)
 
 	var total_consumed = attempted_consumed
 	if is_done_phase and sim.lagging_gap_enabled:
 		total_consumed = (attempted_consumed / sim.okazaki_fragment_size) * sim.okazaki_fragment_size  # reserved — telomerase tier
 	elif is_done_phase:
-		total_consumed = num_slots  # base complexity: scrubbing to DONE shows the fully caught-up strand
-
+		# DONE alone doesn't finish lagging — it reaches the natural tiling
+		# point, same as live play. Further completion comes from explicit
+		# catch-up steps, supplied via ctx.lagging_catchup_step by
+		# scrub_to_lagging_catchup() for arrow-key stepping. Defaults to 0
+		# (natural state) for ordinary scrub_to() calls — slider-drag or the
+		# exact boundary arrow-key step.
+		var catchup_step = ctx.get("lagging_catchup_step", 0)
+		total_consumed = clamp(attempted_consumed + catchup_step, attempted_consumed, num_slots)
 	if is_done_phase and sim.lagging_gap_enabled:
 		var last_slot = num_slots - 1
 		var gap_start = (total_consumed / sim.okazaki_fragment_size) * sim.okazaki_fragment_size
@@ -646,6 +656,10 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 			lagging_telomere_gap = null
 	else:
 		lagging_telomere_gap = null
+
+	print("[LAGGING] DEBUG rebuild — is_done_phase=%s ctx.num_slots=%s attempted_consumed=%d catchup_step=%s total_consumed=%d" % [
+		is_done_phase, ctx.num_slots, attempted_consumed, ctx.get("lagging_catchup_step", "n/a"), total_consumed
+	])
 
 	# ---- Free old visuals, rebuild from scratch ----
 	var old_fragments = lagging_fragments.duplicate()
@@ -686,25 +700,36 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 
 	if remainder > 0:
 		var tile_start = full_tiles * sim.okazaki_fragment_size
+		var true_tile_end = min(tile_start + sim.okazaki_fragment_size, num_slots)
+		var frag_slots = range(true_tile_end - remainder, true_tile_end)
 		if total_consumed >= num_slots:
-			var frag = { slots = range(tile_start, tile_start + remainder),
+			var frag = { slots = frag_slots,
 				loop_queue = [], backbone = null, bond_marks = [], marker_5p = null, marker_3p = null, complete = true }
 			lagging_fragments.append(frag)
 		else:
-			lagging_current_fragment = { slots = range(tile_start + sim.okazaki_fragment_size - remainder, tile_start + sim.okazaki_fragment_size),
+			lagging_current_fragment = { slots = frag_slots,
 				loop_queue = [], backbone = null, bond_marks = [], marker_5p = null, marker_3p = null, complete = false }
 
-	for i in range(total_consumed):
+	var slots_to_spawn: Array = []
+	for frag in lagging_fragments:
+		slots_to_spawn.append_array(frag.slots)
+	if lagging_current_fragment != null:
+		slots_to_spawn.append_array(lagging_current_fragment.slots)
+
+	for i in slots_to_spawn:
 		lagging_synthesized_bases[i] = _spawn_lagging_base(i, sim.dna_sequence.get_base(i))
 		lagging_hydrogen_bonds[i] = _spawn_lagging_hydrogen_bonds(i)
 
 	# ---- Polymerase position + visibility ----
+	lagging_total_consumed = total_consumed
 	lagging_firing_started = total_consumed > 0
 	if total_consumed > 0:
-		lagging_polymerase_x = nucleotide_original_x[total_consumed - 1]
-	if lagging_polymerase != null:
-		lagging_polymerase.modulate.a = 1.0 if lagging_firing_started and not is_done_phase else (0.0 if is_done_phase else float(lagging_firing_started))
-	# simplified: hidden if nothing fired yet, faded by the existing DONE-fade tween otherwise, visible while mid-run
+		if lagging_current_fragment != null:
+			lagging_polymerase_x = sim.nucleotide_original_x[lagging_current_fragment.slots[0]]
+		elif lagging_fragments.size() > 0:
+			lagging_polymerase_x = sim.nucleotide_original_x[lagging_fragments[-1].slots[0]]
+	else:
+		lagging_polymerase_x = sim.nucleotide_original_x[0] - sim.polymerase_x_offset_slots * sim.nucleotide_slot_spacing
 
 	print("[LAGGING] scrub rebuild — consumed=%d fragments=%d current=%s gap=%s" % [
 		total_consumed, lagging_fragments.size(),
@@ -841,7 +866,6 @@ func _lagging_render(ctx: Dictionary) -> void:
 	var new_bottom_template_y: float = ctx.new_bottom_template_y
 	var nucleotide_original_x = ctx.nucleotide_original_x
 
-	# ---- Reposition every synthesized lagging base + hydrogen bond ----
 	for i in range(lagging_synthesized_bases.size()):
 		if lagging_synthesized_bases[i] != null:
 			var wobble_y = sim.get_wobble_y(i, wobble_t)
@@ -853,14 +877,81 @@ func _lagging_render(ctx: Dictionary) -> void:
 				lagging_hydrogen_bonds[i].position = Vector2(world_x, bottom_template_y)
 				sim._update_hydrogen_bond_height(lagging_hydrogen_bonds[i], lagging_y - bottom_template_y)
 
-	# ---- Per-fragment backbone + bond marks + markers ----
 	var all_fragments = lagging_fragments.duplicate()
 	if lagging_current_fragment != null:
 		all_fragments.append(lagging_current_fragment)
-	for frag in all_fragments:
-		_lagging_render_fragment(frag, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
 
-func _lagging_render_fragment(frag: Dictionary, wobble_t: float, dna_ribbons_gap: float, new_bottom_template_y: float, nucleotide_original_x: Array) -> void:
+	if sim.ligase_enabled:
+		for frag in all_fragments:
+			_lagging_render_fragment_backbone(frag, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
+		for frag in all_fragments:
+			_lagging_render_fragment_markers(frag, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
+		return
+
+	# ---- Continuous mode (no ligase modeled): backbone spans only COMPLETE
+	# fragments, merged into one line. A fragment still being built keeps its
+	# own separate backbone until it completes and joins the continuous line.
+	var continuous_points = PackedVector2Array()
+	for frag in lagging_fragments:
+		if frag.backbone != null and is_instance_valid(frag.backbone):
+			frag.backbone.queue_free()
+			frag.backbone = null
+		for slot_index in frag.slots:
+			if lagging_synthesized_bases[slot_index] != null:
+				var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
+				var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
+				continuous_points.append(Vector2(nucleotide_original_x[slot_index], lagging_y + tm.backbone_offset_distance))
+
+	lagging_backbone_line.points = continuous_points
+	lagging_backbone_line.width = tm.backbone_line_width
+	_update_bond_marks_lagging(continuous_points)
+
+	if lagging_current_fragment != null:
+		_lagging_render_fragment_backbone(lagging_current_fragment, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
+
+	# Only the very first fragment's 5' and the current last-complete
+	# fragment's 3' survive — an internal boundary stops being meaningful
+	# once the backbone actually connects through it.
+	for idx in range(lagging_fragments.size()):
+		var frag = lagging_fragments[idx]
+		var want_5p = (idx == 0)
+		var want_3p = (idx == lagging_fragments.size() - 1)
+		_lagging_set_fragment_markers(frag, want_5p, want_3p, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
+
+func _lagging_set_fragment_markers(frag: Dictionary, want_5p: bool, want_3p: bool, wobble_t: float, dna_ribbons_gap: float, new_bottom_template_y: float, nucleotide_original_x: Array) -> void:
+	if frag.slots.size() == 0:
+		return
+	var first_slot = frag.slots[0]
+	var last_slot = frag.slots[-1]
+	var first_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(first_slot, wobble_t) + tm.backbone_offset_distance
+	var last_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(last_slot, wobble_t) + tm.backbone_offset_distance
+
+	if want_5p and want_3p and frag.slots.size() == 1:
+		if frag.marker_5p == null:
+			frag.marker_5p = _spawn_marker("5'-3'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
+		frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+		if frag.marker_3p != null:
+			frag.marker_3p.queue_free()
+			frag.marker_3p = null
+		return
+
+	if want_5p:
+		if frag.marker_5p == null:
+			frag.marker_5p = _spawn_marker("5'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
+		frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+	elif frag.marker_5p != null:
+		frag.marker_5p.queue_free()
+		frag.marker_5p = null
+
+	if want_3p:
+		if frag.marker_3p == null:
+			frag.marker_3p = _spawn_marker("3'", Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset))
+		frag.marker_3p.position = Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset)
+	elif frag.marker_3p != null:
+		frag.marker_3p.queue_free()
+		frag.marker_3p = null
+
+func _lagging_render_fragment_backbone(frag: Dictionary, wobble_t: float, dna_ribbons_gap: float, new_bottom_template_y: float, nucleotide_original_x: Array) -> void:
 	if frag.slots.size() == 0:
 		return
 
@@ -887,27 +978,6 @@ func _lagging_render_fragment(frag: Dictionary, wobble_t: float, dna_ribbons_gap
 
 	_update_bond_marks_fragment(frag, points)
 
-	if frag.complete:
-		var first_slot = frag.slots[0]
-		var last_slot = frag.slots[-1]
-		var wobble_first = sim.get_wobble_y(first_slot, wobble_t)
-		var wobble_last = sim.get_wobble_y(last_slot, wobble_t)
-		var first_y = new_bottom_template_y + dna_ribbons_gap + wobble_first + tm.backbone_offset_distance
-		var last_y = new_bottom_template_y + dna_ribbons_gap + wobble_last + tm.backbone_offset_distance
-
-		if frag.slots.size() == 1:
-			if frag.marker_5p == null:
-				frag.marker_5p = _spawn_marker("5'-3'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
-			frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
-		else:
-			if frag.marker_5p == null:
-				frag.marker_5p = _spawn_marker("5'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
-			frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
-
-			if frag.marker_3p == null:
-				frag.marker_3p = _spawn_marker("3'", Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset))
-			frag.marker_3p.position = Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset)
-
 func _update_bond_marks_fragment(frag: Dictionary, points: PackedVector2Array) -> void:
 	var needed = max(0, points.size() - 1)
 	while frag.bond_marks.size() < needed:
@@ -921,6 +991,73 @@ func _update_bond_marks_fragment(frag: Dictionary, points: PackedVector2Array) -
 		var mid = (a + b) / 2.0
 		var segment = b - a
 		var mark = frag.bond_marks[i]
+		mark.position = mid
+		mark.visible = segment.length() > 0.0
+		if mark.visible:
+			mark.rotation = segment.angle()
+
+func _lagging_natural_done_consumed(num_slots: int, nucleotide_original_x: Array) -> int:
+	# How many lagging slots would be consumed by pure position-based tiling
+	# the instant the helicase reaches its own final position — before any
+	# catch-up steps are applied. Shared by _lagging_scrub_rebuild() and
+	# get_lagging_catchup_steps_needed() so both use the identical formula.
+	var last_slot_index = num_slots - 1
+	var offset_px = sim.polymerase_x_offset_slots * sim.nucleotide_slot_spacing
+	var polymerase_x_at_last_slot = nucleotide_original_x[last_slot_index] - offset_px
+	var remaining_leading = 0
+	for i in range(num_slots):
+		if nucleotide_original_x[i] > polymerase_x_at_last_slot:
+			remaining_leading += 1
+	var effective_index = last_slot_index + max(1, remaining_leading)
+
+	var threshold = sim.okazaki_fragment_size + sim.pll_slot_count
+	var exposed_count = max(0, effective_index)
+	var attempted = 0
+	if exposed_count >= threshold:
+		attempted = exposed_count - threshold + 1
+	return clamp(attempted, 0, num_slots)
+
+## Public: how many extra arrow-key steps past the helicase's own last slot
+## are needed for the lagging strand to fully catch up, at base complexity
+## (lagging_gap_enabled = false). Used by simulation.gd to extend the
+## scrubbable range for scrub_to_nucleotide_index().
+func get_lagging_catchup_steps_needed(num_slots: int, nucleotide_original_x: Array) -> int:
+	return num_slots - _lagging_natural_done_consumed(num_slots, nucleotide_original_x)
+
+func _lagging_render_fragment_markers(frag: Dictionary, wobble_t: float, dna_ribbons_gap: float, new_bottom_template_y: float, nucleotide_original_x: Array) -> void:
+	if frag.slots.size() == 0 or not frag.complete:
+		return
+
+	var first_slot = frag.slots[0]
+	var last_slot = frag.slots[-1]
+	var first_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(first_slot, wobble_t) + tm.backbone_offset_distance
+	var last_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(last_slot, wobble_t) + tm.backbone_offset_distance
+
+	if frag.slots.size() == 1:
+		if frag.marker_5p == null:
+			frag.marker_5p = _spawn_marker("5'-3'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
+		frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+	else:
+		if frag.marker_5p == null:
+			frag.marker_5p = _spawn_marker("5'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
+		frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+		if frag.marker_3p == null:
+			frag.marker_3p = _spawn_marker("3'", Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset))
+		frag.marker_3p.position = Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset)
+
+func _update_bond_marks_lagging(points: PackedVector2Array) -> void:
+	var needed = max(0, points.size() - 1)
+	while lagging_bond_marks.size() < needed:
+		lagging_bond_marks.append(sim._create_bond_mark_sprite_reversed())
+	while lagging_bond_marks.size() > needed:
+		var extra = lagging_bond_marks.pop_back()
+		extra.queue_free()
+	for i in range(needed):
+		var a = points[i]
+		var b = points[i + 1]
+		var mid = (a + b) / 2.0
+		var segment = b - a
+		var mark = lagging_bond_marks[i]
 		mark.position = mid
 		mark.visible = segment.length() > 0.0
 		if mark.visible:

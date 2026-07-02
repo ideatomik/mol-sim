@@ -24,6 +24,11 @@ extends CanvasLayer
 
 var _is_dragging: bool = false
 
+var _stop_icon_default: String = ""
+
+func _is_simulation_done() -> bool:
+	return simulation.helicase_mgr != null and simulation.helicase_mgr.get_phase() == simulation.helicase_mgr.Phase.DONE
+
 # ==========================================
 # LIFECYCLE
 # ==========================================
@@ -49,6 +54,8 @@ func _ready():
 		fast_forward.pressed.connect(_on_fast_forward)
 		eject_button.pressed.connect(_on_eject_pressed)
 
+		_stop_icon_default = stop_button.text
+
 		# Connect the sequence loader popup (sibling under UI)
 		var popup = get_node("../SequenceLoaderPopup")
 		if popup:
@@ -68,7 +75,7 @@ func _ready():
 func _on_scrubber_dragged(value: float):
 	_is_dragging = true
 	var index = int(round(value))
-	index = clamp(index, 0, simulation.num_nucleotide_slots)
+	index = clamp(index, 0, simulation.get_max_scrub_index())
 
 	# Pause the simulation when the user drags
 	if not simulation.manual_override:
@@ -104,7 +111,7 @@ func _on_stop_pressed():
 
 func _on_forward():
 	var current = simulation.get_synthesized_count()
-	var target = min(simulation.num_nucleotide_slots, current + 1)
+	var target = min(simulation.get_max_scrub_index(), current + 1)
 	simulation.scrub_to_nucleotide_index(target)
 	scrubber.set_value_no_signal(target)
 	_update_ui()
@@ -118,17 +125,18 @@ func _on_backward():
 
 func _on_fast_forward():
 	var current = simulation.get_synthesized_count()
-	var target = min(simulation.num_nucleotide_slots, current + 5)
+	var target = min(simulation.get_max_scrub_index(), current + simulation.okazaki_fragment_size)
 	simulation.scrub_to_nucleotide_index(target)
 	scrubber.set_value_no_signal(target)
 	_update_ui()
 
 func _on_fast_backward():
 	var current = simulation.get_synthesized_count()
-	var target = max(0, current - 5)
+	var target = max(0, current - simulation.okazaki_fragment_size)
 	simulation.scrub_to_nucleotide_index(target)
 	scrubber.set_value_no_signal(target)
 	_update_ui()
+
 
 func _on_eject_pressed():
 	"""Open the sequence loader popup."""
@@ -155,7 +163,7 @@ func _on_menu_pressed():
 
 func _on_simulation_initialized(total_bases: int):
 	"""Called when a new sequence is loaded."""
-	scrubber.max_value = float(total_bases)
+	scrubber.max_value = float(simulation.get_max_scrub_index())
 	scrubber.value = 0.0
 	play_pause_button.text = "▶"
 	_update_ui()
@@ -164,11 +172,14 @@ func _on_simulation_initialized(total_bases: int):
 func _on_simulation_progress_changed(new_progress: float):
 	"""Called every frame by the simulation."""
 	if not _is_dragging:
-		var total = float(simulation.num_nucleotide_slots)
+		var total = float(simulation.get_max_scrub_index())
 		var current_index = int(round(new_progress * total))
-		current_index = clamp(current_index, 0, simulation.num_nucleotide_slots)
+		current_index = clamp(current_index, 0, simulation.get_max_scrub_index())
 		scrubber.set_value_no_signal(current_index)
 		_update_ui()
+
+	if _is_simulation_done():
+		play_pause_button.text = "▶"
 
 func _on_sequence_loaded(new_sequence: String):
 	"""Called when the user loads a new sequence from the popup."""
@@ -213,14 +224,12 @@ func _update_ui():
 	_update_button_states()
 
 func _update_button_states():
-	#var count = simulation.get_synthesized_count()
-	var total = simulation.num_nucleotide_slots
+	var count = simulation.get_synthesized_count()
+	var total = simulation.get_max_scrub_index()
 
-	#backward.disabled = (count <= 0)
-	#forward.disabled = (count >= total)
-	#fast_backward.disabled = (count <= 0)
-	#fast_forward.disabled = (count >= total)
+	backward.disabled = (count <= 0)
+	forward.disabled = (count >= total)
+	fast_backward.disabled = (count <= 0)
+	fast_forward.disabled = (count >= total)
 
-	# Stop button is always enabled
-	# Eject button is always enabled
-	# Menu button is always enabled
+	stop_button.text = "⟳" if _is_simulation_done() else _stop_icon_default

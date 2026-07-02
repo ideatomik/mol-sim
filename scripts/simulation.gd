@@ -62,6 +62,7 @@ var track_length: float = 0.0
 @export var settling_duration: float = 0.5
 @export var settling_threshold: float = 2.0
 @export var lagging_gap_enabled: bool = false  # false: base complexity — lagging polymerase catches up, closing the strand fully. true: reserved for the telomerase tier, where the trailing gap is left standing.
+@export var ligase_enabled: bool = false  # false: base complexity — continuous lagging backbone (no ligase modeled). true: reserved for the ligase tier — per-fragment backbone with visible nicks until ligase joins them.
 @export var lagging_catchup_step_duration: float = 0.3  # pace of post-DONE catch-up firing — independent of helicase timing, since there's no fork driving it anymore
 
 
@@ -122,6 +123,7 @@ var dna_sequence := DnaSequenceResource.new()
 
 # ---------- SCRUBBER / PLAYBACK CONTROL ----------
 var manual_override: bool = false  # Mirrored on replication_mgr; kept here for toggle_play logic
+var lagging_last_catchup_step: int = 0
 
 # ==========================================
 # LIFECYCLE
@@ -547,6 +549,7 @@ func _run_intro():
 
 func scrub_to(progress: float):
 	progress = clamp(progress, 0.0, 1.0)
+	lagging_last_catchup_step = 0
 
 	# Map progress to a slot index
 	var target_slot = int(progress * (num_nucleotide_slots - 1))
@@ -622,9 +625,59 @@ func scrub_to(progress: float):
 	queue_redraw()
 
 func scrub_to_nucleotide_index(index: int):
-	index = clamp(index, 0, num_nucleotide_slots - 1)
-	var progress = float(index) / float(num_nucleotide_slots - 1)
-	scrub_to(progress)
+	var max_index = get_max_scrub_index()
+	index = clamp(index, 0, max_index)
+	var catchup_needed = 0
+	if replication_mgr != null and not lagging_gap_enabled:
+		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
+	
+	if index <= num_nucleotide_slots - 1:
+		var progress = float(index) / float(num_nucleotide_slots - 1)
+		scrub_to(progress)
+	else:
+		var catchup_step = index - (num_nucleotide_slots - 1)
+		scrub_to_lagging_catchup(catchup_step)
+
+func scrub_to_lagging_catchup(catchup_step: int) -> void:
+	lagging_last_catchup_step = catchup_step
+	var target_slot = num_nucleotide_slots - 1
+
+	if helicase_mgr != null:
+		helicase_mgr.scrub_to_slot(target_slot)
+		helicase_mgr.set_phase(helicase_mgr.Phase.DONE)
+
+	var last_x = nucleotide_original_x[num_nucleotide_slots - 1]
+	helicase_x = last_x + polymerase_x_offset_slots * nucleotide_slot_spacing
+	polymerase_x = last_x
+	settle_blend = 1.0
+
+	if replication_mgr != null:
+		replication_mgr.scrub_rebuild({
+			target_slot = target_slot,
+			target_polymerase_x = polymerase_x,
+			helicase_x = helicase_x,
+			is_done_phase = true,
+			lagging_catchup_step = catchup_step,
+			num_slots = num_nucleotide_slots,
+			nucleotide_original_x = nucleotide_original_x,
+			template_strand_y = template_strand_y,
+			new_top_template_y = new_top_template_y,
+			new_bottom_template_y = new_bottom_template_y,
+			helicase_mgr = helicase_mgr,
+		})
+
+	for i in range(num_nucleotide_slots):
+		if template_hydrogen_bonds[i] != null:
+			template_hydrogen_bonds[i].visible = (nucleotide_original_x[i] >= helicase_x)
+
+	_rebuild_rail()
+	_rebuild_top_rail()
+	for i in range(template_strand_bottom.size()):
+		template_strand_bottom[i].progress = track_length - nucleotide_original_x[i]
+	for i in range(top_strand_slots.size()):
+		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
+
+	queue_redraw()
 
 
 # ==========================================
@@ -636,15 +689,23 @@ func get_total_progress() -> float:
 	if helicase_mgr == null: return 0.0
 	return clamp(float(helicase_mgr.get_slot_index()) / float(num_nucleotide_slots - 1), 0.0, 1.0)
 
-#func get_synthesized_count() -> int:
-#	if replication_mgr != null:
-#		return replication_mgr.get_synthesized_count()
-#	return 0
+func get_synthesized_count() -> int:
+	if helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE:
+		return num_nucleotide_slots - 1 + lagging_last_catchup_step
+	elif helicase_mgr != null:
+		return helicase_mgr.get_slot_index()
+	return 0
 
 func get_sequence_rich_text() -> String:
 	if replication_mgr != null:
 		return replication_mgr.get_sequence_rich_text(helicase_x, nucleotide_original_x)
 	return "5' [empty] 3'"
+
+func get_max_scrub_index() -> int:
+	var catchup_needed = 0
+	if replication_mgr != null and not lagging_gap_enabled:
+		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
+	return num_nucleotide_slots - 1 + catchup_needed
 
 # ==========================================
 # HELICASE SIGNAL HANDLERS

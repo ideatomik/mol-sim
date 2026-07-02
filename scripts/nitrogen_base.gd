@@ -28,25 +28,21 @@ extends RigidBody2D
 @export var stay_frozen: bool = true
 
 var label: Label
-var body_poly: Polygon2D
+var body_fill_color: Color = Color.WHITE
 
 func _ready():
 	freeze = stay_frozen
 
-	body_poly = Polygon2D.new()
-	var points = PackedVector2Array()
-	const SEGMENTS = 24
-	for i in range(SEGMENTS):
-		var angle = (float(i) / SEGMENTS) * TAU
-		points.append(Vector2(cos(angle), sin(angle)) * body_radius)
-	body_poly.polygon = points
-	add_child(body_poly)
+	queue_redraw()
 
 	label = Label.new()
 	label.add_theme_font_size_override("font_size", label_font_size)
 	add_child(label)
 
 	_center_label.call_deferred()
+
+func _draw():
+	draw_circle(Vector2.ZERO, body_radius, body_fill_color, true, -1.0, true)
 
 func _center_label():
 	if label:
@@ -62,8 +58,8 @@ func set_base_type(new_type: String) -> void:
 ## Apply fill and label colors. Called by simulation.gd after instantiation
 ## using values from %ThemeManager, keeping this node ThemeManager-free.
 func set_colors(fill_color: Color, label_color: Color) -> void:
-	if body_poly:
-		body_poly.color = fill_color
+	body_fill_color = fill_color
+	queue_redraw()
 	if label:
 		label.add_theme_color_override("font_color", label_color)
 
@@ -72,13 +68,7 @@ func set_colors(fill_color: Color, label_color: Color) -> void:
 ## node ThemeManager-free.
 func set_radius(radius: float) -> void:
 	body_radius = radius
-	if body_poly:
-		var points = PackedVector2Array()
-		const SEGMENTS = 24
-		for i in range(SEGMENTS):
-			var angle = (float(i) / SEGMENTS) * TAU
-			points.append(Vector2(cos(angle), sin(angle)) * body_radius)
-		body_poly.polygon = points
+	queue_redraw()
 
 ## Apply font size and optional custom font from ThemeManager.
 ## Call after set_colors() during spawning.
@@ -92,8 +82,8 @@ func set_font(font_size: int, font: Font = null) -> void:
 ## Override the fill color only (used for synthesis debug highlighting).
 ## Does not affect base_type or label color.
 func set_body_color(new_color: Color) -> void:
-	if body_poly:
-		body_poly.color = new_color
+	body_fill_color = new_color
+	queue_redraw()
 
 ## Kept for compatibility -- set_base_type() is preferred.
 func set_label_text(new_text: String) -> void:
