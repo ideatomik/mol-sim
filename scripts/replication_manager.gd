@@ -61,6 +61,8 @@ var lagging_firing_started: bool = false # true once the one-time startup delay 
 var lagging_total_consumed: int = 0      # total slots actually fired so far
 var lagging_batch_cursor: int = 0        # next slot index to fire within the currently-open fragment (counts down)
 var lagging_polymerase_x: float = 0.0    # independent position of the lagging polymerase visual — no longer helicase-relative
+var lagging_catchup_timer: Timer = null
+
 
 # ---------- CACHED CONTEXT (updated each frame in update()) ----------
 var ctx_polymerase_x: float = 0.0
@@ -90,6 +92,8 @@ const LEADING_POLYMERASE_RADIUS: float = 24.0  # renamed from TOP_POLYMERASE_RAD
 var marker_leading_5p: Node2D = null
 var marker_leading_3p: Node2D = null
 
+
+var lagging_polymerase_tween: Tween = null
 # ==========================================
 # LIFECYCLE — public dispatchers
 # ==========================================
@@ -192,6 +196,8 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	if lagging_polymerase:
 		lagging_polymerase_faded = ctx.is_done_phase
 		lagging_polymerase.modulate.a = 0.0 if ctx.is_done_phase else 1.0
+		if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
+			lagging_polymerase_tween.kill()
 		lagging_polymerase.position = Vector2(lagging_polymerase_x, ctx.new_bottom_template_y)
 
 	_leading_scrub_rebuild(ctx)
@@ -517,6 +523,8 @@ func _lagging_reset(num_slots: int) -> void:
 	lagging_polymerase_x = 0.0
 	if lagging_catchup_timer != null:
 		lagging_catchup_timer.stop()
+	if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
+		lagging_polymerase_tween.kill()
 
 func _lagging_setup_backbones() -> void:
 	if lagging_backbone_line != null and is_instance_valid(lagging_backbone_line):
@@ -574,18 +582,22 @@ func _on_helicase_slot_reached(index: int) -> void:
 	if lagging_current_fragment == null:
 		_lagging_open_next_fragment()
 
-	_lagging_fire_step()
+	_lagging_fire_step(sim.helicase_mgr.step_duration)
 
-func _lagging_fire_step() -> void:
+func _lagging_fire_step(duration: float) -> void:
 	var slot_index = lagging_batch_cursor
 	lagging_current_fragment.slots.push_front(slot_index)  # push_front: firing goes right-to-left, so this keeps the array ascending
 	if lagging_synthesized_bases[slot_index] == null:
 		lagging_synthesized_bases[slot_index] = _spawn_lagging_base(slot_index, sim.dna_sequence.get_base(slot_index))
 		lagging_hydrogen_bonds[slot_index] = _spawn_lagging_hydrogen_bonds(slot_index)
 
-	lagging_polymerase_x = sim.nucleotide_original_x[slot_index]  # snap — polymerase is now independently positioned, not helicase-relative
+	lagging_polymerase_x = sim.nucleotide_original_x[slot_index]
 	if lagging_polymerase:
-		lagging_polymerase.position = Vector2(lagging_polymerase_x, sim.new_bottom_template_y)
+		if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
+			lagging_polymerase_tween.kill()
+		lagging_polymerase_tween = sim.create_tween()
+		lagging_polymerase_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		lagging_polymerase_tween.tween_property(lagging_polymerase, "position", Vector2(lagging_polymerase_x, sim.new_bottom_template_y), duration)
 
 	print("[LAGGING] slot %d fired — fragment size %d/%d" % [
 		slot_index, lagging_current_fragment.slots.size(), sim.okazaki_fragment_size
@@ -726,6 +738,7 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 	if total_consumed > 0:
 		if lagging_current_fragment != null:
 			lagging_polymerase_x = sim.nucleotide_original_x[lagging_current_fragment.slots[0]]
+			lagging_batch_cursor = lagging_current_fragment.slots[0] - 1
 		elif lagging_fragments.size() > 0:
 			lagging_polymerase_x = sim.nucleotide_original_x[lagging_fragments[-1].slots[0]]
 	else:
@@ -743,8 +756,6 @@ func _on_helicase_phase_changed(new_phase: int) -> void:
 			_lagging_discard_incomplete_at_end()  # reserved — telomerase tier
 		else:
 			_lagging_start_catchup()
-
-var lagging_catchup_timer: Timer = null
 
 func _lagging_start_catchup() -> void:
 	if lagging_polymerase_faded:
@@ -765,7 +776,7 @@ func _lagging_start_catchup() -> void:
 func _lagging_catchup_tick() -> void:
 	if lagging_current_fragment == null:
 		_lagging_open_next_fragment()
-	_lagging_fire_step()
+	_lagging_fire_step(sim.lagging_catchup_step_duration)
 	if lagging_total_consumed >= sim.num_nucleotide_slots:
 		lagging_catchup_timer.stop()
 		lagging_polymerase_faded = true
