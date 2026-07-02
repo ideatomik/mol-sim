@@ -37,6 +37,7 @@ const NewNitrogenBaseScene := preload("res://scenes/nitrogen_base.tscn")
 @onready var template_hydrogen_bonds_container: Node2D = $TemplateHydrogenBondsContainer
 @onready var top_rail_path: Path2D = $TopRailPath
 @onready var top_template_new_track: Line2D = $TopTemplateStrandNewTrack
+@onready var nucleotide_field: Node = $NucleotideField  # decorative free-nucleotide layer; scene node, not code-instantiated — see nucleotide_field.gd
 
 # ---------- SUB-MANAGERS ----------
 var helicase_mgr: Node = null   # helicase.gd instance, added as child in initialize_simulation
@@ -157,6 +158,11 @@ func initialize_simulation(sequence: String):
 	num_nucleotide_slots = dna_sequence.get_length()
 	var polymerase_x_offset = polymerase_x_offset_slots * nucleotide_slot_spacing
 	track_length = (num_nucleotide_slots - 1) * nucleotide_slot_spacing + 2.0 * polymerase_x_offset
+	
+	# Environmental free-nucleotide field — count scales with sequence length;
+	# runs on every load, including the first.
+	if nucleotide_field != null:
+		nucleotide_field.on_sequence_changed(num_nucleotide_slots)
 
 	# 4. RESET all state variables
 	helicase_x = polymerase_x_offset

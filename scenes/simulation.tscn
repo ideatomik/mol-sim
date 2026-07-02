@@ -7,6 +7,7 @@
 [ext_resource type="FontFile" uid="uid://cjiwxjmh7dfcy" path="res://fonts/GoogleSans/GoogleSans_17pt-Regular.ttf" id="5_160l5"]
 [ext_resource type="PackedScene" uid="uid://7864n4b58mn6" path="res://scenes/PlayerUI.tscn" id="5_gimvv"]
 [ext_resource type="PackedScene" uid="uid://bkcyhxg58gv21" path="res://scenes/SequenceLoaderPopup.tscn" id="5_mwrr7"]
+[ext_resource type="Script" uid="uid://bm4g4syy0jl62" path="res://scripts/nucleotide_field.gd" id="8_160l5"]
 
 [sub_resource type="Curve2D" id="Curve2D_mwrr7"]
 
@@ -98,3 +99,8 @@ marker_font = ExtResource("5_160l5")
 
 [node name="PlayerUI" parent="UI" unique_id=1005777864 node_paths=PackedStringArray("simulation") instance=ExtResource("5_gimvv")]
 simulation = NodePath("../..")
+
+[node name="NucleotideField" type="Node2D" parent="." unique_id=2115278003]
+script = ExtResource("8_160l5")
+max_speed = 200.0
+jitter_accel = 200.0
