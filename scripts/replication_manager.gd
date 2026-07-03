@@ -96,6 +96,8 @@ var marker_leading_3p: Node2D = null
 var lagging_polymerase_tween: Tween = null
 var leading_clamp: PolymeraseClamp = null
 var lagging_clamp: PolymeraseClamp = null
+var leading_halo: PolymeraseHalo = null
+var lagging_halo: PolymeraseHalo = null
 var lagging_pump_tween: Tween = null
 # ==========================================
 # LIFECYCLE — public dispatchers
@@ -116,7 +118,9 @@ func initialize(p_sim: Node) -> void:
 	lagging_clamp = PolymeraseClamp.new()
 	lagging_polymerase.add_child(lagging_clamp)
 	lagging_clamp.setup(sim, false, Color(0.80, 0.32, 0.32), Color(0.95, 0.52, 0.52))
-	
+	lagging_halo = PolymeraseHalo.new()
+	lagging_polymerase.add_child(lagging_halo)
+	lagging_halo.setup(sim, false)
 
 func reset(num_slots: int) -> void:
 	# Called by simulation.gd after teardown, before spawning new slots.
@@ -302,6 +306,9 @@ func _leading_setup_backbones() -> void:
 	leading_clamp = PolymeraseClamp.new()
 	leading_polymerase.add_child(leading_clamp)
 	leading_clamp.setup(sim, true, Color(0.22, 0.42, 1.0), Color(0.45, 0.60, 1.0))
+	leading_halo = PolymeraseHalo.new()
+	leading_polymerase.add_child(leading_halo)
+	leading_halo.setup(sim, true)
 	leading_polymerase.position = Vector2(sim.polymerase_x, sim.new_top_template_y)
 	leading_polymerase.modulate.a = 0.0
 	sim.add_child(leading_polymerase)

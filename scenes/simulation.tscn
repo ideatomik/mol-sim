@@ -102,5 +102,6 @@ simulation = NodePath("../..")
 
 [node name="NucleotideField" type="Node2D" parent="." unique_id=2115278003]
 script = ExtResource("8_160l5")
+field_alpha = 0.1
 max_speed = 200.0
 jitter_accel = 200.0
