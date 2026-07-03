@@ -29,6 +29,7 @@ const Z_JAW_FRONT := 4    # z+10  jaw cap         — in front of the strand
 
 var _mirror: bool = false
 var _jaw: Node2D = null
+var jaw_cap_piece: Node2D = null   # the JAW_ZP10 _PolyPiece — capture's leg-1 live-follow anchor
 
 func setup(sim: Node, mirror: bool, body_color: Color, cap_color: Color) -> void:
 	_mirror = mirror
@@ -44,7 +45,7 @@ func setup(sim: Node, mirror: bool, body_color: Color, cap_color: Color) -> void
 	position.y = -center_offset if mirror else center_offset
 
 	# Scale normalized art -> pixels; y-flip mirrors the whole clamp for leading.
-	scale = Vector2(span_px, span_px if mirror else -span_px)
+	scale = Vector2(span_px, -span_px if mirror else span_px)
 
 	_build(body_color, cap_color)
 
@@ -57,19 +58,40 @@ func _build(body_color: Color, cap_color: Color) -> void:
 	_jaw = Node2D.new()
 	add_child(_jaw)
 	_add_piece(PolymeraseShape.JAW_Z10, Z_JAW_BACK, body_color, _jaw)
-	_add_piece(PolymeraseShape.JAW_ZP10, Z_JAW_FRONT, cap_color, _jaw)
+	jaw_cap_piece = _add_piece(PolymeraseShape.JAW_ZP10, Z_JAW_FRONT, cap_color, _jaw)
 
-func _add_piece(poly: PackedVector2Array, z: int, col: Color, parent: Node2D) -> void:
+func _add_piece(poly: PackedVector2Array, z: int, col: Color, parent: Node2D) -> _PolyPiece:
 	var piece := _PolyPiece.new()
 	piece.poly = poly
 	piece.color = col
 	piece.z_index = z
 	piece.z_as_relative = false   # absolute z so it straddles the DNA layer
 	parent.add_child(piece)
+	return piece
+
+## Local-space anchor inside JAW_ZP10 — the "inner tip," the end closest to the
+## duplex center (bbox y-min; JAW_ZP10 spans y:[+0.044,+0.686] in normalized
+## duplex-span units, x centered at 0). Derived from polymerase_shape.gd's
+## JAW_ZP10 data (session notes carry the extraction script) — this piece was
+## never touched by the later BACK_Z11/JAW_Z10 swap, so these numbers are
+## still accurate to what's currently in that const.
+const _JAW_ZP10_INNER := Vector2(0.0, 0.0443)
+
+## Live world-space position of the jaw cap's inner tip, right now — walks the
+## piece's real transform chain (its own local point -> _jaw's pump offset ->
+## this clamp's scale/mirror/position -> the polymerase's world position) via
+## to_global(), so it automatically tracks the pump animation and works
+## identically for both strands with no strand-specific math needed here.
+func get_jaw_cap_inner_anchor() -> Vector2:
+	if jaw_cap_piece == null:
+		return global_position
+	return jaw_cap_piece.to_global(_JAW_ZP10_INNER)
 
 ## Lift the jaw. t = 0 -> DOWN (clamped), t = 1 -> UP (open). Expressed in
 ## normalized (duplex-span) units; the node scale converts to px and the
 ## leading mirror flips direction automatically.
+## Sign confirmed at runtime (session, v71 pump wiring) — do not re-flip
+## without checking the lift direction on screen first.
 func set_pump(t: float) -> void:
 	if _jaw != null:
 		_jaw.position.y = PolymeraseShape.PUMP_OFFSET * t

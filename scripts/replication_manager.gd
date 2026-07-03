@@ -11,7 +11,7 @@ extends Node
 #
 # v70.5.5: Self-containment refactor (no behavior change). All leading-strand
 # logic is grouped into clearly-named _leading_* functions
-# (_leading_reset, _leading_setup_backbones, _leading_teardown, _leading_update,
+# (_leading_reset, _leading_setup_backbones, _leading_teardown,
 # _leading_scrub_rebuild, _leading_render), called from the public lifecycle/
 # update/render/scrub functions, which are thin dispatchers. This mirrors
 # the structure the lagging strand will use, so future Okazaki-fragment work
@@ -19,6 +19,14 @@ extends Node
 # leading-strand code. Public API (initialize, reset, setup_backbones,
 # teardown, update, render, scrub_rebuild, resume_enzymes, run_intro,
 # get_sequence_rich_text, manual_override) is unchanged.
+#
+# v71: added a third self-contained section, _capture_* — the same pattern
+# extended to the nucleotide-capture animation, which neither the leading nor
+# lagging section owns on its own. _leading_update() (the old per-frame
+# position-poll spawn trigger) was removed in this pass; leading spawning is
+# now event-driven via _capture_on_leading_slot_reached(), same trigger model
+# lagging's _lagging_fire_step() already used. See the CAPTURE section banner
+# comment further down for the full design rationale.
 #
 # Also removed in v70.5.5: a dead `lagging_synth_count` computation in the
 # old scrub_rebuild() that was computed but never used (leftover from the
@@ -99,6 +107,24 @@ var lagging_clamp: PolymeraseClamp = null
 var leading_halo: PolymeraseHalo = null
 var lagging_halo: PolymeraseHalo = null
 var lagging_pump_tween: Tween = null
+
+# ---------- CAPTURE STATE ----------
+# The traveling nucleotide during a step: leg 1 is a live per-frame follow of
+# the jaw cap's inner anchor (not a tween — the clamp is still mid-glide, so
+# there is no fixed destination to tween to), leg 2 is a genuine tween to the
+# base's final resting spot once the clamp itself has arrived. See the
+# _capture_* section below. At most one capture is in flight per strand at a
+# time (same one-step-at-a-time discipline the position/pump tweens follow).
+var leading_capture_node: Node2D = null
+var leading_capture_tween: Tween = null
+var leading_capture_target_slot: int = -1
+var leading_capture_leg2_started: bool = false
+
+var lagging_capture_node: Node2D = null
+var lagging_capture_tween: Tween = null
+var lagging_capture_target_slot: int = -1
+var lagging_capture_leg2_started: bool = false
+var lagging_capture_leg2_duration: float = 0.0  # stored at _capture_begin_lagging() time; _set_lagging_pump_phase's callback only carries phase, not duration
 # ==========================================
 # LIFECYCLE — public dispatchers
 # ==========================================
@@ -127,6 +153,7 @@ func reset(num_slots: int) -> void:
 	manual_override = true
 	_leading_reset(num_slots)
 	_lagging_reset(num_slots)
+	_capture_reset()
 
 func setup_backbones() -> void:
 	# Called after reset() during initialize_simulation().
@@ -137,6 +164,7 @@ func teardown() -> void:
 	# Free all owned nodes. Called by simulation.gd teardown_simulation().
 	_leading_teardown()
 	_lagging_teardown()
+	_capture_teardown()
 
 # ==========================================
 # UPDATE — called from simulation.gd _process
@@ -176,6 +204,13 @@ func update(delta: float, ctx: Dictionary) -> void:
 		leading_clamp.set_pump(0.0)
 		#print("[DEBUG] leading_polymerase.position=", leading_polymerase.position, " template_strand_y=", ctx.template_strand_y, " dna_ribbons_gap=", ctx.dna_ribbons_gap, " global_pos=", leading_polymerase.global_position)
 
+	# Deliberately OUTSIDE the phase check above: if phase flips to DONE while
+	# a capture is still mid-flight (last slot's animation still running when
+	# FINISHING wraps up), it must still get to finish — otherwise the
+	# traveling base freezes forever and never graduates into the strand.
+	# _capture_update_leading() already no-ops when nothing is in flight.
+	_capture_update_leading(helicase_mgr.step_t, helicase_mgr.step_duration)
+
 	# ---- Helicase finishing trigger (driven by leading strand's remaining slots) ----
 	if phase == helicase_mgr.Phase.FINISHING_LAST_PULSE and helicase_mgr.extra_steps_total == 0:
 		var remaining_leading = 0
@@ -184,7 +219,12 @@ func update(delta: float, ctx: Dictionary) -> void:
 				remaining_leading += 1
 		helicase_mgr.start_finishing(remaining_leading)
 
-	_leading_update(ctx.polymerase_x, ctx.num_slots, sim.nucleotide_original_x)
+	# Leading strand spawning now happens via _capture_on_leading_slot_reached()
+	# (event-driven, off helicase.slot_reached) — see the _capture_* section.
+	# The old per-frame position-polling spawn here was removed: it would have
+	# kept re-checking leading_synthesized_bases[i] == null and instantly
+	# double-spawning while a capture is deliberately still in flight for that
+	# slot (capture keeps the array entry null until its animation completes).
 
 # ==========================================
 # SCRUB REBUILD — called from simulation.gd scrub_to()
@@ -193,6 +233,12 @@ func update(delta: float, ctx: Dictionary) -> void:
 func scrub_rebuild(ctx: Dictionary) -> void:
 	# ctx keys: target_polymerase_x, helicase_x, is_done_phase, num_slots,
 	#           nucleotide_original_x, template_strand_y, helicase_mgr
+	# Capture never runs during scrub — scrub always shows finished slots
+	# only, same rule the pump already follows. Any in-flight traveling
+	# nucleotide (and its node — not yet in the synthesized-bases arrays, so
+	# the strand rebuilds below won't free it) must be killed here or it leaks.
+	_capture_reset()
+
 	var target_polymerase_x: float = ctx.target_polymerase_x
 	var nucleotide_original_x = ctx.nucleotide_original_x
 	_leading_scrub_rebuild(ctx)
@@ -335,16 +381,15 @@ func _leading_teardown() -> void:
 	marker_leading_3p = null
 
 func _leading_update(polymerase_x: float, num_slots: int, nucleotide_original_x: Array) -> void:
-	var leading_synth_count = 0
-	for i in range(num_slots):
-		if nucleotide_original_x[i] <= polymerase_x:
-			leading_synth_count += 1
-		else:
-			break
-	for i in range(leading_synth_count):
-		if leading_synthesized_bases[i] == null:
-			leading_synthesized_bases[i] = _spawn_leading_base(i, sim.dna_sequence.get_complement(i))
-			leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
+	# Removed (v71 capture wiring): this used to be the leading strand's ONLY
+	# spawn trigger, a per-frame position-threshold poll. Spawning is now
+	# event-driven via _capture_on_leading_slot_reached() (see _capture_*
+	# section) so capture can begin at STEP START, not on arrival. Left as a
+	# named no-op (rather than deleting the function outright) since removing
+	# it entirely would leave the old call site's removal comment above
+	# pointing at nothing — kept for traceability; safe to delete outright
+	# once this is confirmed stable.
+	pass
 
 func _leading_scrub_rebuild(ctx: Dictionary) -> void:
 	var target_polymerase_x: float = ctx.target_polymerase_x
@@ -448,11 +493,11 @@ func _leading_render(ctx: Dictionary) -> void:
 				leading_y - tm.backbone_offset_distance
 			)
 
-func _spawn_leading_base(index: int, base_type: String) -> Node2D:
+func _spawn_leading_base(index: int, base_type: String, start_pos = null) -> Node2D:
 	var base = sim.NewNitrogenBaseScene.instantiate()
 	var world_x = sim.nucleotide_original_x[index]
 	var leading_y = sim.new_top_template_y - sim.dna_ribbons_gap
-	base.position = Vector2(world_x, leading_y)
+	base.position = start_pos if start_pos != null else Vector2(world_x, leading_y)
 	base.z_index = 2
 	sim.add_child(base)
 	base.set_base_type(base_type)
@@ -514,6 +559,8 @@ func connect_helicase(helicase_mgr: Node) -> void:
 	connected_helicase_mgr = helicase_mgr
 	if not helicase_mgr.slot_reached.is_connected(_on_helicase_slot_reached):
 		helicase_mgr.slot_reached.connect(_on_helicase_slot_reached)
+	if not helicase_mgr.slot_reached.is_connected(_capture_on_leading_slot_reached):
+		helicase_mgr.slot_reached.connect(_capture_on_leading_slot_reached)
 	if not helicase_mgr.phase_changed.is_connected(_on_helicase_phase_changed):
 		helicase_mgr.phase_changed.connect(_on_helicase_phase_changed)
 
@@ -597,9 +644,7 @@ func _on_helicase_slot_reached(index: int) -> void:
 func _lagging_fire_step(duration: float) -> void:
 	var slot_index = lagging_batch_cursor
 	lagging_current_fragment.slots.push_front(slot_index)  # push_front: firing goes right-to-left, so this keeps the array ascending
-	if lagging_synthesized_bases[slot_index] == null:
-		lagging_synthesized_bases[slot_index] = _spawn_lagging_base(slot_index, sim.dna_sequence.get_base(slot_index))
-		lagging_hydrogen_bonds[slot_index] = _spawn_lagging_hydrogen_bonds(slot_index)
+	_capture_begin_lagging(slot_index, duration)
 
 	lagging_polymerase_x = sim.nucleotide_original_x[slot_index]
 	if lagging_polymerase:
@@ -856,11 +901,11 @@ func _lagging_fade_enzyme_scene() -> void:
 	if sim.helicase_node:
 		fade_tween.parallel().tween_property(sim.helicase_node, "modulate:a", 0.0, sim.fade_duration)
 
-func _spawn_lagging_base(index: int, base_type: String) -> Node2D:
+func _spawn_lagging_base(index: int, base_type: String, start_pos = null) -> Node2D:
 	var base = sim.NewNitrogenBaseScene.instantiate()
 	var world_x = sim.nucleotide_original_x[index]
 	var lagging_y = sim.new_bottom_template_y + sim.dna_ribbons_gap
-	base.position = Vector2(world_x, lagging_y)
+	base.position = start_pos if start_pos != null else Vector2(world_x, lagging_y)
 	base.z_index = 2
 	sim.add_child(base)
 	base.set_base_type(base_type)
@@ -1097,6 +1142,170 @@ func _update_bond_marks_lagging(points: PackedVector2Array) -> void:
 func _set_lagging_pump_phase(phase: float) -> void:
 	if lagging_clamp != null:
 		lagging_clamp.set_pump(sin(phase * PI))
+	_capture_update_lagging(phase)
+
+# ==========================================
+# CAPTURE — self-contained section
+# ==========================================
+# Owns: the traveling nucleotide during a step. Triggered once per step, at
+# step START (not arrival) — _capture_on_leading_slot_reached() for leading
+# (off helicase.slot_reached directly, since leading has no other per-step
+# event), _capture_begin_lagging() called from _lagging_fire_step() for
+# lagging (which already has a clean step-start call site).
+#
+# The node created here IS the permanent synthesized base — there is no
+# placeholder swap. It is deliberately kept OUT of leading_synthesized_bases /
+# lagging_synthesized_bases until leg 2 completes, so the existing render()
+# functions (which position every non-null array entry to its final row every
+# frame) never fight the traveling node. This is also why no changes were
+# needed anywhere in _leading_render()/_lagging_render()/backbone/hydrogen-bond
+# code: the traveling node is invisible to all of that machinery until it
+# "graduates" into the array at the exact moment it settles into place.
+#
+# Two legs per step, split at the pump's own halfway point:
+#   Leg 1 (step_t/phase 0 -> 0.5): a LIVE FOLLOW, not a tween — the clamp
+#     itself is still mid-glide toward the slot during this half, so there is
+#     no fixed destination yet. Every frame, position is set directly to
+#     get_jaw_cap_inner_anchor(), which already accounts for the clamp's
+#     glide + pump animation via to_global(). Chosen over a tween specifically
+#     because a fixed-endpoint tween started at leg-1's beginning would target
+#     where the jaw WILL be, not where it IS — looking disconnected while the
+#     clamp is still moving.
+#   Leg 2 (step_t/phase 0.5 -> 1): a genuine tween, from wherever leg 1 left
+#     off to the base's true final resting position — valid as a fixed-point
+#     tween because by this half, the clamp itself has arrived and stopped.
+#     Reads as the jaw depositing the nucleotide into place.
+#
+# Scrub never runs any of this — scrub_rebuild() calls _capture_reset() up
+# front and places finished bases instantly via the untouched
+# _spawn_leading_base()/_spawn_lagging_base() call sites, same as before.
+
+func _capture_reset() -> void:
+	if leading_capture_node != null and is_instance_valid(leading_capture_node):
+		leading_capture_node.queue_free()
+	leading_capture_node = null
+	if leading_capture_tween != null and leading_capture_tween.is_valid():
+		leading_capture_tween.kill()
+	leading_capture_tween = null
+	leading_capture_target_slot = -1
+	leading_capture_leg2_started = false
+
+	if lagging_capture_node != null and is_instance_valid(lagging_capture_node):
+		lagging_capture_node.queue_free()
+	lagging_capture_node = null
+	if lagging_capture_tween != null and lagging_capture_tween.is_valid():
+		lagging_capture_tween.kill()
+	lagging_capture_tween = null
+	lagging_capture_target_slot = -1
+	lagging_capture_leg2_started = false
+
+func _capture_teardown() -> void:
+	_capture_reset()
+
+# ---------- LEADING ----------
+
+func _capture_on_leading_slot_reached(index: int) -> void:
+	# Slot mapping mirrors the lagging strand's own documented relationship:
+	# when the helicase reaches `index`, the leading polymerase's position
+	# corresponds to slot (index - polymerase_x_offset_slots) — same formula
+	# polymerase_x itself is built from. Holds during FINISHING's extra steps
+	# too (index just keeps climbing past num_slots-1; the old position-poll
+	# this replaces relied on the same incidental correctness).
+	var target = index + 1 - sim.polymerase_x_offset_slots
+	if target < 0 or target >= sim.num_nucleotide_slots:
+		return
+	if leading_synthesized_bases[target] != null:
+		return
+	_capture_begin_leading(target, connected_helicase_mgr.step_duration)
+
+func _capture_begin_leading(index: int, duration: float) -> void:
+	if leading_synthesized_bases[index] != null:
+		return
+	if leading_capture_node != null:
+		_capture_finish_leading(leading_capture_target_slot, leading_capture_node)
+	var base_type = sim.dna_sequence.get_complement(index)
+	var fallback_pos = Vector2(sim.nucleotide_original_x[index], sim.new_top_template_y - sim.dna_ribbons_gap)
+	var start_pos = leading_halo.capture_particle(base_type) if leading_halo != null else fallback_pos
+	leading_capture_node = _spawn_leading_base(index, base_type, start_pos)
+	leading_capture_target_slot = index
+	leading_capture_leg2_started = false
+
+## Called every frame from update()'s leading block. step_t/duration are the
+## SAME values already driving the clamp's glide and pump — capture rides
+## those, not an independent clock.
+func _capture_update_leading(step_t: float, duration: float) -> void:
+	if leading_capture_node == null:
+		return
+	if step_t < 0.5:
+		if leading_clamp != null:
+			leading_capture_node.position = leading_clamp.get_jaw_cap_inner_anchor()
+	elif not leading_capture_leg2_started:
+		leading_capture_leg2_started = true
+		var index = leading_capture_target_slot
+		var node = leading_capture_node
+		var final_pos = Vector2(sim.nucleotide_original_x[index], sim.new_top_template_y - sim.dna_ribbons_gap)
+		var tween = sim.create_tween()
+		tween.tween_property(node, "position", final_pos, duration / 2.0)\
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		tween.tween_callback(_capture_finish_leading.bind(index, node))
+		leading_capture_tween = tween
+
+func _capture_finish_leading(index: int, node: Node2D) -> void:
+	leading_synthesized_bases[index] = node
+	leading_hydrogen_bonds[index] = _spawn_leading_hydrogen_bonds(index)
+	node.position = Vector2(sim.nucleotide_original_x[index], sim.new_top_template_y - sim.dna_ribbons_gap)
+	if leading_capture_node == node:
+		leading_capture_node = null
+		leading_capture_target_slot = -1
+		if leading_capture_tween != null and leading_capture_tween.is_valid():
+			leading_capture_tween.kill()
+		leading_capture_tween = null
+
+# ---------- LAGGING ----------
+
+func _capture_begin_lagging(index: int, duration: float) -> void:
+	if lagging_synthesized_bases[index] != null:
+		return
+	if lagging_capture_node != null:
+		_capture_finish_lagging(lagging_capture_target_slot, lagging_capture_node)
+	var base_type = sim.dna_sequence.get_base(index)
+	var fallback_pos = Vector2(sim.nucleotide_original_x[index], sim.new_bottom_template_y + sim.dna_ribbons_gap)
+	var start_pos = lagging_halo.capture_particle(base_type) if lagging_halo != null else fallback_pos
+	lagging_capture_node = _spawn_lagging_base(index, base_type, start_pos)
+	lagging_capture_target_slot = index
+	lagging_capture_leg2_started = false
+	lagging_capture_leg2_duration = duration / 2.0
+
+## Called from _set_lagging_pump_phase(), which already runs every frame of
+## the pump tween (live or catch-up) — reused as capture's per-frame hook
+## rather than adding a second timing source for the same step.
+func _capture_update_lagging(phase: float) -> void:
+	if lagging_capture_node == null:
+		return
+	if phase < 0.5:
+		if lagging_clamp != null:
+			lagging_capture_node.position = lagging_clamp.get_jaw_cap_inner_anchor()
+	elif not lagging_capture_leg2_started:
+		lagging_capture_leg2_started = true
+		var index = lagging_capture_target_slot
+		var node = lagging_capture_node
+		var final_pos = Vector2(sim.nucleotide_original_x[index], sim.new_bottom_template_y + sim.dna_ribbons_gap)
+		var tween = sim.create_tween()
+		tween.tween_property(node, "position", final_pos, lagging_capture_leg2_duration)\
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		tween.tween_callback(_capture_finish_lagging.bind(index, node))
+		lagging_capture_tween = tween
+
+func _capture_finish_lagging(index: int, node: Node2D) -> void:
+	lagging_synthesized_bases[index] = node
+	lagging_hydrogen_bonds[index] = _spawn_lagging_hydrogen_bonds(index)
+	node.position = Vector2(sim.nucleotide_original_x[index], sim.new_bottom_template_y + sim.dna_ribbons_gap)
+	if lagging_capture_node == node:
+		lagging_capture_node = null
+		lagging_capture_target_slot = -1
+		if lagging_capture_tween != null and lagging_capture_tween.is_valid():
+			lagging_capture_tween.kill()
+		lagging_capture_tween = null
 
 # ==========================================
 # SHARED SPAWNING HELPERS

@@ -7,14 +7,9 @@ class_name PolymeraseHalo
 # field (see PolymeraseDesign.md's "two separate particle systems" split):
 #   - nucleotide_field.gd = ambient background dNTPs, cosmetic, whole viewport.
 #   - PolymeraseHalo (this file) = a small, fixed pool staying close to ONE
-#     polymerase — the pool the capture mechanic will later draw from
-#     ("nearest halo particle is selected... resolves into the specific
-#     required nucleotide type... travels to the clamp").
-#
-# THIS FILE IS IDLE-ONLY (first pass). No capture/resolve/travel logic yet —
-# deliberately deferred so the idle motion can be seen and used to reason
-# about the capture animation before that riskier piece (which touches the
-# base-spawn trigger) gets designed.
+#     polymerase — the pool replication_manager.gd's _capture_* functions
+#     draw from via capture_particle() (search-first-then-fallback matching,
+#     see its doc comment).
 #
 # Motion: same Brownian-jitter physics as nucleotide_field.gd (matching
 # max_speed/jitter_accel defaults), bounded by a circular velocity-reflecting
@@ -52,6 +47,14 @@ var _field: Node = null    # nucleotide_field.gd instance — live source for si
 var _tm: Node = null       # ThemeManager — font/label + fallback source if _field is missing
 var _last_radius: float = -1.0
 var _last_softness: float = -1.0
+# Cached appearance state, refreshed in _build_particles()/_process() — lets
+# capture_particle()'s single-particle replenish reuse the same values
+# without re-deriving them from _tm/_field each time.
+var _cached_font: Font = null
+var _cached_font_size: int = 14
+var _cached_label_color: Color = Color.BLACK
+var _cached_blur_on: bool = true
+var _cached_extent: float = 1.4
 
 func setup(sim: Node, mirror: bool) -> void:
 	_sim = sim
@@ -71,16 +74,46 @@ func _fill_for(bt: String) -> Color:
 	return Color.WHITE
 
 ## Returns the first halo particle currently showing the given base type, or
-## null if none match right now. Not called from anywhere yet — this is what
-## a future capture step would use to grab a matching particle instead of an
-## arbitrary one. See the matching-strategy discussion (session notes) before
-## wiring it in: with a small pool (~5) across 4 types, an exact match isn't
-## guaranteed at every capture moment.
+## null if none match right now. Used by capture_particle()'s search step.
 func find_particle_of_type(letter: String) -> Node:
 	for n in _nodes:
 		if n.base_type == letter:
 			return n
 	return null
+
+## Called once when a polymerase step BEGINS (not on arrival). Search-first,
+## fallback-relabel: if a particle of `letter` exists, use it; otherwise
+## relabel whichever particle sits closest to the clamp center. Either way,
+## that particle is removed from the idle pool and its GLOBAL position
+## returned (the caller spawns the real base there and animates it in), and
+## one fresh random replacement is spawned to keep the ambient pool at
+## particle_count — capture should never visibly deplete the halo.
+func capture_particle(letter: String) -> Vector2:
+	if _nodes.is_empty():
+		return global_position
+
+	var idx = -1
+	for i in range(_nodes.size()):
+		if _nodes[i].base_type == letter:
+			idx = i
+			break
+	if idx == -1:
+		idx = 0
+		var best_dist = _pos[0].length()
+		for i in range(1, _nodes.size()):
+			if _pos[i].length() < best_dist:
+				best_dist = _pos[i].length()
+				idx = i
+
+	var dot = _nodes[idx]
+	var world_pos: Vector2 = dot.global_position
+	_nodes.remove_at(idx)
+	_pos.remove_at(idx)
+	_vel.remove_at(idx)
+	dot.queue_free()
+
+	_spawn_into_pool(BASES[randi() % BASES.size()])
+	return world_pos
 
 func _current_radius() -> float:
 	return _field.particle_radius if _field != null else (_tm.base_radius if _tm != null else 10.0)
@@ -138,35 +171,46 @@ func _build_particles() -> void:
 	for n in _nodes:
 		n.queue_free()
 	_nodes.clear(); _pos.clear(); _vel.clear()
-	_last_radius = _current_radius()
-	var blur_on = _current_blur_enabled()
-	var extent = _current_blur_extent()
-	var label_color: Color = _tm.base_label_color if _tm != null else Color.BLACK
-	var font: Font = (_tm.base_label_font if (_tm != null and _tm.base_label_font != null) else ThemeDB.fallback_font)
-	var font_size: int = _tm.base_label_font_size if _tm != null else 14
+	_refresh_cached_appearance()
 	var types := _assign_types(max(0, particle_count))
 	for i in range(types.size()):
-		var dot := _HaloDot.new()
-		dot.tex = _tex
-		dot.base_type = types[i]
-		dot.color = _fill_for(types[i])
-		dot.font = font
-		dot.font_size = font_size
-		dot.label_color = label_color
-		dot.radius_px = _last_radius
-		dot.blur_enabled = blur_on
-		dot.blur_draw_size = _last_radius * 2.0 * extent
-		dot.z_index = Z_IDLE
-		dot.z_as_relative = false
-		add_child(dot)
-		_nodes.append(dot)
-		var ang = randf() * TAU
-		var r = randf() * halo_radius
-		var p = Vector2(cos(ang), sin(ang)) * r
-		_pos.append(p)
-		_vel.append(Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * _current_max_speed() * 0.5)
-		dot.position = p
-		dot.queue_redraw()
+		_spawn_into_pool(types[i])
+
+func _refresh_cached_appearance() -> void:
+	_last_radius = _current_radius()
+	_cached_blur_on = _current_blur_enabled()
+	_cached_extent = _current_blur_extent()
+	_cached_label_color = _tm.base_label_color if _tm != null else Color.BLACK
+	_cached_font = (_tm.base_label_font if (_tm != null and _tm.base_label_font != null) else ThemeDB.fallback_font)
+	_cached_font_size = _tm.base_label_font_size if _tm != null else 14
+
+## Builds one particle of the given type using the current cached appearance
+## state, places it at a random spot within halo_radius, and appends it to
+## the live pool arrays. Shared by _build_particles() (initial fill) and
+## capture_particle() (single-particle replenish after a capture).
+func _spawn_into_pool(bt: String) -> Node:
+	var dot := _HaloDot.new()
+	dot.tex = _tex
+	dot.base_type = bt
+	dot.color = _fill_for(bt)
+	dot.font = _cached_font
+	dot.font_size = _cached_font_size
+	dot.label_color = _cached_label_color
+	dot.radius_px = _last_radius
+	dot.blur_enabled = _cached_blur_on
+	dot.blur_draw_size = _last_radius * 2.0 * _cached_extent
+	dot.z_index = Z_IDLE
+	dot.z_as_relative = false
+	add_child(dot)
+	_nodes.append(dot)
+	var ang = randf() * TAU
+	var r = randf() * halo_radius
+	var p = Vector2(cos(ang), sin(ang)) * r
+	_pos.append(p)
+	_vel.append(Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * _current_max_speed() * 0.5)
+	dot.position = p
+	dot.queue_redraw()
+	return dot
 
 func _process(delta: float) -> void:
 	modulate.a = _current_field_alpha()
@@ -183,6 +227,8 @@ func _process(delta: float) -> void:
 	var extent = _current_blur_extent()
 	if abs(r_now - _last_radius) > 0.01 or softness_changed:
 		_last_radius = r_now
+		_cached_blur_on = blur_on
+		_cached_extent = extent
 		for n in _nodes:
 			n.radius_px = r_now
 			n.blur_enabled = blur_on
