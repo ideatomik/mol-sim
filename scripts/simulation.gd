@@ -1,6 +1,25 @@
 extends Node2D
 
 # ==========================================
+# v 71.x — helicase ring
+# - Placeholder capsule in _setup_helicase() replaced by HelicaseRing
+#   (helicase_ring.gd): six see-through octagonal blobs in a barrel-roll,
+#   parented under helicase_node, rides its position/modulate/fade for free.
+# - _process() now feeds helicase_ring.set_roll(idx + eased) unconditionally
+#   (same block that already derives helicase_x every frame regardless of
+#   manual_override) and sets rotation_frozen = manual_override or
+#   !ThemeManager.helicase_ring_rotation_enabled — freezes to a static
+#   symmetric pose on scrub/pause, same treatment the polymerase clamp's
+#   DOWN-state-on-scrub already gets. No changes needed in scrub_to() /
+#   scrub_to_lagging_catchup() — they set step_t via scrub_to_slot(), which
+#   this block picks up on the next frame regardless.
+# - ThemeManager: new "Helicase Ring" export group. Old "Helicase" group left
+#   in place (unused fields, cheap to leave; retire in a later cleanup pass
+#   once the ring is confirmed stable).
+# - Suggested version number — adjust to match actual project versioning.
+# ==========================================
+
+# ==========================================
 # v 70.6
 # - Debug visuals removed (debug_gap_line, debug_top_rail_line, PLL zigzag) —
 #   they served their purpose validating the PLL geometry math.
@@ -79,6 +98,7 @@ var new_top_template_y: float = 0.0
 var new_bottom_template_y: float = 0.0  # ADD — bottom template's unzipped row, mirrors new_top_template_y
 
 var helicase_node: Node2D = null
+var helicase_ring: HelicaseRing = null   # child of helicase_node; rides its position/modulate for free
 
 var wobble_time: float = 0.0
 
@@ -331,6 +351,14 @@ func _process(delta):
 			helicase_x = lerp(nucleotide_original_x[idx], nucleotide_original_x[idx + 1], eased)
 		polymerase_x = helicase_x - polymerase_x_offset_slots * nucleotide_slot_spacing
 		settle_blend = helicase_mgr.get_settling_blend()
+
+		if helicase_ring != null:
+			# Frozen (static symmetric pose, no roll dependency) whenever paused/
+			# scrubbed — mirrors the polymerase clamp always showing its DOWN
+			# state on scrub — or whenever the theme disables ring rotation
+			# (future low-info preset, same relationship wobble_enabled has).
+			helicase_ring.rotation_frozen = manual_override or not %ThemeManager.helicase_ring_rotation_enabled
+			helicase_ring.set_roll(float(idx) + eased)
 
 		var phase = helicase_mgr.get_phase()
 		if phase == helicase_mgr.Phase.DONE:
@@ -968,29 +996,22 @@ func _setup_helicase():
 	helicase_node = Node2D.new()
 	helicase_node.z_index = 3
 
-	var backbone_reach = %ThemeManager.backbone_offset_distance + %ThemeManager.backbone_line_width * 0.5
-	var half_h = dna_ribbons_gap / 2.0 + backbone_reach + %ThemeManager.helicase_height_margin
-	var half_w = %ThemeManager.helicase_half_width
-	var thickness = %ThemeManager.helicase_thickness
-	var outer_color = %ThemeManager.helicase_color
-	var inner_color = %ThemeManager.background_color
-
-	for pass_idx in range(2):
-		var poly = Polygon2D.new()
-		var w = half_w if pass_idx == 0 else half_w - thickness
-		var h = half_h if pass_idx == 0 else half_h - thickness
-		var r = w  # Capsule radius = half_width
-		var pts = PackedVector2Array()
-		const SEGS = 24
-		for i in range(SEGS + 1):
-			var angle = PI + (PI * i / SEGS)
-			pts.append(Vector2(cos(angle) * r, -h + r + sin(angle) * r))
-		for i in range(SEGS + 1):
-			var angle = (PI * i / SEGS)
-			pts.append(Vector2(cos(angle) * r, h - r + sin(angle) * r))
-		poly.polygon = pts
-		poly.color = outer_color if pass_idx == 0 else inner_color
-		helicase_node.add_child(poly)
+	helicase_ring = HelicaseRing.new()
+	helicase_ring.blob_count = %ThemeManager.helicase_ring_blob_count
+	helicase_ring.ring_radius = %ThemeManager.helicase_ring_ring_radius
+	helicase_ring.max_blob_height = %ThemeManager.helicase_ring_max_blob_height
+	helicase_ring.max_blob_width = %ThemeManager.helicase_ring_max_blob_width
+	helicase_ring.min_width_ratio = %ThemeManager.helicase_ring_min_width_ratio
+	helicase_ring.chamfer_ratio = %ThemeManager.helicase_ring_chamfer_ratio
+	helicase_ring.corner_radius_ratio = %ThemeManager.helicase_ring_corner_radius_ratio
+	helicase_ring.corner_segments = %ThemeManager.helicase_ring_corner_segments
+	helicase_ring.step_angle_deg = %ThemeManager.helicase_ring_step_angle_deg
+	helicase_ring.front_color = %ThemeManager.helicase_ring_front_color
+	helicase_ring.back_color = %ThemeManager.helicase_ring_back_color
+	helicase_ring.front_z = %ThemeManager.helicase_ring_front_z
+	helicase_ring.back_z = %ThemeManager.helicase_ring_back_z
+	helicase_ring.ring_skew_deg = %ThemeManager.helicase_ring_skew_deg
+	helicase_node.add_child(helicase_ring)
 
 	helicase_node.position = Vector2(helicase_x, center_y)
 	add_child(helicase_node)

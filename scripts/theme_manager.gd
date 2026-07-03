@@ -53,6 +53,28 @@ extends Node
 @export var helicase_half_width: float = 14.0
 @export var helicase_height_margin: float = 4.0
 
+@export_group("Helicase Ring")
+## Standalone toggle, same relationship to a future low-info theme that
+## wobble_enabled already has: a low-info preset will simply set this false.
+## Independent of scrub — scrub freezes the ring regardless of this value.
+@export var helicase_ring_rotation_enabled: bool = true
+@export var helicase_ring_blob_count: int = 6
+@export var helicase_ring_ring_radius: float = 80.0
+@export var helicase_ring_max_blob_height: float = 90.0
+@export var helicase_ring_max_blob_width: float = 50.0
+@export_range(0.0, 1.0) var helicase_ring_min_width_ratio: float = 0.6
+@export_range(0.0, 1.0) var helicase_ring_chamfer_ratio: float = 0.35
+@export_range(0.0, 1.0) var helicase_ring_corner_radius_ratio: float = 0.6
+@export_range(2, 8) var helicase_ring_corner_segments: int = 4
+## Degrees rotated per unit roll during live play. Frozen (scrub / rotation
+## disabled) ignores this and holds the static symmetric pose.
+@export var helicase_ring_step_angle_deg: float = 60.0
+@export var helicase_ring_front_color: Color = Color(0.22, 0.45, 0.85, 1.0)
+@export var helicase_ring_back_color: Color = Color(0.14, 0.28, 0.55, 1.0)
+@export var helicase_ring_front_z: int = 4
+@export var helicase_ring_back_z: int = -1
+@export_range(-45.0, 45.0, 0.1) var helicase_ring_skew_deg: float = 3.0
+
 @export_group("Markers")
 @export var marker_color: Color = Color(0.0, 0.0, 0.0, 0.0)
 @export var marker_font_color: Color = Color(1.0, 1.0, 1.0, 1.0)

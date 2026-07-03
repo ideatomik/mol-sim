@@ -91,6 +91,14 @@ hydrogen_bond_spacing = 10.0
 synthesis_circle_color = Color(1, 0, 1, 1)
 helicase_half_width = 24.0
 helicase_height_margin = 20.0
+helicase_ring_ring_radius = 120.0
+helicase_ring_max_blob_height = 135.0
+helicase_ring_max_blob_width = 70.0
+helicase_ring_chamfer_ratio = 0.5
+helicase_ring_corner_segments = 8
+helicase_ring_front_color = Color(0.7547807, 0.9128102, 0.28493494, 1)
+helicase_ring_back_color = Color(0.55581564, 0.67922026, 0.17192909, 1)
+helicase_ring_skew_deg = 1.0
 marker_font = ExtResource("5_160l5")
 
 [node name="UI" type="CanvasLayer" parent="." unique_id=2139151095]
