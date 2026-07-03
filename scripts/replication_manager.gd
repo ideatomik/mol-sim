@@ -94,6 +94,9 @@ var marker_leading_3p: Node2D = null
 
 
 var lagging_polymerase_tween: Tween = null
+var leading_clamp: PolymeraseClamp = null
+var lagging_clamp: PolymeraseClamp = null
+var lagging_pump_tween: Tween = null
 # ==========================================
 # LIFECYCLE — public dispatchers
 # ==========================================
@@ -107,16 +110,13 @@ func initialize(p_sim: Node) -> void:
 	lagging_polymerase_faded = false
 	lagging_polymerase.modulate.a = 0.0  # start invisible
 
-	# ADD — build the visible circle, mirroring leading_polymerase's polygon
-	var poly = Polygon2D.new()
-	var points = PackedVector2Array()
-	const SEGMENTS = 32
-	for i in range(SEGMENTS):
-		var angle = (float(i) / SEGMENTS) * TAU
-		points.append(Vector2(cos(angle), sin(angle)) * LEADING_POLYMERASE_RADIUS)
-	poly.polygon = points
-	poly.color = Color(1.0, 0.3, 0.3, 1.0)
-	lagging_polymerase.add_child(poly)
+	# Build the 3-piece lagging clamp as a child of the SynthesisCircle node.
+	# It self-offsets to the duplex centre and z-threads the strand between its
+	# back pieces and front cap — no positioning code here changes.
+	lagging_clamp = PolymeraseClamp.new()
+	lagging_polymerase.add_child(lagging_clamp)
+	lagging_clamp.setup(sim, false, Color(0.80, 0.32, 0.32), Color(0.95, 0.52, 0.52))
+	
 
 func reset(num_slots: int) -> void:
 	# Called by simulation.gd after teardown, before spawning new slots.
@@ -165,6 +165,11 @@ func update(delta: float, ctx: Dictionary) -> void:
 	# ---- Enzyme positions: each polymerase sits on its own template strand's row ----
 	if leading_polymerase and phase != helicase_mgr.Phase.DONE:
 		leading_polymerase.position = Vector2(ctx.polymerase_x, ctx.new_top_template_y)
+		if leading_clamp != null:
+			var reached_first_slot = ctx.num_slots > 0 and ctx.polymerase_x >= sim.nucleotide_original_x[0]
+			leading_clamp.set_pump(sin(helicase_mgr.step_t * PI) if reached_first_slot else 0.0)
+	elif leading_clamp != null:
+		leading_clamp.set_pump(0.0)
 		#print("[DEBUG] leading_polymerase.position=", leading_polymerase.position, " template_strand_y=", ctx.template_strand_y, " dna_ribbons_gap=", ctx.dna_ribbons_gap, " global_pos=", leading_polymerase.global_position)
 
 	# ---- Helicase finishing trigger (driven by leading strand's remaining slots) ----
@@ -193,11 +198,15 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	if leading_polymerase:
 		leading_polymerase.modulate.a = 1.0 if not ctx.is_done_phase else 0.0
 		leading_polymerase.position = Vector2(target_polymerase_x, ctx.new_top_template_y)
+		if leading_clamp != null: leading_clamp.set_pump(0.0)
 	if lagging_polymerase:
 		lagging_polymerase_faded = ctx.is_done_phase
 		lagging_polymerase.modulate.a = 0.0 if ctx.is_done_phase else 1.0
-		if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
-			lagging_polymerase_tween.kill()
+		if lagging_pump_tween != null and lagging_pump_tween.is_valid():
+			lagging_pump_tween.kill()
+		if lagging_clamp != null:
+			lagging_clamp.set_pump(0.0)
+		
 		lagging_polymerase.position = Vector2(lagging_polymerase_x, ctx.new_bottom_template_y)
 
 	_leading_scrub_rebuild(ctx)
@@ -290,15 +299,9 @@ func _leading_setup_backbones() -> void:
 		leading_polymerase.queue_free()
 	leading_polymerase = Node2D.new()
 	leading_polymerase.z_index = 10
-	var poly = Polygon2D.new()
-	var points = PackedVector2Array()
-	const SEGMENTS = 32
-	for i in range(SEGMENTS):
-		var angle = (float(i) / SEGMENTS) * TAU
-		points.append(Vector2(cos(angle), sin(angle)) * LEADING_POLYMERASE_RADIUS)
-	poly.polygon = points
-	poly.color = Color(0.2, 0.4, 1.0, 1.0)
-	leading_polymerase.add_child(poly)
+	leading_clamp = PolymeraseClamp.new()
+	leading_polymerase.add_child(leading_clamp)
+	leading_clamp.setup(sim, true, Color(0.22, 0.42, 1.0), Color(0.45, 0.60, 1.0))
 	leading_polymerase.position = Vector2(sim.polymerase_x, sim.new_top_template_y)
 	leading_polymerase.modulate.a = 0.0
 	sim.add_child(leading_polymerase)
@@ -602,6 +605,16 @@ func _lagging_fire_step(duration: float) -> void:
 	print("[LAGGING] slot %d fired — fragment size %d/%d" % [
 		slot_index, lagging_current_fragment.slots.size(), sim.okazaki_fragment_size
 	])
+
+	# Pump the lagging clamp 0->1->0 over the same duration, matching the
+	# leading strand's sin(step_t*PI) shape — opens mid-move, clamps on arrival.
+	# Same call site for live and catch-up firing, so both are covered.
+	if lagging_clamp != null:
+		if lagging_pump_tween != null and lagging_pump_tween.is_valid():
+			lagging_pump_tween.kill()
+		lagging_pump_tween = sim.create_tween()
+		lagging_pump_tween.tween_method(_set_lagging_pump_phase, 0.0, 1.0, duration)
+
 	lagging_total_consumed += 1
 	lagging_batch_cursor -= 1
 
@@ -1073,6 +1086,10 @@ func _update_bond_marks_lagging(points: PackedVector2Array) -> void:
 		mark.visible = segment.length() > 0.0
 		if mark.visible:
 			mark.rotation = segment.angle()
+
+func _set_lagging_pump_phase(phase: float) -> void:
+	if lagging_clamp != null:
+		lagging_clamp.set_pump(sin(phase * PI))
 
 # ==========================================
 # SHARED SPAWNING HELPERS
