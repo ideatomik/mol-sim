@@ -1,5 +1,5 @@
 # MolSim — Design Document
-_Last updated: v70 wrap session (pre-v71)_
+_Last updated: v71 polymerase visuals + capture wrap session_
 
 ---
 
@@ -418,9 +418,30 @@ simulation.gd  — Template Manager (thin scene coordinator)
 ## Roadmap
 
 ### v71 — Visual polish + localization
-- [ ] Replace stand-in code-drawn graphics (procedural `Polygon2D`/`draw_circle`
-      shapes) with authored vector graphics, starting with the enzymes
-      (helicase, leading polymerase, lagging polymerase)
+- [x] Polymerase vector graphics (leading + lagging) — DONE. Authored 3-piece
+      clamp (back body + jaw back + jaw front cap), ported from hand-drawn SVG
+      via a python converter (`svg_to_polymerase_gd.py` → generated
+      `polymerase_shape.gd` normalized polygon consts) into a runtime node
+      (`polymerase_clamp.gd`) that z-threads the DNA between the clamp's back
+      pieces and front cap, with a pump animation synced to the helicase's own
+      `step_t`. Shared shape, mirrored/recolored per strand. See
+      PolymeraseDesign.md (status updated) for full design history.
+- [x] Nucleotide capture + placement animation — DONE, extending beyond the
+      original roadmap scope. `polymerase_halo.gd`: a small typed-particle
+      pool per polymerase (a bounded "tiny nucleotide_field," same soft-blur
+      visual language, live-synced size/physics/alpha from
+      `nucleotide_field.gd`). `_capture_*` functions in `replication_manager.gd`:
+      search-first/fallback-relabel matching, two-leg animation (live follow
+      of the jaw's inner anchor while the clamp is still gliding, then a tween
+      to the base's final resting spot once it's arrived). Leading strand's
+      spawn trigger was converted from per-frame position-polling to
+      event-driven (off `helicase.slot_reached`), matching the trigger model
+      lagging already used — `_leading_update()`'s old polling loop is now a
+      no-op, safe to delete once this is confirmed stable across more QA.
+      Scrub unaffected — never runs capture, same "instant, finished slots
+      only" rule the pump already followed.
+- [ ] Helicase vector graphics: six-blob barrel-roll ring, driven by
+      `get_eased_step_t()`. See HelicaseDesign.md. **Next up.**
 - [ ] Add text labels to enzymes for visual polish and learning support
 - [ ] Localization hook: Godot's built-in `TranslationServer` + CSV
       (`tr("KEY")`), set up once enzyme labels exist so their text is written

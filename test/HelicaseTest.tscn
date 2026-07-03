@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://uj045vxdbflq"]
+
+[ext_resource type="Script" uid="uid://yig2ugn0mdhq" path="res://scripts/helicase_ring_test.gd" id="1_157dp"]
+
+[node name="HelicaseTest" type="Node2D" unique_id=1748158470]
+script = ExtResource("1_157dp")
