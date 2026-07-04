@@ -47,12 +47,6 @@ extends Node
 @export_group("Synthesis Circle")
 @export var synthesis_circle_color: Color = Color(1.0, 0.0, 0.101960786, 1.0)
 
-@export_group("Helicase")
-@export var helicase_color: Color = Color(0.85, 0.85, 0.85, 1.0)
-@export var helicase_thickness: float = 5.0
-@export var helicase_half_width: float = 14.0
-@export var helicase_height_margin: float = 4.0
-
 @export_group("Helicase Ring")
 ## Standalone toggle, same relationship to a future low-info theme that
 ## wobble_enabled already has: a low-info preset will simply set this false.
@@ -75,6 +69,35 @@ extends Node
 @export var helicase_ring_back_z: int = -1
 @export_range(-45.0, 45.0, 0.1) var helicase_ring_skew_deg: float = 3.0
 
+@export_group("Polymerase Clamp")
+## Two-piece procedural clamp (polymerase_clamp.gd). Geometry is in pixels;
+## the vertical span is derived from dna_ribbons_gap + backbone margins at
+## runtime, so these tune the shape ON TOP of the live duplex height.
+## Colours are per-strand: leading = the mirrored clamp, lagging = the
+## non-mirrored one.
+@export var clamp_margin: float = 30.0             # extra height past each duplex edge at DOWN
+@export var clamp_back_grow: float = 40.0          # extra back height at UP (t=1); negative retracts
+@export var clamp_back_width: float = 90.0
+@export var clamp_jaw_width: float = 90.0
+@export_range(0.05, 1.0) var clamp_jaw_height_ratio: float = 0.35   # * back's DOWN height
+## Lower jaw (pincer partner, mirrors the jaw about the duplex midline).
+## Kept deliberately short by default — didactically it must stay clear of
+## the lagging strand's nitrogen base so the base pairing stays visible.
+@export var clamp_lower_jaw_width: float = 90.0
+@export_range(0.05, 1.0) var clamp_lower_jaw_height_ratio: float = 0.15   # * back's DOWN height
+@export_range(0.0, 1.0) var clamp_outside_chamfer_ratio: float = 0.35  # crisp baseline + outer corners
+@export_range(0.0, 1.0) var clamp_inside_chamfer_ratio: float = 0.6    # UP-state inner-corner stretch
+@export_range(0.0, 1.0) var clamp_corner_radius_ratio: float = 0.6
+@export_range(2, 8) var clamp_corner_segments: int = 4
+## Absolute z so the DNA renders BETWEEN the pieces (DNA: backbone -1, bonds 0,
+## bases 2, markers 3). Back must sit below the backbone, front above the markers.
+@export var clamp_back_z: int = -3
+@export var clamp_front_z: int = 4
+@export var clamp_leading_back_color: Color = Color(0.22, 0.42, 1.0, 1.0)
+@export var clamp_leading_front_color: Color = Color(0.45, 0.60, 1.0, 1.0)
+@export var clamp_lagging_back_color: Color = Color(0.80, 0.32, 0.32, 1.0)
+@export var clamp_lagging_front_color: Color = Color(0.95, 0.52, 0.52, 1.0)
+
 @export_group("Markers")
 @export var marker_color: Color = Color(0.0, 0.0, 0.0, 0.0)
 @export var marker_font_color: Color = Color(1.0, 1.0, 1.0, 1.0)
@@ -87,6 +110,11 @@ extends Node
 @export_group("Okazaki Fragments")
 ## Y offset below the backbone tip where 5'/3' markers appear on completed fragments.
 @export var okazaki_marker_y_offset: float = 28.0
+
+@export_group("Sequence Text")
+## Used by get_sequence_rich_text() for the BBCode-colored base sequence display.
+@export var sequence_text_synthesized_color: Color = Color(0.2980392, 0.6862745, 0.3137255, 1.0)   # was #4CAF50
+@export var sequence_text_unsynthesized_color: Color = Color(1.0, 1.0, 1.0, 1.0)                    # was #FFFFFF
 
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:

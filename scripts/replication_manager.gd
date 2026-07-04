@@ -66,6 +66,7 @@ var connected_helicase_mgr: Node = null  # cached for Phase enum access in the p
 
 var lagging_total_fragments: int = 0     # floor(num_slots / okazaki_fragment_size) — hard safety cap, prevents ever firing an out-of-range slot
 var lagging_firing_started: bool = false # true once the one-time startup delay has passed
+var lagging_fade_in_started: bool = false # true once the proximity-based fade-in has been triggered (see update())
 var lagging_total_consumed: int = 0      # total slots actually fired so far
 var lagging_batch_cursor: int = 0        # next slot index to fire within the currently-open fragment (counts down)
 var lagging_polymerase_x: float = 0.0    # independent position of the lagging polymerase visual — no longer helicase-relative
@@ -93,6 +94,7 @@ var leading_hydrogen_bonds: Array = []
 var leading_backbone_line: Line2D = null
 var leading_strand_bond_marks: Array[Node2D] = []
 var leading_polymerase: Node2D = null  # renamed from top_polymerase
+var leading_fade_in_started: bool = false # true once the proximity-based fade-in has been triggered (see update())
 var lagging_polymerase: Node2D = null  # renamed from synthesis_circle — reference to scene node, set in initialize()
 var lagging_polymerase_faded: bool = false  # renamed from synthesis_circle_faded
 const LEADING_POLYMERASE_RADIUS: float = 24.0  # renamed from TOP_POLYMERASE_RADIUS
@@ -143,7 +145,7 @@ func initialize(p_sim: Node) -> void:
 	# back pieces and front cap — no positioning code here changes.
 	lagging_clamp = PolymeraseClamp.new()
 	lagging_polymerase.add_child(lagging_clamp)
-	lagging_clamp.setup(sim, false, Color(0.80, 0.32, 0.32), Color(0.95, 0.52, 0.52))
+	lagging_clamp.setup(sim, false)
 	lagging_halo = PolymeraseHalo.new()
 	lagging_polymerase.add_child(lagging_halo)
 	lagging_halo.setup(sim, false)
@@ -219,6 +221,33 @@ func update(delta: float, ctx: Dictionary) -> void:
 				remaining_leading += 1
 		helicase_mgr.start_finishing(remaining_leading)
 
+	# ---- Proximity-based fade-in: each polymerase becomes visible shortly
+	# before it actually starts working, rather than popping in with the
+	# helicase at the very start of the run. Trigger is spatial (3 slot
+	# spacings of fork progress before the first slot it will work on); the
+	# fade itself takes exactly one helicase step_duration, so it reads as a
+	# quick "arrival" rather than a slow ambient fade.
+	#
+	# Uses ctx.polymerase_x (fork/leading-polymerase progress) as the
+	# distance reference for BOTH strands, not each polymerase's own
+	# position — the lagging polymerase in particular stays parked
+	# (invisible) until its own first _lagging_fire_step() call, so its own
+	# position never changes during the wait and can't serve as a "getting
+	# closer" signal. Naturally fires later for lagging than leading, since
+	# its first slot sits farther down the strand.
+	if not leading_fade_in_started and leading_polymerase != null and ctx.num_slots > 0:
+		if sim.nucleotide_original_x[0] - ctx.polymerase_x <= 3.0 * sim.nucleotide_slot_spacing:
+			leading_fade_in_started = true
+			var leading_fade_tween = sim.create_tween()
+			leading_fade_tween.tween_property(leading_polymerase, "modulate:a", 1.0, helicase_mgr.step_duration)
+
+	if not lagging_fade_in_started and lagging_polymerase != null and ctx.num_slots > 0:
+		var lagging_first_slot = min(sim.okazaki_fragment_size, ctx.num_slots) - 1
+		if sim.nucleotide_original_x[lagging_first_slot] - ctx.polymerase_x <= 3.0 * sim.nucleotide_slot_spacing:
+			lagging_fade_in_started = true
+			var lagging_fade_tween = sim.create_tween()
+			lagging_fade_tween.tween_property(lagging_polymerase, "modulate:a", 1.0, helicase_mgr.step_duration)
+
 	# Leading strand spawning now happens via _capture_on_leading_slot_reached()
 	# (event-driven, off helicase.slot_reached) — see the _capture_* section.
 	# The old per-frame position-polling spawn here was removed: it would have
@@ -245,13 +274,25 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	_lagging_scrub_rebuild(ctx)
 
 	# ---- Enzyme visibility/position on scrub: each polymerase sits on its own template strand's row ----
+	# Fade-in state must resync here too, not just alpha — scrubbing backward
+	# past the proximity trigger point must reset leading_fade_in_started /
+	# lagging_fade_in_started, or resuming live play afterward would think
+	# the fade already happened and skip it (same class of bug as the
+	# lagging_total_consumed / lagging_batch_cursor scrub desyncs documented
+	# elsewhere in this file).
+	var leading_near = ctx.num_slots > 0 and (sim.nucleotide_original_x[0] - target_polymerase_x) <= 3.0 * sim.nucleotide_slot_spacing
+	leading_fade_in_started = leading_near
 	if leading_polymerase:
-		leading_polymerase.modulate.a = 1.0 if not ctx.is_done_phase else 0.0
+		leading_polymerase.modulate.a = 0.0 if ctx.is_done_phase else (1.0 if leading_near else 0.0)
 		leading_polymerase.position = Vector2(target_polymerase_x, ctx.new_top_template_y)
 		if leading_clamp != null: leading_clamp.set_pump(0.0)
+
+	var lagging_first_slot = (min(sim.okazaki_fragment_size, ctx.num_slots) - 1) if ctx.num_slots > 0 else -1
+	var lagging_near = lagging_first_slot >= 0 and (sim.nucleotide_original_x[lagging_first_slot] - target_polymerase_x) <= 3.0 * sim.nucleotide_slot_spacing
+	lagging_fade_in_started = lagging_near
 	if lagging_polymerase:
 		lagging_polymerase_faded = ctx.is_done_phase
-		lagging_polymerase.modulate.a = 0.0 if ctx.is_done_phase else 1.0
+		lagging_polymerase.modulate.a = 0.0 if ctx.is_done_phase else (1.0 if lagging_near else 0.0)
 		if lagging_pump_tween != null and lagging_pump_tween.is_valid():
 			lagging_pump_tween.kill()
 		if lagging_clamp != null:
@@ -259,31 +300,26 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 		
 		lagging_polymerase.position = Vector2(lagging_polymerase_x, ctx.new_bottom_template_y)
 
-	_leading_scrub_rebuild(ctx)
-
 # ==========================================
 # ENZYME ANIMATION — called from simulation.gd toggle_play() / _run_intro()
 # ==========================================
 
 func resume_enzymes() -> void:
-	leading_polymerase.modulate.a = 1.0
-	if lagging_firing_started:
+	if leading_polymerase and leading_fade_in_started:
+		leading_polymerase.modulate.a = 1.0
+	if lagging_polymerase and lagging_fade_in_started:
 		lagging_polymerase.modulate.a = 1.0
 	lagging_polymerase_faded = false
-	if leading_polymerase:
-		leading_polymerase.modulate.a = 1.0
 
 func run_intro(intro_x: float, fade_time: float, slide_time: float, tween: Tween) -> void:
 	var polymerase_x_offset = sim.polymerase_x_offset_slots * sim.nucleotide_slot_spacing
 	#lagging_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.template_strand_y)
 	lagging_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.new_bottom_template_y)
-	tween.tween_property(lagging_polymerase, "modulate:a", 1.0, fade_time)
 	tween.tween_property(lagging_polymerase, "position",
 		Vector2(sim.polymerase_x, sim.new_bottom_template_y), slide_time).set_delay(fade_time)
 
 	if leading_polymerase:
 		leading_polymerase.position = Vector2(intro_x - polymerase_x_offset, sim.new_top_template_y)
-		tween.tween_property(leading_polymerase, "modulate:a", 1.0, fade_time)
 		tween.tween_property(leading_polymerase, "position",
 			Vector2(sim.polymerase_x, sim.new_top_template_y), slide_time).set_delay(fade_time)
 
@@ -313,9 +349,9 @@ func get_sequence_rich_text(helicase_x: float, nucleotide_original_x: Array) -> 
 	for i in range(seq_string.length()):
 		var base = seq_string[i]
 		if i < nucleotide_original_x.size() and nucleotide_original_x[i] <= helicase_x:
-			text += "[color=#4CAF50]" + base + "[/color] "
+			text += "[color=#" + tm.sequence_text_synthesized_color.to_html(false) + "]" + base + "[/color] "
 		else:
-			text += "[color=#FFFFFF]" + base + "[/color] "
+			text += "[color=#" + tm.sequence_text_unsynthesized_color.to_html(false) + "]" + base + "[/color] "
 		if (i + 1) % 10 == 0:
 			text += " "
 	text += "3'"
@@ -330,6 +366,7 @@ func get_sequence_rich_text(helicase_x: float, nucleotide_original_x: Array) -> 
 # No queue, no fragment boundaries — continuous synthesis, same as a real leading strand.
 
 func _leading_reset(num_slots: int) -> void:
+	leading_fade_in_started = false
 	for i in range(num_slots):
 		leading_synthesized_bases.append(null)
 		leading_hydrogen_bonds.append(null)
@@ -351,7 +388,7 @@ func _leading_setup_backbones() -> void:
 	leading_polymerase.z_index = 10
 	leading_clamp = PolymeraseClamp.new()
 	leading_polymerase.add_child(leading_clamp)
-	leading_clamp.setup(sim, true, Color(0.22, 0.42, 1.0), Color(0.45, 0.60, 1.0))
+	leading_clamp.setup(sim, true)
 	leading_halo = PolymeraseHalo.new()
 	leading_polymerase.add_child(leading_halo)
 	leading_halo.setup(sim, true)
@@ -395,6 +432,7 @@ func _leading_scrub_rebuild(ctx: Dictionary) -> void:
 	var target_polymerase_x: float = ctx.target_polymerase_x
 	var is_done_phase: bool = ctx.is_done_phase
 	var num_slots: int = ctx.num_slots
+	var target_slot: int = ctx.target_slot
 	var nucleotide_original_x = ctx.nucleotide_original_x
 
 	# ---- Free leading markers when before first base ----
@@ -420,12 +458,20 @@ func _leading_scrub_rebuild(ctx: Dictionary) -> void:
 		if mark != null and is_instance_valid(mark): mark.queue_free()
 	leading_strand_bond_marks.clear()
 
-	var leading_synth_count = 0
-	for i in range(num_slots):
-		if is_done_phase or nucleotide_original_x[i] <= target_polymerase_x:
-			leading_synth_count += 1
-		else:
-			break
+	# leading_synth_count mirrors _capture_on_leading_slot_reached()'s own
+	# formula (target = index + 1 - polymerase_x_offset_slots) directly, off
+	# target_slot, rather than re-deriving it independently via an x-position
+	# threshold — the two had silently drifted apart before. This count is
+	# exactly what's complete at this instant (matches where the polymerase
+	# clamp itself is rendered); the scrub/resume gap this used to cause is
+	# now closed on the live-trigger side instead (see the catch-up check in
+	# _capture_on_leading_slot_reached()), so this stays physically accurate
+	# rather than over-filling by a slot to paper over it.
+	var leading_synth_count: int
+	if is_done_phase:
+		leading_synth_count = num_slots
+	else:
+		leading_synth_count = int(clamp(float(target_slot) + 1.0 - sim.polymerase_x_offset_slots, 0.0, float(num_slots)))
 
 	for i in range(leading_synth_count):
 		if leading_synthesized_bases[i] == null:
@@ -511,6 +557,7 @@ func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
 	var bond_count = 3 if (template_base == "C" or template_base == "G") else 2
 	var bond_color = tm.cg_bond_color if (template_base == "C" or template_base == "G") else tm.at_bond_color
 	var container = Node2D.new()
+	container.position = Vector2(sim.nucleotide_original_x[index], sim.new_top_template_y)
 	var total_width = (bond_count - 1) * tm.hydrogen_bond_spacing
 	var start_x = -total_width / 2.0
 	var inset = tm.base_radius - 3.0
@@ -575,6 +622,7 @@ func _lagging_reset(num_slots: int) -> void:
 		lagging_hydrogen_bonds.append(null)
 	lagging_total_fragments = num_slots / sim.okazaki_fragment_size
 	lagging_firing_started = false
+	lagging_fade_in_started = false
 	lagging_total_consumed = 0
 	lagging_batch_cursor = 0
 	lagging_polymerase_x = 0.0
@@ -633,6 +681,7 @@ func _on_helicase_slot_reached(index: int) -> void:
 		if index < sim.okazaki_fragment_size + sim.pll_slot_count:
 			return
 		lagging_firing_started = true
+		lagging_fade_in_started = true
 		if lagging_polymerase != null:
 			lagging_polymerase.modulate.a = 1.0
 
@@ -967,16 +1016,35 @@ func _lagging_render(ctx: Dictionary) -> void:
 	# ---- Continuous mode (no ligase modeled): backbone spans only COMPLETE
 	# fragments, merged into one line. A fragment still being built keeps its
 	# own separate backbone until it completes and joins the continuous line.
+	#
+	# "Complete" here means every slot's base has actually landed — NOT
+	# merely that the fragment has been logically closed. Fragments fire
+	# highest-index-first (right-to-left), so a fragment's LOWEST slot is
+	# fired last, closing the fragment the instant it's fired — its capture
+	# animation can still be mid-flight for a frame or two afterward. Merging
+	# such a fragment into the continuous line before that slot lands would
+	# skip the missing point and let Line2D draw straight through the gap,
+	# bridging to the previous fragment before this one's final base has
+	# actually appeared. So an incomplete-but-closed fragment keeps rendering
+	# through its own separate backbone (same path the in-progress fragment
+	# uses) until every slot is genuinely there.
 	var continuous_points = PackedVector2Array()
 	for frag in lagging_fragments:
+		var frag_ready = true
+		for slot_index in frag.slots:
+			if lagging_synthesized_bases[slot_index] == null:
+				frag_ready = false
+				break
+		if not frag_ready:
+			_lagging_render_fragment_backbone(frag, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
+			continue
 		if frag.backbone != null and is_instance_valid(frag.backbone):
 			frag.backbone.queue_free()
 			frag.backbone = null
 		for slot_index in frag.slots:
-			if lagging_synthesized_bases[slot_index] != null:
-				var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
-				var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
-				continuous_points.append(Vector2(nucleotide_original_x[slot_index], lagging_y + tm.backbone_offset_distance))
+			var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
+			var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
+			continuous_points.append(Vector2(nucleotide_original_x[slot_index], lagging_y + tm.backbone_offset_distance))
 
 	lagging_backbone_line.points = continuous_points
 	lagging_backbone_line.width = tm.backbone_line_width
@@ -987,7 +1055,11 @@ func _lagging_render(ctx: Dictionary) -> void:
 
 	# Only the very first fragment's 5' and the current last-complete
 	# fragment's 3' survive — an internal boundary stops being meaningful
-	# once the backbone actually connects through it.
+	# once the backbone actually connects through it. Marker positions use
+	# frag.slots[0]/frag.slots[-1] (lowest/highest index), and the highest
+	# index of any fragment is always its FIRST-fired, long-settled slot, so
+	# these are unaffected by the same-frame race above and need no readiness
+	# check of their own.
 	for idx in range(lagging_fragments.size()):
 		var frag = lagging_fragments[idx]
 		var want_5p = (idx == 0)
@@ -1214,6 +1286,24 @@ func _capture_on_leading_slot_reached(index: int) -> void:
 	var target = index + 1 - sim.polymerase_x_offset_slots
 	if target < 0 or target >= sim.num_nucleotide_slots:
 		return
+
+	# Catch-up: if the immediately-preceding slot is ALSO missing and has no
+	# capture in flight for it at all (not merely still animating — that case
+	# is already handled by _capture_begin_leading()'s own
+	# force-finish-previous-capture logic below), its trigger never fired in
+	# the first place. This only happens right after a scrub:
+	# helicase_mgr.scrub_to_slot() sets current_slot_index directly without
+	# emitting slot_reached, so the capture that "belongs" to that slot never
+	# began. Place it instantly here — no animation, matching how scrub
+	# itself places finished bases — so it isn't permanently skipped. This
+	# keeps _leading_scrub_rebuild()'s own fill count exact (matching where
+	# the polymerase clamp actually renders) instead of over-filling ahead of
+	# it to paper over the same gap.
+	var prev = target - 1
+	if prev >= 0 and leading_synthesized_bases[prev] == null and leading_capture_target_slot != prev:
+		leading_synthesized_bases[prev] = _spawn_leading_base(prev, sim.dna_sequence.get_complement(prev))
+		leading_hydrogen_bonds[prev] = _spawn_leading_hydrogen_bonds(prev)
+
 	if leading_synthesized_bases[target] != null:
 		return
 	_capture_begin_leading(target, connected_helicase_mgr.step_duration)

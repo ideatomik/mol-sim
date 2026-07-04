@@ -41,8 +41,6 @@ signal progress_changed(new_progress: float)  # 0.0 - 1.0
 signal simulation_initialized(total_bases: int)
 
 # ---------- EXPORTS ----------
-@export var player_ui: Node  # Optional: drag your PlayerUI node here for direct access
-
 const NewNitrogenBaseScene := preload("res://scenes/nitrogen_base.tscn")
 
 @onready var background_rect: ColorRect = $CanvasLayer/ColorRect

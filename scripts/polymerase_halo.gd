@@ -30,7 +30,7 @@ class_name PolymeraseHalo
 # "hiding" rather than a visible cloud.
 # ==========================================
 
-const Z_IDLE := 1   # in front of backbone(-1)/bonds(0)/clamp-back(-3,-2), behind bases(2)/markers(3)/clamp-front(4)
+const Z_IDLE := 3   # in front of backbone(-1)/bonds(0)/clamp-back(-3,-2), behind bases(2)/markers(3)/clamp-front(4)
 const BASES := ["A", "T", "C", "G"]
 
 @export_group("Halo")

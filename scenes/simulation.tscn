@@ -76,7 +76,7 @@ default_color = Color(0, 0, 0, 1)
 [node name="ThemeManager" type="Node" parent="." unique_id=264924326]
 unique_name_in_owner = true
 script = ExtResource("3_ik8a0")
-background_color = Color(0.088599645, 0.1447326, 0.29568833, 1)
+background_color = Color(0.04674457, 0.085360445, 0.19028893, 1)
 base_color_a = Color(0.9593466, 0.25030932, 0.20285092, 1)
 base_color_t = Color(0.64573294, 0.2505012, 0.99999994, 1)
 base_color_c = Color(0.8499613, 0.46963003, 0.09985284, 1)
@@ -88,9 +88,7 @@ at_bond_color = Color(0.6238186, 1, 0.5938983, 1)
 cg_bond_color = Color(0, 1, 0.9920456, 1)
 hydrogen_bond_width = 3.0
 hydrogen_bond_spacing = 10.0
-synthesis_circle_color = Color(1, 0, 1, 1)
-helicase_half_width = 24.0
-helicase_height_margin = 20.0
+synthesis_circle_color = Color(1, 0, 1, 0)
 helicase_ring_ring_radius = 120.0
 helicase_ring_max_blob_height = 135.0
 helicase_ring_max_blob_width = 70.0
@@ -98,8 +96,17 @@ helicase_ring_chamfer_ratio = 0.5
 helicase_ring_corner_segments = 8
 helicase_ring_front_color = Color(0.7547807, 0.9128102, 0.28493494, 1)
 helicase_ring_back_color = Color(0.55581564, 0.67922026, 0.17192909, 1)
-helicase_ring_skew_deg = 1.0
+helicase_ring_skew_deg = 0.0
+clamp_margin = 17.5
+clamp_back_width = 55.0
+clamp_jaw_width = 55.0
+clamp_lower_jaw_width = 55.0
+clamp_lower_jaw_height_ratio = 0.26
+clamp_outside_chamfer_ratio = 0.15
+clamp_inside_chamfer_ratio = 0.15
+clamp_front_z = 2
 marker_font = ExtResource("5_160l5")
+sequence_text_synthesized_color = Color(0.28530824, 0.97445637, 0.57307744, 1)
 
 [node name="UI" type="CanvasLayer" parent="." unique_id=2139151095]
 
