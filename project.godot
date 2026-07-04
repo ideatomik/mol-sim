@@ -15,10 +15,6 @@ run/main_scene="uid://c6lmtknskx8xm"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 config/icon="res://icon.svg"
 
-[autoload]
-
-ReplicationManager="*uid://dqiarpockixap"
-
 [debug]
 
 gdscript/warnings/enable=false
@@ -39,6 +35,10 @@ version_control/autoload_on_startup=true
 theme/default_font_hinting=2
 theme/default_font_multichannel_signed_distance_field=true
 theme/default_font_generate_mipmaps=true
+
+[internationalization]
+
+locale/translations=PackedStringArray("res://localization/enzyme_labels.en.translation", "res://localization/enzyme_labels.es.translation", "res://localization/enzyme_labels.pt_BR.translation")
 
 [physics]
 

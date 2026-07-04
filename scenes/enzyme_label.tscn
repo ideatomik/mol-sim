@@ -1,0 +1,24 @@
+[gd_scene format=3 uid="uid://ba6ifgqjcpe1k"]
+
+[ext_resource type="Script" uid="uid://ds7pk6o87161j" path="res://scripts/enzyme_label.gd" id="1"]
+[ext_resource type="FontFile" uid="uid://dswfvl6c65it4" path="res://fonts/Raleway/static/Raleway-Medium.ttf" id="2_v7gnw"]
+[ext_resource type="FontFile" uid="uid://dxdsv5nrybqcb" path="res://fonts/Raleway/static/Raleway-ExtraBold.ttf" id="3_aknpr"]
+[ext_resource type="FontFile" uid="uid://bmf3gxfyduloe" path="res://fonts/Raleway/static/Raleway-ExtraBoldItalic.ttf" id="4_lwofp"]
+[ext_resource type="FontFile" uid="uid://cvobar8tfg7u6" path="res://fonts/Raleway/static/Raleway-MediumItalic.ttf" id="5_jsvhn"]
+
+[node name="EnzymeLabel" type="PanelContainer" unique_id=1043520171]
+mouse_filter = 2
+script = ExtResource("1")
+
+[node name="RichTextLabel" type="RichTextLabel" parent="." unique_id=1113573234]
+layout_mode = 2
+mouse_filter = 2
+theme_override_fonts/normal_font = ExtResource("2_v7gnw")
+theme_override_fonts/bold_font = ExtResource("3_aknpr")
+theme_override_fonts/bold_italics_font = ExtResource("4_lwofp")
+theme_override_fonts/italics_font = ExtResource("5_jsvhn")
+theme_override_fonts/mono_font = ExtResource("5_jsvhn")
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
+autowrap_mode = 0

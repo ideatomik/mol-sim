@@ -30,11 +30,24 @@ class_name PolymeraseClamp
 #   get_jaw_cap_inner_anchor() (name kept for the _capture_* call sites), which
 #   walks the real transform chain so it tracks pump + mirror automatically.
 #
+# LABEL: a static "DNA Polymerase III" name tag anchored outside the back
+# body (the far side from the duplex), independent of the pump — it does NOT
+# breathe with set_pump(t), so it stays put while the clamp animates. Same
+# key ("ENZYME_POLYMERASE") for both strands, matching PolymeraseDesign.md's
+# "same enzyme, mirrored/recolored per strand" treatment — no leading/lagging
+# text split. Config is read live from ThemeManager's "Polymerase Clamp"
+# group each frame, same as every other geometry/colour param here (unlike
+# helicase_ring.gd, which keeps its own local @export vars instead).
+# Mirroring is handled by the label itself (set_mirror), so its glyphs stay
+# upright on the leading strand despite this node's own scale.y = -1.
+#
 # All geometry/colour params live in ThemeManager's "Polymerase Clamp" group and
 # are read live each frame, so Inspector tuning works while running. Colours are
 # per-strand (leading = mirror; lagging = non-mirror). No pump clock in here —
 # set_pump(t) alone determines the pose; scrub rests at t = 0 (DOWN).
 # ==========================================
+
+const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn")
 
 var _mirror: bool = false
 var _sim: Node = null
@@ -42,6 +55,7 @@ var _tm: Node = null
 var _back: Polygon2D = null
 var _jaw: Polygon2D = null
 var _lowerjaw: Polygon2D = null
+var _label: EnzymeLabel = null
 var _pump_t: float = 0.0
 var _anchor_local_y: float = 0.0
 
@@ -62,6 +76,11 @@ func _build() -> void:
 	_lowerjaw = Polygon2D.new()
 	_lowerjaw.z_as_relative = false
 	add_child(_lowerjaw)
+	_label = ENZYME_LABEL_SCENE.instantiate()
+	_label.z_as_relative = false
+	add_child(_label)
+	_label.set_key("ENZYME_POLYMERASE")
+	_label.set_mirror(_mirror)
 
 ## Lift the jaw. t = 0 -> DOWN (clamped, scrub rests here), t = 1 -> UP (open).
 ## Fed the already-shaped step value by replication_manager (sin(step_t*PI) /
@@ -170,6 +189,24 @@ func _apply() -> void:
 
 	# CAPTURE ANCHOR: jaw's OUTER edge (local), cached for get_jaw_cap_inner_anchor().
 	_anchor_local_y = back_inner_y + jaw_h
+
+	# LABEL: static offset outward from the duplex (+y, pre-mirror), independent
+	# of pump t so it doesn't breathe with the clamp. tm.enzyme_labels_enabled /
+	# tm.polymerase_label_margin / tm.label_font_size / tm.label_color /
+	# tm.label_panel_color / tm.label_z are new fields — see chat for the exact
+	# ThemeManager export block to add.
+	if _label:
+		var label_enabled: bool = tm.enzyme_labels_enabled
+		_label.visible = label_enabled
+		if label_enabled:
+			var label_margin_out: float = tm.polymerase_label_margin
+			var label_font_size: int = tm.label_font_size
+			var label_text_color: Color = tm.label_color
+			var label_panel_color: Color = tm.label_panel_color
+			var label_z: int = tm.label_z
+			_label.set_style(null, label_font_size, label_text_color, label_panel_color)
+			_label.z_index = label_z
+			_label.set_anchor_pos(Vector2(0.0, half_down + label_margin_out))
 
 ## Live world-space position of the jaw's outer edge, right now. Walks the real
 ## transform chain (local point -> this clamp's scale/mirror/position -> the

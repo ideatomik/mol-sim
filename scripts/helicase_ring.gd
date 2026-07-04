@@ -29,6 +29,16 @@ extends Node2D
 # The ring doesn't need to know which reason applies — whoever's asking just
 # sets the flag.
 #
+# LABEL: a static "Helicase" name tag anchored above the ring's rotation
+# band. Deliberately does NOT participate in the barrel-roll — it's a fixed
+# offset in local space, recomputed from ring_radius/max_blob_height each
+# _apply() so Inspector tuning of those still moves it correctly, but with
+# no roll dependency it can never overlap a full-height blob at any rotation
+# phase. Config lives directly on this node (own @export vars), matching
+# this file's existing pattern of NOT reading ThemeManager — unlike
+# polymerase_clamp.gd, which does. Fade rides this node's modulate for free,
+# same as the blobs.
+#
 # SHIPPABLE AS-IS: reparent this under simulation.gd's helicase_node and feed
 # set_roll() from the _process block that already computes `eased`. Fade rides
 # helicase_node.modulate for free — modulate propagates down the tree
@@ -65,12 +75,25 @@ extends Node2D
 @export var front_z: int = 4                 # above the DNA bases (sim bases are z=2)
 @export var back_z: int = -1                 # below the backbone
 
+# ---------- LABEL ----------
+@export var label_enabled: bool = true
+@export var label_key: String = "ENZYME_HELICASE"   # translation key, never display text
+@export var label_margin: float = 12.0              # gap above the ring's tallest reach
+@export var label_font_size: int = 16
+@export var label_text_color: Color = Color(1, 1, 1, 1)
+@export var label_panel_color: Color = Color(0, 0, 0, 0.5)
+@export var label_z: int = 10                       # above front_z, always readable
+
+const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn")
+
 var _blobs: Array[Polygon2D] = []
 var _roll: float = 0.0
+var _label: EnzymeLabel = null
 
 func _ready() -> void:
 	skew = deg_to_rad(ring_skew_deg)
 	_rebuild_blobs()
+	_setup_label()
 
 # ---------- PUBLIC ----------
 
@@ -92,6 +115,23 @@ func _rebuild_blobs() -> void:
 		_blobs.append(b)
 	_apply()
 
+func _setup_label() -> void:
+	if not label_enabled:
+		return
+	_label = ENZYME_LABEL_SCENE.instantiate()
+	_label.z_as_relative = false
+	_label.z_index = label_z
+	add_child(_label)
+	_label.set_key(label_key)
+	_label.set_style(null, label_font_size, label_text_color, label_panel_color)
+	_update_label()
+
+func _update_label() -> void:
+	if _label == null:
+		return
+	var offset_y := ring_radius + max_blob_height * 0.5 + label_margin
+	_label.set_anchor_pos(Vector2(0.0, -offset_y))
+
 func _apply() -> void:
 	if _blobs.size() != max(1, blob_count):
 		_rebuild_blobs()
@@ -112,6 +152,7 @@ func _apply() -> void:
 		blob.z_index = front_z if is_front else back_z
 		blob.color = front_color if is_front else back_color
 		blob.visible = h > 1.0   # drop the degenerate ~zero-height sliver right at the flip point
+	_update_label()
 
 func _octagon(w: float, h: float, chamfer: float) -> PackedVector2Array:
 	# Vertically-stretchable octagon: flat vertical sides, chamfered top/bottom

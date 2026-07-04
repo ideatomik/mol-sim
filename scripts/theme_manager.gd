@@ -116,6 +116,14 @@ extends Node
 @export var sequence_text_synthesized_color: Color = Color(0.2980392, 0.6862745, 0.3137255, 1.0)   # was #4CAF50
 @export var sequence_text_unsynthesized_color: Color = Color(1.0, 1.0, 1.0, 1.0)                    # was #FFFFFF
 
+@export_group("Enzyme Labels")
+@export var enzyme_labels_enabled: bool = true
+@export var polymerase_label_margin: float = 16.0
+@export var label_font_size: int = 16
+@export var label_color: Color = Color(1, 1, 1, 1)
+@export var label_panel_color: Color = Color(0, 0, 0, 0.5)
+@export var label_z: int = 10
+
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:
 	match base_type:
