@@ -47,6 +47,7 @@ extends Node
 # ---------- PARENT REFERENCE ----------
 var sim: Node = null  # Set by initialize(). Used for add_child(), geometry, etc.
 var tm: Node = null   # ThemeManager reference, cached in initialize()
+var zoom_mgr: Node = null  # ZoomManager reference, cached in initialize()
 
 # ---------- PER-SLOT STATE ARRAYS ----------
 var nucleotide_backbone_delta: Array[float] = []
@@ -135,6 +136,17 @@ func initialize(p_sim: Node) -> void:
 	# Called once when simulation.gd first creates this node.
 	sim = p_sim
 	tm = p_sim.get_node("%ThemeManager")
+	zoom_mgr = p_sim.get_node_or_null("%ZoomManager")
+	if zoom_mgr != null:
+		# Registered once, here — NOT re-registered in _leading_setup_backbones(),
+		# even though that function recreates leading_polymerase on every
+		# sequence load. The Callables close over `self` (replication_mgr,
+		# which persists across sequences) and look up leading_polymerase /
+		# lagging_polymerase fresh each call, so they stay valid across
+		# reloads without re-registration. Level 4 reuses the level-3
+		# frame-provider this pass (placeholder — see ZoomDesign.md).
+		zoom_mgr.register_target("leading_polymerase", _zoom_frame_leading, _zoom_frame_leading, "Leading Polymerase")
+		zoom_mgr.register_target("lagging_polymerase", _zoom_frame_lagging, _zoom_frame_lagging, "Lagging Polymerase")
 	lagging_polymerase = p_sim.synthesis_circle
 	lagging_polymerase.z_index = 10
 	lagging_polymerase_faded = false
@@ -336,6 +348,69 @@ func render(delta: float, ctx: Dictionary) -> void:
 	#           nucleotide_bases, top_strand_slots
 	_leading_render(ctx)
 	_lagging_render(ctx)
+	_apply_highlight()
+
+# ==========================================
+# ZOOM / HIGHLIGHT — frame-providers registered with ZoomManager, and the
+# per-frame highlight-dim application for this file's owned visuals. See
+# ZoomDesign.md and zoom_manager.gd's file banner for the ownership contract.
+# ==========================================
+
+func _zoom_frame_leading() -> Array:
+	if leading_polymerase == null or not is_instance_valid(leading_polymerase):
+		return []
+	if sim.helicase_node == null or not is_instance_valid(sim.helicase_node):
+		return [leading_polymerase.global_position]
+	return [leading_polymerase.global_position, sim.helicase_node.global_position]
+
+func _zoom_frame_lagging() -> Array:
+	if lagging_polymerase == null or not is_instance_valid(lagging_polymerase):
+		return []
+	if sim.helicase_node == null or not is_instance_valid(sim.helicase_node):
+		return [lagging_polymerase.global_position]
+	return [lagging_polymerase.global_position, sim.helicase_node.global_position]
+
+func _apply_highlight() -> void:
+	if zoom_mgr == null:
+		return
+
+	# Enzymes: self_modulate only, applied to the nodes that actually draw
+	# (the clamp + halo, not the position-only leading_polymerase/
+	# lagging_polymerase containers). This never fights the existing
+	# modulate.a proximity fade-in tweens on those containers — self_modulate
+	# and modulate multiply together independently, so exactly one system
+	# writes each property.
+	var leading_dim = zoom_mgr.get_enzyme_highlight_dim("leading_polymerase")
+	if leading_clamp != null: leading_clamp.self_modulate.a = leading_dim
+	if leading_halo != null: leading_halo.self_modulate.a = leading_dim
+
+	var lagging_dim = zoom_mgr.get_enzyme_highlight_dim("lagging_polymerase")
+	if lagging_clamp != null: lagging_clamp.self_modulate.a = lagging_dim
+	if lagging_halo != null: lagging_halo.self_modulate.a = lagging_dim
+
+	# Strand visuals: plain modulate.a is safe here — nothing else writes it.
+	var strand_dim = zoom_mgr.get_strand_highlight_dim()
+	if leading_backbone_line != null: leading_backbone_line.modulate.a = strand_dim
+	for mark in leading_strand_bond_marks:
+		if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
+	for bond in leading_hydrogen_bonds:
+		if bond != null and is_instance_valid(bond): bond.modulate.a = strand_dim
+
+	if lagging_backbone_line != null: lagging_backbone_line.modulate.a = strand_dim
+	for mark in lagging_bond_marks:
+		if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
+	for bond in lagging_hydrogen_bonds:
+		if bond != null and is_instance_valid(bond): bond.modulate.a = strand_dim
+	for frag in lagging_fragments:
+		if frag.backbone != null and is_instance_valid(frag.backbone):
+			frag.backbone.modulate.a = strand_dim
+		for mark in frag.bond_marks:
+			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
+	if lagging_current_fragment != null:
+		if lagging_current_fragment.backbone != null and is_instance_valid(lagging_current_fragment.backbone):
+			lagging_current_fragment.backbone.modulate.a = strand_dim
+		for mark in lagging_current_fragment.bond_marks:
+			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
 
 # ==========================================
 # QUERY FUNCTIONS

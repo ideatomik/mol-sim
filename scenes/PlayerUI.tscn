@@ -83,16 +83,16 @@ layout_mode = 2
 size_flags_horizontal = 4
 alignment = 1
 
-[node name="LeftSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=723413838]
-custom_minimum_size = Vector2(32, 0)
-layout_mode = 2
-
 [node name="PlayPauseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1403819340]
 custom_minimum_size = Vector2(52, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "▶"
+
+[node name="LeftSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=723413838]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
 
 [node name="LeftSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1861830833]
 custom_minimum_size = Vector2(32, 0)
@@ -168,3 +168,43 @@ theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = SubResource("StyleBoxFlat_08kqy")
 text = ""
+
+[node name="ZoomControls" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer" unique_id=1503029031]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="HighlightButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029032]
+custom_minimum_size = Vector2(28, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+toggle_mode = true
+text = "◐"
+
+[node name="ZoomOutButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029033]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "-"
+
+[node name="EnzymeDropdown" type="OptionButton" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029034]
+custom_minimum_size = Vector2(170, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("2_wxbm6")
+
+[node name="ZoomInButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029035]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "+"
+
+[node name="ResetZoomButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029036]
+custom_minimum_size = Vector2(28, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "⟲"

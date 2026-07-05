@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://c6lmtknskx8xm"]
 
 [ext_resource type="Script" uid="uid://bvkapeyriw2xi" path="res://scripts/simulation.gd" id="1_5eski"]
-[ext_resource type="Script" uid="uid://bw6vnkf4in668" path="res://scripts/camera_controller.gd" id="2_ik8a0"]
+[ext_resource type="Script" uid="uid://chxpc021lnhlb" path="res://scripts/zoom_manager.gd" id="2_1hwtu"]
 [ext_resource type="Script" uid="uid://cvtxqqt1ivx2b" path="res://scripts/theme_manager.gd" id="3_ik8a0"]
 [ext_resource type="FontFile" uid="uid://b5ngkvlh4x883" path="res://fonts/GoogleSans/GoogleSans-SemiBold.ttf" id="4_ehfb2"]
 [ext_resource type="FontFile" uid="uid://cjiwxjmh7dfcy" path="res://fonts/GoogleSans/GoogleSans_17pt-Regular.ttf" id="5_160l5"]
@@ -21,9 +21,10 @@ wobble_amplitude = 0.9
 wobble_speed = 1.0
 wobble_phase_offset = 1.0
 
-[node name="Camera2D" type="Camera2D" parent="." unique_id=1322865765]
+[node name="ZoomManager" type="Camera2D" parent="." unique_id=1322865765]
+unique_name_in_owner = true
 position = Vector2(640, 360)
-script = ExtResource("2_ik8a0")
+script = ExtResource("2_1hwtu")
 
 [node name="CanvasLayer" type="CanvasLayer" parent="." unique_id=114831926]
 layer = -10

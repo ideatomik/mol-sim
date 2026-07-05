@@ -22,6 +22,16 @@ extends CanvasLayer
 @onready var fast_forward: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/FastForward
 @onready var eject_button: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/Eject
 
+# Zoom Controls
+@onready var zoom_controls: HBoxContainer = $Panel/MarginContainer/VBoxContainer/ZoomControls
+@onready var highlight_button: Button = $Panel/MarginContainer/VBoxContainer/ZoomControls/HighlightButton
+@onready var zoom_out_button: Button = $Panel/MarginContainer/VBoxContainer/ZoomControls/ZoomOutButton
+@onready var enzyme_dropdown: OptionButton = $Panel/MarginContainer/VBoxContainer/ZoomControls/EnzymeDropdown
+@onready var zoom_in_button: Button = $Panel/MarginContainer/VBoxContainer/ZoomControls/ZoomInButton
+@onready var reset_zoom_button: Button = $Panel/MarginContainer/VBoxContainer/ZoomControls/ResetZoomButton
+
+var zoom_mgr: Camera2D = null  # %ZoomManager, cached in _ready()
+
 var _is_dragging: bool = false
 
 var _stop_icon_default: String = ""
@@ -55,6 +65,30 @@ func _ready():
 		eject_button.pressed.connect(_on_eject_pressed)
 
 		_stop_icon_default = stop_button.text
+
+		# Connect zoom controls
+		zoom_mgr = get_node_or_null("%ZoomManager")
+		if zoom_mgr:
+			highlight_button.toggled.connect(_on_highlight_toggled)
+			zoom_out_button.pressed.connect(_on_zoom_out_pressed)
+			zoom_in_button.pressed.connect(_on_zoom_in_pressed)
+			reset_zoom_button.pressed.connect(_on_reset_zoom_pressed)
+			enzyme_dropdown.item_selected.connect(_on_enzyme_selected)
+			zoom_mgr.zoom_level_changed.connect(_on_zoom_level_changed)
+			zoom_mgr.target_changed.connect(_on_zoom_target_changed)
+			# NOT populated here — PlayerUI is a child of Simulation, and
+			# Godot calls _ready() bottom-up (children before parents), so
+			# this fires BEFORE Simulation's own _ready() has registered any
+			# targets (helicase/leading/lagging). targets_changed fires
+			# whenever the target set actually changes — on initial
+			# registration today, and later whenever a complexity toggle
+			# registers/unregisters an enzyme — so the dropdown stays in
+			# sync without needing to guess when registration is "done".
+			zoom_mgr.targets_changed.connect(_populate_enzyme_dropdown)
+			_update_zoom_button_states()
+		else:
+			push_error("PlayerUI: %ZoomManager not found!")
+			zoom_controls.visible = false
 
 		# Connect the sequence loader popup (sibling under UI)
 		var popup = get_node("../SequenceLoaderPopup")
@@ -158,6 +192,60 @@ func _on_menu_pressed():
 	# Later we'll add a proper menu system here
 
 # ==========================================
+# ZOOM CONTROLS
+# All four controls converge on ZoomManager's narrow player-input API
+# (select_target / set_zoom_level / reset_zoom / set_highlight_enabled) —
+# see ZoomDesign.md. This file never computes camera math itself.
+# ==========================================
+
+func _on_highlight_toggled(pressed: bool):
+	zoom_mgr.set_highlight_enabled(pressed)
+
+func _on_zoom_out_pressed():
+	zoom_mgr.set_zoom_level(zoom_mgr.zoom_level - 1)
+
+func _on_zoom_in_pressed():
+	# Guard mirrors the disabled state set in _update_zoom_button_states():
+	# + should be a no-op at level 1 with nothing ever selected yet.
+	if zoom_mgr.zoom_level == 1 and zoom_mgr.current_target_id == "":
+		return
+	zoom_mgr.set_zoom_level(zoom_mgr.zoom_level + 1)
+
+func _on_reset_zoom_pressed():
+	zoom_mgr.reset_zoom()
+
+func _on_enzyme_selected(index: int):
+	var id = enzyme_dropdown.get_item_metadata(index)
+	if id != null:
+		zoom_mgr.select_target(id)
+
+func _on_zoom_level_changed(_new_level: int):
+	_update_zoom_button_states()
+
+func _on_zoom_target_changed(new_target_id: String):
+	# Keep the dropdown in sync if the target changed via some other input
+	# method (keyboard/click/voice, later) rather than the dropdown itself.
+	for i in range(enzyme_dropdown.item_count):
+		if enzyme_dropdown.get_item_metadata(i) == new_target_id:
+			enzyme_dropdown.select(i)
+			break
+	_update_zoom_button_states()
+
+func _populate_enzyme_dropdown():
+	enzyme_dropdown.clear()
+	for id in zoom_mgr.get_target_ids():
+		var display_name = zoom_mgr.get_target_display_name(id)
+		enzyme_dropdown.add_item(display_name)
+		enzyme_dropdown.set_item_metadata(enzyme_dropdown.item_count - 1, id)
+
+func _update_zoom_button_states():
+	if not zoom_mgr:
+		return
+	zoom_out_button.disabled = (zoom_mgr.zoom_level <= 1)
+	var no_target_yet = zoom_mgr.zoom_level == 1 and zoom_mgr.current_target_id == ""
+	zoom_in_button.disabled = (zoom_mgr.zoom_level >= 4) or no_target_yet
+
+# ==========================================
 # SIMULATION SIGNAL CALLBACKS
 # ==========================================
 
@@ -188,10 +276,11 @@ func _on_sequence_loaded(new_sequence: String):
 	# Initialize the simulation with the new sequence
 	simulation.initialize_simulation(new_sequence)
 
-	# Reframe the camera to fit the new strand length.
-	var camera = get_viewport().get_camera_2d()
-	if camera and camera.has_method("_frame_strand"):
-		camera._frame_strand()
+	# Reset zoom to the overworld and reframe for the new strand length —
+	# instant, not animated, since panning from the old track's framing
+	# would look wrong on a fresh load.
+	if zoom_mgr and zoom_mgr.has_method("reset_zoom_instant"):
+		zoom_mgr.reset_zoom_instant()
 
 	# Reset the scrubber
 	scrubber.value = 0.0

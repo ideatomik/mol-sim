@@ -149,9 +149,63 @@ var lagging_last_catchup_step: int = 0
 # ==========================================
 
 func _ready():
+	# Register the helicase zoom target once. The frame-provider closes over
+	# `self` and looks up helicase_node fresh each call — it must NOT cache
+	# the node directly, since helicase_node is freed and recreated on every
+	# sequence load (see teardown_simulation() / _setup_helicase()).
+	var zoom_mgr = get_node_or_null("%ZoomManager")
+	if zoom_mgr != null:
+		zoom_mgr.register_target("helicase", _zoom_frame_helicase, _zoom_frame_helicase, "Helicase")
+
 	# Generate a random sequence as the default
 	dna_sequence.randomize_sequence(num_nucleotide_slots)
 	initialize_simulation(dna_sequence._to_string())
+
+# ==========================================
+# ZOOM / HIGHLIGHT
+# Frame-provider for the helicase zoom target, and per-frame highlight-dim
+# application for the strand visuals this file owns directly. See
+# ZoomDesign.md. ZoomManager only ever queries dim factors — it never writes
+# modulate/self_modulate on nodes it doesn't own, so there's exactly one
+# writer per property.
+# ==========================================
+
+func _zoom_frame_helicase() -> Array:
+	if helicase_node == null or not is_instance_valid(helicase_node):
+		return []
+	return [helicase_node.global_position]
+
+func _apply_zoom_highlight() -> void:
+	var zoom_mgr = get_node_or_null("%ZoomManager")
+	if zoom_mgr == null:
+		return
+
+	# Helicase: self_modulate only, so this never fights helicase_node's own
+	# modulate.a (used for the play/pause fade and the intro tween).
+	if helicase_ring != null:
+		helicase_ring.self_modulate.a = zoom_mgr.get_enzyme_highlight_dim("helicase")
+
+	# Template-strand visuals: plain modulate.a is safe here — nothing else
+	# writes it.
+	var strand_dim = zoom_mgr.get_strand_highlight_dim()
+	if backbone_line != null: backbone_line.modulate.a = strand_dim
+	if top_strand_backbone_line != null: top_strand_backbone_line.modulate.a = strand_dim
+	if hydrogen_bonds_container != null: hydrogen_bonds_container.modulate.a = strand_dim
+	if template_hydrogen_bonds_container != null: template_hydrogen_bonds_container.modulate.a = strand_dim
+	if template_strand_original_track != null: template_strand_original_track.modulate.a = strand_dim
+	if top_template_new_track != null: top_template_new_track.modulate.a = strand_dim
+	if marker_template_5p != null: marker_template_5p.modulate.a = strand_dim
+	if marker_template_3p != null: marker_template_3p.modulate.a = strand_dim
+	if marker_top_5p != null: marker_top_5p.modulate.a = strand_dim
+	if marker_top_3p != null: marker_top_3p.modulate.a = strand_dim
+
+func _notify_zoom_scrub() -> void:
+	# Cancels any in-flight zoom level/target tween and snaps the camera
+	# straight to the correct position — scrub is always instant, and the
+	# camera must match (see ZoomDesign.md's scrub-safety split).
+	var zoom_mgr = get_node_or_null("%ZoomManager")
+	if zoom_mgr != null and zoom_mgr.has_method("scrub_snap"):
+		zoom_mgr.scrub_snap()
 
 func initialize_simulation(sequence: String):
 	# Validate and clean the sequence
@@ -463,6 +517,8 @@ func _process(delta):
 			top_strand_slots = top_strand_slots,
 		})
 
+	_apply_zoom_highlight()
+
 	_update_bond_marks(backbone_points)
 
 	# ---- Top template strand ----
@@ -654,6 +710,7 @@ func scrub_to(progress: float):
 	if helicase_node:
 		helicase_node.position = Vector2(helicase_x, center_y)
 
+	_notify_zoom_scrub()
 	queue_redraw()
 
 func scrub_to_nucleotide_index(index: int):
@@ -709,6 +766,7 @@ func scrub_to_lagging_catchup(catchup_step: int) -> void:
 	for i in range(top_strand_slots.size()):
 		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
 
+	_notify_zoom_scrub()
 	queue_redraw()
 
 
