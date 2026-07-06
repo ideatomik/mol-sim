@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://gkb4xyx0ia4h" path="res://scripts/player_ui.gd" id="1_bqch1"]
 [ext_resource type="FontFile" uid="uid://b5ngkvlh4x883" path="res://fonts/GoogleSans/GoogleSans-SemiBold.ttf" id="2_wxbm6"]
+[ext_resource type="FontFile" uid="uid://q1v5f1fmoxhk" path="res://fonts/Raleway/static/Raleway-SemiBold.ttf" id="3_p6wq6"]
 [ext_resource type="FontFile" uid="uid://db3ngjh8pre76" path="res://fonts/Font Awesome/Font Awesome 7 Free-Solid-900.otf" id="4_08kqy"]
 [ext_resource type="StyleBox" uid="uid://v2jecukg40br" path="res://button_styles/normal_dark_bkg.tres" id="4_p6wq6"]
 
@@ -83,9 +84,53 @@ ticks_on_borders = true
 
 [node name="HBoxContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer" unique_id=2001085282]
 layout_mode = 2
+size_flags_horizontal = 4
 size_flags_vertical = 8
 
+[node name="SpeedControls" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer" unique_id=1597779852]
+custom_minimum_size = Vector2(346, 0)
+layout_mode = 2
+size_flags_horizontal = 8
+alignment = 2
+
+[node name="SpeedLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1997999734]
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("3_p6wq6")
+text = "Speed:"
+horizontal_alignment = 2
+
+[node name="SpeedDecreaseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=951124819]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "-"
+
+[node name="SpeedValueLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1220760212]
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("3_p6wq6")
+text = "-1.0x"
+horizontal_alignment = 2
+
+[node name="SpeedLabelSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1555721206]
+custom_minimum_size = Vector2(10, 0)
+layout_mode = 2
+
+[node name="SpeedIncreaseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=114338115]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "+"
+
+[node name="SpeedSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1667768660]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+
 [node name="VSeparator" type="VSeparator" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer" unique_id=1411989187]
+visible = false
 custom_minimum_size = Vector2(306, 0)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -184,9 +229,13 @@ text = ""
 
 [node name="ZoomControls" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer" unique_id=1503029031]
 layout_mode = 2
-size_flags_horizontal = 3
+size_flags_horizontal = 2
 theme_override_constants/separation = 8
 alignment = 1
+
+[node name="ZoomSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=453914453]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
 
 [node name="HighlightButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029032]
 custom_minimum_size = Vector2(28, 24)
@@ -206,7 +255,7 @@ text = "-"
 [node name="EnzymeDropdown" type="OptionButton" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029034]
 custom_minimum_size = Vector2(170, 24)
 layout_mode = 2
-theme_override_fonts/font = ExtResource("2_wxbm6")
+theme_override_fonts/font = ExtResource("3_p6wq6")
 
 [node name="ZoomInButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029035]
 custom_minimum_size = Vector2(24, 24)

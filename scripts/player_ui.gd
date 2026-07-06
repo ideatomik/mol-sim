@@ -22,6 +22,13 @@ extends CanvasLayer
 @onready var fast_forward: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/FastForward
 @onready var eject_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/Eject
 
+# Speed Controls
+@onready var speed_controls: HBoxContainer = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls
+@onready var speed_label: Label = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedLabel
+@onready var speed_decrease_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedDecreaseButton
+@onready var speed_value_label: Label = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedValueLabel
+@onready var speed_increase_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedIncreaseButton
+
 # Zoom Controls
 @onready var zoom_controls: HBoxContainer = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls
 @onready var highlight_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/HighlightButton
@@ -35,6 +42,25 @@ var zoom_mgr: Camera2D = null  # %ZoomManager, cached in _ready()
 var _is_dragging: bool = false
 
 var _stop_icon_default: String = ""
+
+# ==========================================
+# SPEED CONTROLS
+# Ladder maps 1:1 onto helicase_mgr.speed_multiplier via set_speed(). "0x" is
+# NOT a ladder entry — helicase.gd derives step_duration = base_step_duration
+# / speed_multiplier, so a real 0 would divide by zero. Instead 0x is a
+# display-only state shown whenever the sim is paused or done; the selected
+# ladder index is remembered underneath and reapplied the moment play
+# resumes. helicase_mgr is destroyed and recreated on every sequence load
+# (see simulation.gd's initialize_simulation()), always starting back at
+# 1.0x, so the selected index must be explicitly reapplied after
+# simulation_initialized fires — otherwise a speed choice would silently
+# reset on every new sequence.
+# ==========================================
+const SPEED_VALUES: Array[float] = [1.0 / 16.0, 1.0 / 8.0, 1.0 / 4.0, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0, 16.0]
+const SPEED_DISPLAY: Array[String] = ["1/16x", "1/8x", "1/4x", "1/2x", "1x", "1.5x", "2x", "4x", "8x", "16x"]
+const DEFAULT_SPEED_INDEX: int = 4  # 1.0x
+
+var _speed_index: int = DEFAULT_SPEED_INDEX
 
 func _is_simulation_done() -> bool:
 	return simulation.helicase_mgr != null and simulation.helicase_mgr.get_phase() == simulation.helicase_mgr.Phase.DONE
@@ -65,6 +91,23 @@ func _ready():
 		eject_button.pressed.connect(_on_eject_pressed)
 
 		_stop_icon_default = stop_button.text
+
+		# Connect speed controls.
+		# SpeedLabel's text is set to the raw translation key exactly once, at
+		# spawn time — never touched again — same auto-translate mechanism
+		# EnzymeLabelsDesign.md documents for RichTextLabel: plain Label.text
+		# is also a Control text property, so it auto-refreshes on
+		# TranslationServer.set_locale() with zero extra plumbing.
+		speed_label.text = "UI_SPEED_LABEL"
+		speed_decrease_button.pressed.connect(_on_speed_decrease)
+		speed_increase_button.pressed.connect(_on_speed_increase)
+		# NOT _apply_speed_to_helicase() here — PlayerUI is a child of
+		# Simulation, so this _ready() runs BEFORE Simulation's own _ready()
+		# (children before parents), meaning helicase_mgr doesn't exist yet.
+		# The initial application happens in _on_simulation_initialized(),
+		# same as everywhere else in this file that depends on simulation
+		# state being live (e.g. the scrubber's max_value setup below).
+		_update_speed_button_states()
 
 		# Connect zoom controls
 		zoom_mgr = get_node_or_null("%ZoomManager")
@@ -200,6 +243,50 @@ func _on_menu_pressed():
 	# Later we'll add a proper menu system here
 
 # ==========================================
+# SPEED CONTROLS
+# Converge on helicase_mgr.set_speed(), same narrow-API discipline the zoom
+# controls use with ZoomManager — this file never computes speed math itself,
+# just walks the SPEED_VALUES ladder and forwards the result.
+# ==========================================
+
+func _on_speed_decrease():
+	_speed_index = max(0, _speed_index - 1)
+	_apply_speed_to_helicase()
+	_update_speed_display()
+
+func _on_speed_increase():
+	_speed_index = min(SPEED_VALUES.size() - 1, _speed_index + 1)
+	_apply_speed_to_helicase()
+	_update_speed_display()
+
+func _apply_speed_to_helicase():
+	if simulation and simulation.helicase_mgr != null:
+		simulation.helicase_mgr.set_speed(SPEED_VALUES[_speed_index])
+
+func _update_speed_display():
+	# "0x" is display-only (see the SPEED CONTROLS state comment near the top
+	# of this file) — it never gets passed to set_speed(). The underlying
+	# ladder selection is untouched while paused/done, so play/resume picks
+	# the real speed back up with no extra bookkeeping.
+	#
+	# Deliberately NOT _is_simulation_done() here: that checks only
+	# helicase_mgr.get_phase() == Phase.DONE, but the lagging strand keeps
+	# synthesizing on its own independent catch-up timer for a while after
+	# the helicase itself reaches DONE (see replication_manager.gd's
+	# _lagging_start_catchup()). is_fully_complete() is true only once the
+	# whole replisome has actually faded out.
+	var truly_done = simulation and simulation.replication_mgr != null and simulation.replication_mgr.is_fully_complete()
+	if truly_done or (simulation and simulation.manual_override):
+		speed_value_label.text = "0x"
+	else:
+		speed_value_label.text = SPEED_DISPLAY[_speed_index]
+	_update_speed_button_states()
+
+func _update_speed_button_states():
+	speed_decrease_button.disabled = (_speed_index <= 0)
+	speed_increase_button.disabled = (_speed_index >= SPEED_VALUES.size() - 1)
+
+# ==========================================
 # ZOOM CONTROLS
 # All four controls converge on ZoomManager's narrow player-input API
 # (select_target / set_zoom_level / reset_zoom / set_highlight_enabled) —
@@ -295,6 +382,11 @@ func _on_simulation_initialized(total_bases: int):
 	scrubber.max_value = float(simulation.get_max_scrub_index())
 	scrubber.value = 0.0
 	play_pause_button.text = "▶"
+	# helicase_mgr was just destroyed and recreated (see simulation.gd's
+	# initialize_simulation()) and always starts back at speed_multiplier =
+	# 1.0 — reapply whatever speed was already selected so it survives a
+	# sequence reload instead of silently resetting to 1x.
+	_apply_speed_to_helicase()
 	_update_ui()
 	_update_button_states()
 
@@ -351,6 +443,7 @@ func _update_ui():
 	# Update sequence label with rich text
 	sequence_label.bbcode_text = simulation.get_sequence_rich_text()
 
+	_update_speed_display()
 	_update_button_states()
 
 func _update_button_states():

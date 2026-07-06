@@ -356,7 +356,7 @@ func initialize_simulation(sequence: String):
 	if helicase_node:
 		helicase_node.modulate.a = 0.0
 
-	backbone_line.default_color = %ThemeManager.backbone_color
+	backbone_line.default_color = %ThemeManager.template_backbone_color
 	backbone_line.width = %ThemeManager.backbone_line_width
 	backbone_line.z_index = -1
 	backbone_line.joint_mode = Line2D.LINE_JOINT_ROUND
@@ -364,7 +364,7 @@ func initialize_simulation(sequence: String):
 	backbone_line.end_cap_mode = Line2D.LINE_CAP_ROUND
 
 	top_strand_backbone_line = Line2D.new()
-	top_strand_backbone_line.default_color = %ThemeManager.backbone_color
+	top_strand_backbone_line.default_color = %ThemeManager.template_backbone_color
 	top_strand_backbone_line.width = %ThemeManager.backbone_line_width
 	top_strand_backbone_line.z_index = -1
 	top_strand_backbone_line.joint_mode = Line2D.LINE_JOINT_ROUND

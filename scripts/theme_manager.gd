@@ -29,6 +29,7 @@ extends Node
 
 @export_group("Backbone")
 @export var backbone_color: Color = Color(0.43137255, 0.72156864, 1.0, 1.0)
+@export var template_backbone_color: Color = Color(0.6, 0.6, 0.6)  # placeholder — tune in Inspector
 @export var backbone_line_width: float = 16.0
 @export var backbone_offset_distance: float = 24.0
 @export var backbone_offset_smoothing_speed: float = 10.0

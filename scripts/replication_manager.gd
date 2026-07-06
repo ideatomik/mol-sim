@@ -1457,6 +1457,17 @@ func _lagging_natural_done_consumed(num_slots: int, nucleotide_original_x: Array
 func get_lagging_catchup_steps_needed(num_slots: int, nucleotide_original_x: Array) -> int:
 	return num_slots - _lagging_natural_done_consumed(num_slots, nucleotide_original_x)
 
+func is_fully_complete() -> bool:
+	# True only once the whole replisome has visually faded out — i.e. after
+	# lagging catch-up finishes (or, under lagging_gap_enabled, after the
+	# telomere-gap discard settles). helicase_mgr reaching Phase.DONE is NOT
+	# this: the lagging strand keeps synthesizing on its own independent
+	# lagging_catchup_timer for a while after the helicase itself finishes
+	# (see _on_helicase_phase_changed() / _lagging_start_catchup()). Callers
+	# that want "is there still anything moving on screen" should use this,
+	# not helicase_mgr.get_phase() == Phase.DONE.
+	return lagging_polymerase_faded
+
 func _lagging_render_fragment_markers(frag: Dictionary, wobble_t: float, dna_ribbons_gap: float, new_bottom_template_y: float, nucleotide_original_x: Array) -> void:
 	if frag.slots.size() == 0 or not frag.complete:
 		return
