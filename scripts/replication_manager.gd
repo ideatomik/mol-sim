@@ -143,10 +143,27 @@ func initialize(p_sim: Node) -> void:
 		# sequence load. The Callables close over `self` (replication_mgr,
 		# which persists across sequences) and look up leading_polymerase /
 		# lagging_polymerase fresh each call, so they stay valid across
-		# reloads without re-registration. Level 4 reuses the level-3
-		# frame-provider this pass (placeholder — see ZoomDesign.md).
-		zoom_mgr.register_target("leading_polymerase", _zoom_frame_leading, _zoom_frame_leading, "Leading Polymerase")
-		zoom_mgr.register_target("lagging_polymerase", _zoom_frame_lagging, _zoom_frame_lagging, "Lagging Polymerase")
+		# reloads without re-registration. Level 4 has been removed entirely
+		# (design decision) — enzymes now register level 3 only... and as of
+		# this pass, level 2 too, now that it has real "regional context"
+		# framing instead of the old placeholder. entry_level is therefore 2
+		# for both polymerases now (was 3) — selecting one from the dropdown
+		# jumps straight to level 2, same as the new-strand targets.
+		zoom_mgr.register_target("leading_polymerase", {2: _zoom_frame_leading_level2, 3: _zoom_frame_leading_level3}, "ZOOM_LEADING_POLYMERASE", _zoom_leading_visible)
+		zoom_mgr.register_target("lagging_polymerase", {2: _zoom_frame_lagging_level2, 3: _zoom_frame_lagging_level3}, "ZOOM_LAGGING_POLYMERASE", _zoom_lagging_visible)
+		# The two new DNA strands themselves, not enzymes. Unlike the enzymes
+		# above, these have entry_level 2 (the lowest key below) — select_target()
+		# jumps straight to level 2, and + walks 2 -> 3. No level 4 for these
+		# either. See the two frame-provider functions below for what each
+		# level shows.
+		zoom_mgr.register_target("new_leading_strand", {
+			2: _zoom_frame_new_leading_level2,
+			3: _zoom_frame_new_leading_level3,
+		}, "ZOOM_NEW_LEADING_STRAND", _zoom_new_leading_visible)
+		zoom_mgr.register_target("new_lagging_strand", {
+			2: _zoom_frame_new_lagging_level2,
+			3: _zoom_frame_new_lagging_level3,
+		}, "ZOOM_NEW_LAGGING_STRAND", _zoom_new_lagging_visible)
 	lagging_polymerase = p_sim.synthesis_circle
 	lagging_polymerase.z_index = 10
 	lagging_polymerase_faded = false
@@ -309,7 +326,7 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 			lagging_pump_tween.kill()
 		if lagging_clamp != null:
 			lagging_clamp.set_pump(0.0)
-		
+
 		lagging_polymerase.position = Vector2(lagging_polymerase_x, ctx.new_bottom_template_y)
 
 # ==========================================
@@ -356,37 +373,230 @@ func render(delta: float, ctx: Dictionary) -> void:
 # ZoomDesign.md and zoom_manager.gd's file banner for the ownership contract.
 # ==========================================
 
-func _zoom_frame_leading() -> Array:
-	if leading_polymerase == null or not is_instance_valid(leading_polymerase):
-		return []
-	if sim.helicase_node == null or not is_instance_valid(sim.helicase_node):
-		return [leading_polymerase.global_position]
-	return [leading_polymerase.global_position, sim.helicase_node.global_position]
+## Fit percentages, same tunable-by-eye pattern that worked for the
+## new-strand targets — nudge these directly if the framing needs
+## adjustment once tested in-engine.
+const POLYMERASE_LEVEL3_FIT: float = 0.6  # "exclusively focused": polymerase alone, geometric footprint (shared by leading+lagging)
 
-func _zoom_frame_lagging() -> Array:
-	if lagging_polymerase == null or not is_instance_valid(lagging_polymerase):
-		return []
+## Shared by both clamps — same clamp geometry either way. Reuses the EXACT
+## formula polymerase_clamp.gd itself uses for its own label placement
+## (half_down = back_base_height * 0.5, doubled here for full height), so
+## this tracks any ThemeManager "Polymerase Clamp" tuning automatically
+## rather than duplicating a guessed constant.
+func _polymerase_footprint_height() -> float:
+	var span: float = sim.dna_ribbons_gap + 2.0 * (float(tm.backbone_offset_distance) + float(tm.backbone_line_width) * 0.5)
+	return span + 2.0 * tm.clamp_margin
+
+## Level 2 fit percentages. Leading and lagging now use genuinely different
+## MECHANISMS, not just different numbers — see the two functions below for
+## why — so each gets its own named constant even though both still land in
+## replication_manager.gd's shared "tune by eye" style.
+const LEADING_LEVEL2_FIT: float = 0.35   # anchor-centered bounding box with the helicase
+const LAGGING_LEVEL2_FIT: float = 0.35   # standalone footprint, no helicase in frame at all
+
+## Level 2 — "regional context": camera CENTERS ON leading polymerase
+## itself, sized just wide/tall enough that the helicase also fits in frame.
+## Anchor-centering (not a bounding-box midpoint) is safe here because
+## leading stays close to the helicase at all times — unlike lagging (see
+## _zoom_frame_lagging_level2() below), there's no risk of this swinging the
+## zoom out wildly.
+func _zoom_frame_leading_level2() -> Dictionary:
+	if leading_polymerase == null or not is_instance_valid(leading_polymerase):
+		return {}
 	if sim.helicase_node == null or not is_instance_valid(sim.helicase_node):
-		return [lagging_polymerase.global_position]
-	return [lagging_polymerase.global_position, sim.helicase_node.global_position]
+		return _polymerase_footprint_frame(leading_polymerase, LEADING_LEVEL2_FIT)
+	var context: Array = [sim.helicase_node.global_position]
+	return _anchor_centered_frame(leading_polymerase.global_position, context, LEADING_LEVEL2_FIT)
+
+func _zoom_frame_leading_level3() -> Dictionary:
+	return _polymerase_footprint_frame(leading_polymerase, POLYMERASE_LEVEL3_FIT)
+
+## Level 2 — deliberately does NOT include the helicase in frame, unlike
+## leading's version above. Lagging periodically jumps back to the start of
+## a new Okazaki fragment then creeps forward again as it fires — tracking
+## it alone (fixed zoom, panning position) means the camera's own motion
+## against the static DNA background *is* that back-and-forth, which is the
+## whole pedagogical point (per this session's discussion): you watch it
+## catch up toward where the helicase/leading currently are, then fall
+## behind again as the next fragment opens — without needing the helicase
+## literally boxed into frame for that to read.
+func _zoom_frame_lagging_level2() -> Dictionary:
+	return _polymerase_footprint_frame(lagging_polymerase, LAGGING_LEVEL2_FIT)
+
+func _zoom_frame_lagging_level3() -> Dictionary:
+	return _polymerase_footprint_frame(lagging_polymerase, POLYMERASE_LEVEL3_FIT)
+
+## Centers the camera ON `anchor` (the highlighted object) rather than on
+## the bounding-box midpoint of anchor+context — sizes the frame
+## symmetrically around the anchor just far enough to include every context
+## point, so the anchor is guaranteed to land dead-center on screen. Only
+## used where the context point stays reasonably close to the anchor
+## (leading+helicase); lagging deliberately avoids this (see above).
+func _anchor_centered_frame(anchor: Vector2, context: Array, fit_pct: float) -> Dictionary:
+	var max_dx: float = 0.0
+	var max_dy: float = 0.0
+	for p in context:
+		max_dx = max(max_dx, abs(p.x - anchor.x))
+		max_dy = max(max_dy, abs(p.y - anchor.y))
+	var size: Vector2 = Vector2(max(max_dx * 2.0, 1.0), max(max_dy * 2.0, 1.0))
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1152, 648)
+	var target_zoom: float = min((viewport_size.x * fit_pct) / size.x, (viewport_size.y * fit_pct) / size.y)
+	return {zoom = target_zoom, position = anchor}
+
+func _polymerase_footprint_frame(clamp_node: Node2D, fit_pct: float) -> Dictionary:
+	if clamp_node == null or not is_instance_valid(clamp_node):
+		return {}
+	var footprint_height: float = _polymerase_footprint_height()
+	if footprint_height <= 0.0:
+		return {}
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * fit_pct) / footprint_height
+	return {zoom = target_zoom, position = clamp_node.global_position}
+
+## Reuses leading_polymerase/lagging_polymerase's own modulate.a — the exact
+## signal the proximity fade-in logic (_leading_render/_lagging_render) is
+## already setting to 0.0 before it's near enough to be relevant, rather than
+## introducing a second, possibly-out-of-sync notion of "visible."
+func _zoom_leading_visible() -> bool:
+	return leading_polymerase != null and is_instance_valid(leading_polymerase) and leading_polymerase.modulate.a > 0.01
+
+func _zoom_lagging_visible() -> bool:
+	return lagging_polymerase != null and is_instance_valid(lagging_polymerase) and lagging_polymerase.modulate.a > 0.01
+
+## Vertical-fit percentages for the new-strand targets:
+##  - Level 2 shows all four rows around the fork's vertical spread (new
+##    strand, template's unzipped row, template's bonded/pre-fork row, other
+##    template's row) at 80% screen height.
+##  - Level 3 shows just the new strand + its paired template's unzipped
+##    row, tighter, at 70% screen height (15% padding — deliberately more
+##    than level 2's 10%, so it reads as visibly different from level 2
+##    rather than landing on the same effective zoom).
+## Both are height-ONLY fits (return a Dictionary, not points) — width isn't
+## a constraint here, per this session's direction to treat vertical space
+## as the primary reference for these targets; horizontal position stays
+## centered on the track (same as level 1) at both levels.
+const NEW_STRAND_LEVEL2_VERTICAL_FIT: float = 0.6
+const NEW_STRAND_LEVEL3_VERTICAL_FIT: float = 0.2
+
+# --- New Leading Strand (pairs with the ORIGINAL TOP template) ---
+#
+# Four rows, top to bottom (confirmed against _rebuild_top_rail() and the
+# actual leading-base positioning in _leading_render()):
+#   new_top_template_y - dna_ribbons_gap   <- new leading strand's own row
+#   new_top_template_y                     <- top template, UNZIPPED (post-fork) row
+#   template_strand_y - dna_ribbons_gap    <- top template, BONDED (pre-fork) row
+#   template_strand_y                      <- bottom template's row
+# The gap between rows 1-2 and between rows 3-4 are both exactly
+# dna_ribbons_gap, symmetric around the polymerase_y_offset zone (rows 2-3)
+# — so centering on the full four-row span and centering on just the
+# polymerase_y_offset zone land on the exact same point algebraically.
+
+func _zoom_frame_new_leading_level2() -> Dictionary:
+	if sim == null or not ("track_length" in sim) or sim.track_length <= 0.0:
+		return {}
+	var new_strand_y: float = sim.new_top_template_y - sim.dna_ribbons_gap
+	var bottom_template_y: float = sim.template_strand_y
+	var mid_y: float = (new_strand_y + bottom_template_y) * 0.5
+	# base_radius on each end: span between row CENTERLINES isn't the same
+	# as the span of actual rendered content — the nucleotide circles extend
+	# base_radius beyond their own centerline in each direction, and it's
+	# THAT outer edge that needs to fit within the padding, not the bare
+	# centerline distance (confirmed via debug screenshots: without this,
+	# the circles themselves overflow the intended padding at high zoom).
+	var content_span: float = (bottom_template_y - new_strand_y)# + 2.0 * tm.base_radius
+	if content_span <= 0.0:
+		return {}
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * NEW_STRAND_LEVEL2_VERTICAL_FIT) / content_span
+	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
+
+func _zoom_frame_new_leading_level3() -> Dictionary:
+	if sim == null or not ("track_length" in sim) or sim.track_length <= 0.0:
+		return {}
+	var new_strand_y: float = sim.new_top_template_y - sim.dna_ribbons_gap
+	var unzipped_template_y: float = sim.new_top_template_y
+	var mid_y: float = (new_strand_y + unzipped_template_y) * 0.5
+	var content_span: float = abs(unzipped_template_y - new_strand_y)# + 2.0 * tm.base_radius
+	if content_span <= 0.0:
+		return {}
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * NEW_STRAND_LEVEL3_VERTICAL_FIT) / content_span
+	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
+
+func _zoom_new_leading_visible() -> bool:
+	return leading_backbone_line != null and is_instance_valid(leading_backbone_line) and leading_backbone_line.points.size() > 0
+
+# --- New Lagging Strand (pairs with the ORIGINAL BOTTOM template) ---
+#
+# Mirrors the leading strand's structure exactly, flipped: leading's level 2
+# used [new leading strand, top unzipped, top bonded, bottom bonded] with
+# the OTHER template's bonded row as the far boundary. Lagging's mirrors
+# that with top/bottom swapped: [top bonded, bottom bonded, bottom unzipped,
+# new lagging strand] — the far boundary here is the TOP template's bonded
+# row (template_strand_y - dna_ribbons_gap), NOT anything from the leading
+# strand's own rows.
+#   template_strand_y - dna_ribbons_gap     <- top template, BONDED row (far boundary)
+#   template_strand_y                       <- bottom template, BONDED row
+#   new_bottom_template_y                   <- bottom template, UNZIPPED row
+#   new_bottom_template_y + dna_ribbons_gap <- new lagging strand's own row
+
+func _zoom_frame_new_lagging_level2() -> Dictionary:
+	if sim == null or not ("track_length" in sim) or sim.track_length <= 0.0:
+		return {}
+	var top_boundary_y: float = sim.template_strand_y - sim.dna_ribbons_gap
+	var new_strand_y: float = sim.new_bottom_template_y + sim.dna_ribbons_gap
+	var mid_y: float = (top_boundary_y + new_strand_y) * 0.5
+	# base_radius on each end — see the matching comment in
+	# _zoom_frame_new_leading_level2() for why this is needed.
+	var content_span: float = (new_strand_y - top_boundary_y)# + 2.0 * tm.base_radius
+	if content_span <= 0.0:
+		return {}
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * NEW_STRAND_LEVEL2_VERTICAL_FIT) / content_span
+	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
+
+func _zoom_frame_new_lagging_level3() -> Dictionary:
+	if sim == null or not ("track_length" in sim) or sim.track_length <= 0.0:
+		return {}
+	var unzipped_template_y: float = sim.new_bottom_template_y
+	var new_strand_y: float = sim.new_bottom_template_y + sim.dna_ribbons_gap
+	var mid_y: float = (unzipped_template_y + new_strand_y) * 0.5
+	var content_span: float = abs(new_strand_y - unzipped_template_y)# + 2.0 * tm.base_radius
+	if content_span <= 0.0:
+		return {}
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * NEW_STRAND_LEVEL3_VERTICAL_FIT) / content_span
+	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
+
+func _zoom_new_lagging_visible() -> bool:
+	return lagging_backbone_line != null and is_instance_valid(lagging_backbone_line) and lagging_backbone_line.points.size() > 0
+
 
 func _apply_highlight() -> void:
 	if zoom_mgr == null:
 		return
 
-	# Enzymes: self_modulate only, applied to the nodes that actually draw
-	# (the clamp + halo, not the position-only leading_polymerase/
-	# lagging_polymerase containers). This never fights the existing
-	# modulate.a proximity fade-in tweens on those containers — self_modulate
-	# and modulate multiply together independently, so exactly one system
-	# writes each property.
+	# Enzymes: writes the CLAMP/HALO's own `modulate` — NOT self_modulate,
+	# and NOT the parent leading_polymerase/lagging_polymerase container's
+	# modulate. self_modulate was a real bug (confirmed via screenshots):
+	# leading_clamp/lagging_clamp are themselves just Node2D containers with
+	# no drawing of their own — the actual shapes are _back/_jaw/_lowerjaw,
+	# their own children — so self_modulate on the clamp had literally no
+	# visible effect. Regular `modulate` DOES propagate to children, and
+	# writing it here (one level below the fade-owning container) is still
+	# conflict-free: the proximity fade-in system only ever writes
+	# leading_polymerase/lagging_polymerase's OWN modulate (the parent),
+	# never leading_clamp/lagging_clamp's — still exactly one writer per
+	# property, just one level down from where this used to sit. This also
+	# fixes the enzyme labels not dimming (they're children too, and
+	# modulate reaches them where self_modulate never did).
 	var leading_dim = zoom_mgr.get_enzyme_highlight_dim("leading_polymerase")
-	if leading_clamp != null: leading_clamp.self_modulate.a = leading_dim
-	if leading_halo != null: leading_halo.self_modulate.a = leading_dim
+	if leading_clamp != null: leading_clamp.modulate.a = leading_dim
+	if leading_halo != null: leading_halo.modulate.a = leading_dim
 
 	var lagging_dim = zoom_mgr.get_enzyme_highlight_dim("lagging_polymerase")
-	if lagging_clamp != null: lagging_clamp.self_modulate.a = lagging_dim
-	if lagging_halo != null: lagging_halo.self_modulate.a = lagging_dim
+	if lagging_clamp != null: lagging_clamp.modulate.a = lagging_dim
+	if lagging_halo != null: lagging_halo.modulate.a = lagging_dim
 
 	# Strand visuals: plain modulate.a is safe here — nothing else writes it.
 	var strand_dim = zoom_mgr.get_strand_highlight_dim()
@@ -1488,28 +1698,20 @@ func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
 	return marker
 
 func _create_bond_mark_sprite() -> Node2D:
+	# Single triangle, tip pointing LEFT — see the matching function in
+	# simulation.gd for the full rationale (replaces a two-diamond masking
+	# trick that broke visibly during alpha fades).
 	var holder = Node2D.new()
 	var h = tm.backbone_line_width / 2.0
 	var w = tm.bond_mark_width
-	var black_diamond = Polygon2D.new()
-	black_diamond.polygon = PackedVector2Array([
-		Vector2(w / 2.0, 0),
-		Vector2(0, -h),
+	var triangle = Polygon2D.new()
+	triangle.polygon = PackedVector2Array([
 		Vector2(-w / 2.0, 0),
-		Vector2(0, h),
-	])
-	black_diamond.color = tm.bond_mark_black_color
-	holder.add_child(black_diamond)
-	var back_inset = tm.bond_mark_back_inset
-	var magenta_diamond = Polygon2D.new()
-	magenta_diamond.polygon = PackedVector2Array([
-		Vector2(w / 2.0, 0),
 		Vector2(0, -h),
-		Vector2(-w / 2.0 + back_inset, 0),
 		Vector2(0, h),
 	])
-	magenta_diamond.color = tm.backbone_color
-	holder.add_child(magenta_diamond)
+	triangle.color = tm.bond_mark_color
+	holder.add_child(triangle)
 	holder.z_index = 1
 	sim.add_child(holder)
 	return holder

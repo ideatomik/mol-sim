@@ -149,13 +149,16 @@ var lagging_last_catchup_step: int = 0
 # ==========================================
 
 func _ready():
-	# Register the helicase zoom target once. The frame-provider closes over
-	# `self` and looks up helicase_node fresh each call — it must NOT cache
-	# the node directly, since helicase_node is freed and recreated on every
-	# sequence load (see teardown_simulation() / _setup_helicase()).
+	# Register the helicase zoom target once. The frame-providers close over
+	# `self` and look up helicase_node/replication_mgr fresh each call — must
+	# NOT cache the node directly, since helicase_node is freed and recreated
+	# on every sequence load (see teardown_simulation() / _setup_helicase()).
+	# NOTE: entry_level is now 2 (was 3) — now that level 2 has real content
+	# (see below), selecting "Helicase" from the dropdown jumps straight to
+	# level 2, same as the new-strand targets, rather than skipping to 3.
 	var zoom_mgr = get_node_or_null("%ZoomManager")
 	if zoom_mgr != null:
-		zoom_mgr.register_target("helicase", _zoom_frame_helicase, _zoom_frame_helicase, "Helicase")
+		zoom_mgr.register_target("helicase", {2: _zoom_frame_helicase_level2, 3: _zoom_frame_helicase_level3}, "ENZYME_HELICASE", _zoom_helicase_visible)
 
 	# Generate a random sequence as the default
 	dna_sequence.randomize_sequence(num_nucleotide_slots)
@@ -163,27 +166,104 @@ func _ready():
 
 # ==========================================
 # ZOOM / HIGHLIGHT
-# Frame-provider for the helicase zoom target, and per-frame highlight-dim
+# Frame-providers for the helicase zoom target, and per-frame highlight-dim
 # application for the strand visuals this file owns directly. See
 # ZoomDesign.md. ZoomManager only ever queries dim factors — it never writes
 # modulate/self_modulate on nodes it doesn't own, so there's exactly one
 # writer per property.
 # ==========================================
 
-func _zoom_frame_helicase() -> Array:
+## Fit percentages, same tunable-by-eye pattern that worked for the
+## new-strand targets — nudge these directly if the framing needs
+## adjustment once tested in-engine.
+const HELICASE_LEVEL2_FIT: float = 0.6  # "regional context": helicase + leading polymerase only (lagging excluded — see function below)
+const HELICASE_LEVEL3_FIT: float = 0.8  # "exclusively focused": helicase alone, geometric footprint
+
+## Level 2 — "regional context": camera CENTERS ON the helicase itself
+## (the highlighted object), sized just wide/tall enough that LEADING
+## polymerase also fits in frame. Lagging is deliberately EXCLUDED from
+## this sizing calculation — same fix as _zoom_frame_lagging_level2()'s own
+## Level 2, applied here for the same reason: lagging periodically swings
+## far from the helicase (Okazaki fragment jump-back), and including it
+## here would force the zoom to double outward to keep it in frame every
+## cycle, the same runaway-zoom problem already fixed for lagging's own
+## view. Leading stays close at all times, so sizing around it alone keeps
+## this view's zoom stable. Lagging is free to wander in and out of frame
+## as it does its own thing — its disappearing/reappearing is itself part
+## of the "leading is steady, lagging chases" contrast this view exists to
+## teach, not something to compensate for.
+func _zoom_frame_helicase_level2() -> Dictionary:
 	if helicase_node == null or not is_instance_valid(helicase_node):
-		return []
-	return [helicase_node.global_position]
+		return {}
+	var context: Array = []
+	if replication_mgr != null and replication_mgr.leading_polymerase != null and is_instance_valid(replication_mgr.leading_polymerase):
+		context.append(replication_mgr.leading_polymerase.global_position)
+
+	if context.is_empty():
+		return _helicase_footprint_frame(HELICASE_LEVEL2_FIT)
+
+	return _anchor_centered_frame(helicase_node.global_position, context, HELICASE_LEVEL2_FIT)
+
+## Centers the camera ON `anchor` (the highlighted object) — NOT on the
+## bounding-box midpoint of anchor+context, which is what a naive box-fit
+## would do and is exactly the bug this replaced: it pulled the camera
+## toward whatever's between the helicase and its polymerases instead of
+## keeping the helicase itself as the visual center. Sizes the frame
+## symmetrically around the anchor just far enough to include every context
+## point, so the anchor is guaranteed to land dead-center on screen.
+func _anchor_centered_frame(anchor: Vector2, context: Array, fit_pct: float) -> Dictionary:
+	var max_dx: float = 0.0
+	var max_dy: float = 0.0
+	for p in context:
+		max_dx = max(max_dx, abs(p.x - anchor.x))
+		max_dy = max(max_dy, abs(p.y - anchor.y))
+	var size: Vector2 = Vector2(max(max_dx * 2.0, 1.0), max(max_dy * 2.0, 1.0))
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1152, 648)
+	var target_zoom: float = min((viewport_size.x * fit_pct) / size.x, (viewport_size.y * fit_pct) / size.y)
+	return {zoom = target_zoom, position = anchor}
+
+func _zoom_frame_helicase_level3() -> Dictionary:
+	return _helicase_footprint_frame(HELICASE_LEVEL3_FIT)
+
+## Geometrically-derived footprint, reusing the EXACT formula
+## helicase_ring.gd already uses for its own label placement
+## (ring_radius + max_blob_height * 0.5 = "the ring's tallest reach", per
+## its own comment) — doubled for full height. Grounded in real geometry
+## rather than a guessed constant, and automatically stays correct if
+## ring_radius/max_blob_height are ever retuned in the Inspector.
+func _helicase_footprint_frame(fit_pct: float) -> Dictionary:
+	if helicase_node == null or not is_instance_valid(helicase_node) or helicase_ring == null:
+		return {}
+	var footprint_height: float = 2.0 * helicase_ring.ring_radius + helicase_ring.max_blob_height
+	if footprint_height <= 0.0:
+		return {}
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * fit_pct) / footprint_height
+	return {zoom = target_zoom, position = helicase_node.global_position}
+
+## Reuses helicase_node's own modulate.a — the exact signal it already sets
+## to 0.0 before the first play and 1.0 once faded in — rather than
+## introducing a second, possibly-out-of-sync notion of "visible."
+func _zoom_helicase_visible() -> bool:
+	return helicase_node != null and is_instance_valid(helicase_node) and helicase_node.modulate.a > 0.01
 
 func _apply_zoom_highlight() -> void:
 	var zoom_mgr = get_node_or_null("%ZoomManager")
 	if zoom_mgr == null:
 		return
 
-	# Helicase: self_modulate only, so this never fights helicase_node's own
-	# modulate.a (used for the play/pause fade and the intro tween).
+	# Helicase: writes helicase_ring's own `modulate` — NOT self_modulate.
+	# self_modulate was a real bug (confirmed via screenshots): helicase_ring
+	# is itself just a Node2D container with no drawing of its own — the
+	# actual barrel-roll blobs are its own children (_blobs), so
+	# self_modulate on the ring had no visible effect. Regular `modulate`
+	# propagates to children and is still conflict-free here: helicase_node
+	# (the parent) is what the play/pause fade and intro tween write to,
+	# never helicase_ring's own modulate — still exactly one writer per
+	# property, one level down from where this used to sit. Also fixes the
+	# helicase's label not dimming (a child too, unreached by self_modulate).
 	if helicase_ring != null:
-		helicase_ring.self_modulate.a = zoom_mgr.get_enzyme_highlight_dim("helicase")
+		helicase_ring.modulate.a = zoom_mgr.get_enzyme_highlight_dim("helicase")
 
 	# Template-strand visuals: plain modulate.a is safe here — nothing else
 	# writes it.
@@ -1127,55 +1207,47 @@ func _update_bond_marks_top_strand(points: PackedVector2Array):
 			mark.rotation = segment.angle()
 
 func _create_bond_mark_sprite() -> Node2D:
+	# Single triangle, tip pointing LEFT — replaces the old two-diamond
+	# masking trick (a full black diamond with a second, background-colored
+	# diamond overlaid to "erase" part of it). That trick broke visibly
+	# during alpha fades: fading the holder faded BOTH diamonds together,
+	# so the masking diamond's own transparency let the covered part of the
+	# black diamond show back through, revealing two overlapping triangles
+	# instead of one clean shape. This triangle is geometrically the LEFT
+	# HALF of the old black diamond (tip at the diamond's original left
+	# vertex, flat back edge spanning the full height at center) — exactly
+	# what the masking trick was already visually approximating, just as an
+	# actual single shape instead of an illusion built from two.
 	var holder = Node2D.new()
 	var h = %ThemeManager.backbone_line_width / 2.0
 	var w = %ThemeManager.bond_mark_width
-	var black_diamond = Polygon2D.new()
-	black_diamond.polygon = PackedVector2Array([
-		Vector2(w / 2.0, 0),
-		Vector2(0, -h),
+	var triangle = Polygon2D.new()
+	triangle.polygon = PackedVector2Array([
 		Vector2(-w / 2.0, 0),
-		Vector2(0, h),
-	])
-	black_diamond.color = %ThemeManager.bond_mark_black_color
-	holder.add_child(black_diamond)
-	var back_inset = %ThemeManager.bond_mark_back_inset
-	var magenta_diamond = Polygon2D.new()
-	magenta_diamond.polygon = PackedVector2Array([
-		Vector2(w / 2.0, 0),
 		Vector2(0, -h),
-		Vector2(-w / 2.0 + back_inset, 0),
 		Vector2(0, h),
 	])
-	magenta_diamond.color = %ThemeManager.backbone_color
-	holder.add_child(magenta_diamond)
+	triangle.color = %ThemeManager.bond_mark_color
+	holder.add_child(triangle)
 	holder.z_index = 1
 	add_child(holder)
 	return holder
 
 func _create_bond_mark_sprite_reversed() -> Node2D:
+	# Mirror of _create_bond_mark_sprite() above — tip points RIGHT instead
+	# of left. Same single-triangle replacement for the same two-diamond
+	# masking trick; see that function's comment for the full rationale.
 	var holder = Node2D.new()
 	var h = %ThemeManager.backbone_line_width / 2.0
 	var w = %ThemeManager.bond_mark_width
-	var black_diamond = Polygon2D.new()
-	black_diamond.polygon = PackedVector2Array([
+	var triangle = Polygon2D.new()
+	triangle.polygon = PackedVector2Array([
 		Vector2(w / 2.0, 0),
 		Vector2(0, -h),
-		Vector2(-w / 2.0, 0),
 		Vector2(0, h),
 	])
-	black_diamond.color = %ThemeManager.bond_mark_black_color
-	holder.add_child(black_diamond)
-	var back_inset = %ThemeManager.bond_mark_back_inset
-	var magenta_diamond = Polygon2D.new()
-	magenta_diamond.polygon = PackedVector2Array([
-		Vector2(w / 2.0 - back_inset, 0),
-		Vector2(0, -h),
-		Vector2(-w / 2.0, 0),
-		Vector2(0, h),
-	])
-	magenta_diamond.color = %ThemeManager.backbone_color
-	holder.add_child(magenta_diamond)
+	triangle.color = %ThemeManager.bond_mark_color
+	holder.add_child(triangle)
 	holder.z_index = 1
 	add_child(holder)
 	return holder

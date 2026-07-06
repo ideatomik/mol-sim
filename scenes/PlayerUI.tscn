@@ -8,6 +8,9 @@
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_wxbm6"]
 bg_color = Color(1, 1, 1, 0)
 
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_08kqy"]
+color = Color(0, 0, 0, 0)
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_08kqy"]
 bg_color = Color(1, 1, 1, 1)
 border_width_left = 1
@@ -78,27 +81,37 @@ step = 0.001
 allow_greater = true
 ticks_on_borders = true
 
-[node name="TransportButtons" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer" unique_id=1503029030]
+[node name="HBoxContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer" unique_id=2001085282]
+layout_mode = 2
+size_flags_vertical = 8
+
+[node name="VSeparator" type="VSeparator" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer" unique_id=1411989187]
+custom_minimum_size = Vector2(306, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/separator = SubResource("StyleBoxLine_08kqy")
+
+[node name="TransportButtons" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer" unique_id=1503029030]
 layout_mode = 2
 size_flags_horizontal = 4
 alignment = 1
 
-[node name="PlayPauseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1403819340]
+[node name="PlayPauseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=1403819340]
 custom_minimum_size = Vector2(52, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "▶"
 
-[node name="LeftSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=723413838]
+[node name="LeftSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=723413838]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
-[node name="LeftSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1861830833]
+[node name="LeftSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=1861830833]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
-[node name="FastBackward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=27729213]
+[node name="FastBackward" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=27729213]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
@@ -106,57 +119,57 @@ theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "⏮
 "
 
-[node name="Backward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=297196538]
+[node name="Backward" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=297196538]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
 
-[node name="StopButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=112233449]
+[node name="StopButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=112233449]
 custom_minimum_size = Vector2(32, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "⏹"
 
-[node name="Forward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=736944061]
+[node name="Forward" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=736944061]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
 
-[node name="FastForward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1641860863]
+[node name="FastForward" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=1641860863]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "⏭"
 
-[node name="EjectSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1939655509]
+[node name="EjectSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=1939655509]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
-[node name="EjectSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1895488134]
+[node name="EjectSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=1895488134]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
-[node name="Eject" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=825391452]
+[node name="Eject" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=825391452]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
 
-[node name="Menu" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1733611362]
+[node name="Menu" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=1733611362]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
 
-[node name="Button" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=415854509]
+[node name="Button" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=415854509]
 visible = false
 custom_minimum_size = Vector2(30, 0)
 layout_mode = 2
@@ -169,40 +182,40 @@ theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = SubResource("StyleBoxFlat_08kqy")
 text = ""
 
-[node name="ZoomControls" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer" unique_id=1503029031]
+[node name="ZoomControls" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer" unique_id=1503029031]
 layout_mode = 2
-size_flags_horizontal = 4
+size_flags_horizontal = 3
 theme_override_constants/separation = 8
 alignment = 1
 
-[node name="HighlightButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029032]
+[node name="HighlightButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029032]
 custom_minimum_size = Vector2(28, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 toggle_mode = true
-text = "◐"
+text = ""
 
-[node name="ZoomOutButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029033]
+[node name="ZoomOutButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029033]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "-"
 
-[node name="EnzymeDropdown" type="OptionButton" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029034]
+[node name="EnzymeDropdown" type="OptionButton" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029034]
 custom_minimum_size = Vector2(170, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("2_wxbm6")
 
-[node name="ZoomInButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029035]
+[node name="ZoomInButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029035]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "+"
 
-[node name="ResetZoomButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ZoomControls" unique_id=1503029036]
+[node name="ResetZoomButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029036]
 custom_minimum_size = Vector2(28, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")

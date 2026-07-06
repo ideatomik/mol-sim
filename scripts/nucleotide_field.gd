@@ -269,20 +269,41 @@ func _draw() -> void:
 # ==========================================
 
 func _visible_world_rect() -> Rect2:
-	# World-space rectangle currently visible through the active Camera2D,
-	# derived from the viewport's canvas transform — this accounts for camera
-	# position and zoom automatically, without needing to know the camera's
-	# own setup.
+	# v72 fix (zoom system integration): this used to derive the rect live
+	# from the viewport's canvas transform every frame — correct in spirit
+	# (zoom-aware), but it meant the WRAP boundary itself shrank to whatever
+	# tiny region was on-screen while zoomed into a single enzyme (level
+	# 3/4). Since the per-frame wrap in _process() only pulls a particle
+	# inward by one span-width when it crosses the CURRENT rect's edge,
+	# zooming in effectively compressed the whole field into that small
+	# area; zooming back out then revealed a cluster that took a long time
+	# to re-disperse via the slow Brownian drift.
+	#
+	# Fix: always wrap within the full "overworld" extent — mirrors
+	# zoom_manager.gd's level-1 fit-to-track math (90% width) — regardless
+	# of the camera's CURRENT zoom level. Godot already culls anything
+	# off-screen, so the field doesn't need to track the live view; it only
+	# needs a stable region to roam so it's evenly distributed whenever the
+	# player zooms back out to level 1.
 	var vp = get_viewport()
-	if vp == null:
-		return Rect2(0, 0, 1152, 648)
-	var ct = vp.get_canvas_transform()
-	var scale = ct.get_scale()
-	var top_left = ct.affine_inverse() * Vector2.ZERO
-	var size = vp.get_visible_rect().size
-	if scale.x != 0.0 and scale.y != 0.0:
-		size = size / scale
-	return Rect2(top_left, size)
+	var viewport_size: Vector2 = vp.get_visible_rect().size if vp != null else Vector2(1152, 648)
+	if sim == null or not ("track_length" in sim) or sim.track_length <= 0.0:
+		return Rect2(Vector2.ZERO, viewport_size)  # fallback before the first sequence load
+	var track_length: float = sim.track_length
+	var mid_y: float = sim.center_y if ("center_y" in sim) else viewport_size.y * 0.5
+	# Mirrors zoom_manager.gd's _compute_strand_fit() exactly: track_length
+	# only fills 90% of the screen width at level 1's zoom, so the actual
+	# visible world rect (what this field should roam within) is wider than
+	# track_length itself, centered the same way the level-1 camera is.
+	# edge_margin is intentionally NOT added here — _process() already adds
+	# it on top of whatever this returns, same as before this fix.
+	var overworld_zoom: float = (viewport_size.x * 0.90) / track_length
+	var world_width: float = viewport_size.x / overworld_zoom
+	var world_height: float = viewport_size.y / overworld_zoom
+	return Rect2(
+		Vector2(track_length * 0.5 - world_width * 0.5, mid_y - world_height * 0.5),
+		Vector2(world_width, world_height)
+	)
 
 # ==========================================
 # SETTERS (Inspector-live)

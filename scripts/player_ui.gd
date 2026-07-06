@@ -10,25 +10,25 @@ extends CanvasLayer
 # UI Node References
 @onready var sequence_label: RichTextLabel = $Panel/MarginContainer/VBoxContainer/VBoxContainer/SequenceLabel
 @onready var scrubber: HSlider = $Panel/MarginContainer/VBoxContainer/VBoxContainer/Scrubber
-@onready var transport_buttons: HBoxContainer = $Panel/MarginContainer/VBoxContainer/TransportButtons
+@onready var transport_buttons: HBoxContainer = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons
 
 # Transport Buttons
-@onready var menu_button: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/Menu
-@onready var fast_backward: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/FastBackward
-@onready var backward: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/Backward
-@onready var play_pause_button: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/PlayPauseButton
-@onready var stop_button: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/StopButton
-@onready var forward: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/Forward
-@onready var fast_forward: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/FastForward
-@onready var eject_button: Button = $Panel/MarginContainer/VBoxContainer/TransportButtons/Eject
+@onready var menu_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/Menu
+@onready var fast_backward: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/FastBackward
+@onready var backward: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/Backward
+@onready var play_pause_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/PlayPauseButton
+@onready var stop_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/StopButton
+@onready var forward: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/Forward
+@onready var fast_forward: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/FastForward
+@onready var eject_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/Eject
 
 # Zoom Controls
-@onready var zoom_controls: HBoxContainer = $Panel/MarginContainer/VBoxContainer/ZoomControls
-@onready var highlight_button: Button = $Panel/MarginContainer/VBoxContainer/ZoomControls/HighlightButton
-@onready var zoom_out_button: Button = $Panel/MarginContainer/VBoxContainer/ZoomControls/ZoomOutButton
-@onready var enzyme_dropdown: OptionButton = $Panel/MarginContainer/VBoxContainer/ZoomControls/EnzymeDropdown
-@onready var zoom_in_button: Button = $Panel/MarginContainer/VBoxContainer/ZoomControls/ZoomInButton
-@onready var reset_zoom_button: Button = $Panel/MarginContainer/VBoxContainer/ZoomControls/ResetZoomButton
+@onready var zoom_controls: HBoxContainer = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls
+@onready var highlight_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/HighlightButton
+@onready var zoom_out_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/ZoomOutButton
+@onready var enzyme_dropdown: OptionButton = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/EnzymeDropdown
+@onready var zoom_in_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/ZoomInButton
+@onready var reset_zoom_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/ResetZoomButton
 
 var zoom_mgr: Camera2D = null  # %ZoomManager, cached in _ready()
 
@@ -86,6 +86,14 @@ func _ready():
 			# sync without needing to guess when registration is "done".
 			zoom_mgr.targets_changed.connect(_populate_enzyme_dropdown)
 			_update_zoom_button_states()
+
+			# OptionButton item text isn't auto-translated the way
+			# RichTextLabel.text is (per EnzymeLabelsDesign.md) — it needs an
+			# explicit refresh, so hook the dropdown into the same
+			# LocaleManager the rest of the enzyme-label system already uses.
+			var locale_mgr = get_node_or_null("%LocaleManager")
+			if locale_mgr:
+				locale_mgr.locale_changed.connect(func(_new_locale): _populate_enzyme_dropdown())
 		else:
 			push_error("PlayerUI: %ZoomManager not found!")
 			zoom_controls.visible = false
@@ -232,18 +240,51 @@ func _on_zoom_target_changed(new_target_id: String):
 	_update_zoom_button_states()
 
 func _populate_enzyme_dropdown():
+	var previous_id = zoom_mgr.current_target_id
 	enzyme_dropdown.clear()
-	for id in zoom_mgr.get_target_ids():
+	var ids = zoom_mgr.get_target_ids()
+	for id in ids:
 		var display_name = zoom_mgr.get_target_display_name(id)
 		enzyme_dropdown.add_item(display_name)
 		enzyme_dropdown.set_item_metadata(enzyme_dropdown.item_count - 1, id)
+
+	if ids.is_empty():
+		_update_zoom_button_states()
+		return
+
+	# Restore whichever target was already current (e.g. after a future
+	# complexity toggle re-registers targets), or default to the first item
+	# if nothing was selected yet. Either way this is a UI sync, not a
+	# player action, so it uses set_pending_target() rather than
+	# select_target() — no jump to level 3.
+	var restore_id = previous_id if (previous_id != "" and ids.has(previous_id)) else ids[0]
+	enzyme_dropdown.select(ids.find(restore_id))
+	zoom_mgr.set_pending_target(restore_id)
+	_update_zoom_button_states()
 
 func _update_zoom_button_states():
 	if not zoom_mgr:
 		return
 	zoom_out_button.disabled = (zoom_mgr.zoom_level <= 1)
-	var no_target_yet = zoom_mgr.zoom_level == 1 and zoom_mgr.current_target_id == ""
-	zoom_in_button.disabled = (zoom_mgr.zoom_level >= 4) or no_target_yet
+	var no_target_yet = zoom_mgr.current_target_id == ""
+	var target_unavailable = no_target_yet or not zoom_mgr.is_target_visible(zoom_mgr.current_target_id)
+	zoom_in_button.disabled = (zoom_mgr.zoom_level >= 3) or target_unavailable
+
+## Called every frame (see _process below) since enzyme visibility changes
+## continuously during play (proximity fade-in/out), not just on discrete
+## events like zoom_level_changed/target_changed — a dropdown item that's
+## disabled because its enzyme isn't on screen yet needs to re-enable itself
+## the moment that enzyme fades in, without waiting for some other action.
+func _update_enzyme_dropdown_availability():
+	for i in range(enzyme_dropdown.item_count):
+		var id = enzyme_dropdown.get_item_metadata(i)
+		if id != null:
+			enzyme_dropdown.set_item_disabled(i, not zoom_mgr.is_target_visible(id))
+	_update_zoom_button_states()
+
+func _process(_delta: float) -> void:
+	if zoom_mgr:
+		_update_enzyme_dropdown_availability()
 
 # ==========================================
 # SIMULATION SIGNAL CALLBACKS
@@ -321,4 +362,4 @@ func _update_button_states():
 	fast_backward.disabled = (count <= 0)
 	fast_forward.disabled = (count >= total)
 
-	stop_button.text = "⟳" if _is_simulation_done() else _stop_icon_default
+	stop_button.text = "" if _is_simulation_done() else _stop_icon_default

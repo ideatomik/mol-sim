@@ -35,8 +35,7 @@ extends Node
 
 @export_group("Bond Marks")
 @export var bond_mark_width: float = 14.0
-@export var bond_mark_back_inset: float = 6.3
-@export var bond_mark_black_color: Color = Color(0.0, 0.0, 0.0, 1.0)
+@export var bond_mark_color: Color = Color(0.0, 0.0, 0.0, 1.0)
 
 @export_group("Hydrogen Bonds")
 @export var at_bond_color: Color = Color(1.0, 0.85, 0.3, 1.0)
