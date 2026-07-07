@@ -115,6 +115,11 @@ extends Node
 ## Used by get_sequence_rich_text() for the BBCode-colored base sequence display.
 @export var sequence_text_synthesized_color: Color = Color(0.2980392, 0.6862745, 0.3137255, 1.0)   # was #4CAF50
 @export var sequence_text_unsynthesized_color: Color = Color(1.0, 1.0, 1.0, 1.0)                    # was #FFFFFF
+## SequenceLabel click/drag-to-scrub hover highlight (LongSequenceDesign.md
+## Part 4) — moved here from local consts in replication_manager.gd so
+## themes can vary the hover treatment too, same as every other color here.
+@export var sequence_text_hover_bg_color: Color = Color(0.227, 0.373, 0.541, 1.0)     # was #3a5f8a
+@export var sequence_text_hover_text_color: Color = Color(1.0, 1.0, 1.0, 1.0)          # was #ffffff
 
 @export_group("Enzyme Labels")
 @export var enzyme_labels_enabled: bool = true
@@ -123,6 +128,70 @@ extends Node
 @export var label_color: Color = Color(1, 1, 1, 1)
 @export var label_panel_color: Color = Color(0, 0, 0, 0.5)
 @export var label_z: int = 10
+
+@export_group("Nucleotide Field & Halo")
+## Ambient environmental field's opacity (nucleotide_field.gd) — moved here
+## from that file's own local field_alpha export. Purely decorative
+## background layer; kept dim by default.
+@export_range(0.0, 1.0) var nucleotide_field_alpha: float = 0.05
+## PolymeraseHalo's own opacity — previously read LIVE from the field above
+## (polymerase_halo.gd's _current_field_alpha()), meaning both were forced
+## to match. Decoupled into its own field so the functional capture pool can
+## be tuned independently from the purely-decorative background field.
+## Default matches the halo's own prior null-fallback constant (0.35),
+## which was the closest thing to an "intended" halo-specific value already
+## in the code before this pass.
+@export_range(0.0, 1.0) var polymerase_halo_alpha: float = 0.35
+
+@export_group("Zoom & Long-Sequence Display")
+## Shared by zoom_manager.gd's level-1 fit-to-height threshold AND
+## replication_manager.gd's SequenceLabel window width (LongSequenceDesign.md
+## Part 3/4) — one number instead of two independently-tuned constants that
+## used to just happen to agree (57), the same class of drift Part 1 fixed
+## for the sequence-length ceiling.
+@export var legible_reference_length: int = 57
+
+## Level 1, short sequences: % of viewport width the whole track fills.
+@export_range(0.0, 1.0) var zoom_strand_width_percentage: float = 0.90
+## Level 1, long sequences (fit-to-height mode): % of viewport height the
+## fixed vertical content span fills. NOT YET TUNED.
+@export_range(0.0, 1.0) var zoom_height_fit_percentage: float = 0.70
+## World-space vertical extent (both template strands + enzyme geometry)
+## fit-to-height frames against. NOT YET TUNED.
+@export var zoom_vertical_content_span: float = 400.0
+## World-space padding around framed points at levels 2/3.
+@export var zoom_level34_padding: float = 160.0
+## Seconds for an animated level/target transition tween.
+@export var zoom_level_transition_duration: float = 0.5
+## Screen-space pan speed (px/sec) for arrow-key panning, divided by zoom
+## each frame so it feels the same regardless of zoom level.
+@export var zoom_pan_screen_speed: float = 400.0
+## Seconds of pan inactivity before level-1 fit-to-height mode auto-releases
+## back to the follow anchor. NOT YET TUNED.
+@export var zoom_pan_release_inactivity_seconds: float = 3.0
+## Duration of the tween back to center when panning releases (either via
+## the inactivity timeout above, or the explicit recenter button).
+@export var zoom_pan_release_tween_duration: float = 0.6
+
+@export_subgroup("Enzyme Level 2/3 Fit")
+## Multi-level zoom system — per-enzyme Level 2 ("regional context") / Level
+## 3 ("exclusively focused") fit percentages. Previously local consts in
+## simulation.gd (helicase) and replication_manager.gd (leading/lagging
+## polymerase) — moved here so they're Inspector-editable, but each one
+## stays its own independently-tuned value, exactly as tuned before. Not
+## merged into a single shared number; helicase, leading, and lagging each
+## keep their own fields, matching how leading/lagging's own Level 2 fits
+## already diverged into two values (different framing MECHANISMS, not just
+## different numbers — see _zoom_frame_leading_level2()/_zoom_frame_lagging_
+## level2() in replication_manager.gd).
+@export_range(0.0, 1.0) var zoom_helicase_level2_fit: float = 0.6
+@export_range(0.0, 1.0) var zoom_helicase_level3_fit: float = 0.8
+@export_range(0.0, 1.0) var zoom_leading_level2_fit: float = 0.35
+@export_range(0.0, 1.0) var zoom_lagging_level2_fit: float = 0.35
+## Shared by leading + lagging Level 3 only (same clamp geometry either way,
+## unlike Level 2 which needed to split) — matches the original single
+## POLYMERASE_LEVEL3_FIT constant exactly, not further split.
+@export_range(0.0, 1.0) var zoom_polymerase_level3_fit: float = 0.6
 
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:

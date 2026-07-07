@@ -24,6 +24,11 @@ var dna_sequence: DnaSequenceResource
 func _ready():
 	# Create a local resource for UI operations
 	dna_sequence = DnaSequenceResource.new()
+
+	# Sync the LineEdit's own hard character limit to the resource's ceiling
+	# — otherwise this is a fourth place the length limit could silently
+	# drift out of sync with MAX_LENGTH.
+	sequence_input.max_length = dna_sequence.MAX_LENGTH
 	
 	# Connect UI signals
 	sequence_input.text_changed.connect(_on_sequence_text_changed)
@@ -34,7 +39,14 @@ func _ready():
 	
 	# Populate the preset dropdown
 	_populate_presets()
-	
+
+	# OptionButton item text isn't auto-translated the way RichTextLabel.text
+	# is (per EnzymeLabelsDesign.md) — needs an explicit refresh on locale
+	# switch, same pattern player_ui.gd already uses for the enzyme dropdown.
+	var locale_mgr = get_node_or_null("%LocaleManager")
+	if locale_mgr:
+		locale_mgr.locale_changed.connect(func(_new_locale): _populate_presets())
+
 	visible = false
 	
 	if DEBUG_AUTO_SHOW:
@@ -44,8 +56,10 @@ func show_dialog():
 	"""Show the dialog and focus the input field."""
 	visible = true
 	
-	# Generate a random sequence using the resource
-	var random_seq = dna_sequence.get_preset_string("Aleatória")
+	# Generate a random sequence using the resource. "Aleatória" no longer
+	# exists as a preset — PRESET_MEDIA (57 bases) is the replacement default
+	# for the dialog's initial fill.
+	var random_seq = dna_sequence.get_preset_string("PRESET_MEDIA")
 	sequence_input.text = random_seq
 	sequence_input.select_all()
 	sequence_input.grab_focus()
@@ -57,16 +71,29 @@ func hide_dialog():
 # ----- PRIVATE HELPERS -----
 
 func _populate_presets():
-	"""Populate the dropdown with preset names from the resource."""
+	"""Populate the dropdown with preset names from the resource. Item text
+	is the translated display string; the stable lookup key is stored as
+	metadata — same split EnzymeLabelsDesign.md established for enzyme
+	labels, and the same pattern player_ui.gd already uses for the enzyme
+	dropdown, since OptionButton items don't auto-translate on their own."""
+	var previous_key = option_button.get_item_metadata(option_button.selected) if option_button.item_count > 0 else null
 	option_button.clear()
-	var preset_names = dna_sequence.get_preset_names()
-	for name in preset_names:
-		option_button.add_item(name)
-	option_button.selected = 0
+	var preset_keys = dna_sequence.get_preset_names()
+	for key in preset_keys:
+		option_button.add_item(tr(key))
+		option_button.set_item_metadata(option_button.item_count - 1, key)
+
+	var restore_index = 0
+	if previous_key != null:
+		for i in range(preset_keys.size()):
+			if preset_keys[i] == previous_key:
+				restore_index = i
+				break
+	option_button.selected = restore_index
 
 func _update_char_count():
 	var current_len = sequence_input.text.length()
-	char_count_label.text = "%d / %d caracteres" % [current_len, dna_sequence.MAX_LENGTH]
+	char_count_label.text = tr("UI_CHAR_COUNT") % [current_len, dna_sequence.MAX_LENGTH]
 	ok_button.disabled = not dna_sequence.is_valid_sequence(sequence_input.text)
 
 func _load_preset(preset_name: String):
@@ -96,8 +123,9 @@ func _on_sequence_submitted(entered_text: String):
 		sequence_input.remove_theme_color_override("font_color")
 
 func _on_preset_selected(index: int):
-	var preset_name = option_button.get_item_text(index)
-	_load_preset(preset_name)
+	var preset_key = option_button.get_item_metadata(index)
+	if preset_key != null:
+		_load_preset(preset_key)
 
 func _on_cancel_pressed():
 	hide_dialog()

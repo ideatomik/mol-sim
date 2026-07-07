@@ -16,8 +16,12 @@ class_name PolymeraseHalo
 # boundary (halo_radius) around the clamp instead of the field's viewport-edge
 # wrap — a "living chaos" cloud that stays close to the polymerase.
 #
-# SOURCE OF TRUTH: size, drift physics, and alpha are read LIVE from
+# SOURCE OF TRUTH: size and drift physics are read LIVE from
 # sim.nucleotide_field each frame — not duplicated as separate exports here.
+# Alpha is the one exception (see _current_halo_alpha()): it used to be read
+# live from the field too, but was decoupled onto its own ThemeManager field
+# (polymerase_halo_alpha) so the functional capture pool can be tuned
+# independently from the purely-decorative background field's opacity.
 # Particles are now REAL typed bases (letter + per-type color via
 # sim._get_base_fill()), same visual language as the field — this genuinely
 # is "a tiny nucleotide_field around the polymerase," just bounded to
@@ -124,8 +128,12 @@ func _current_max_speed() -> float:
 func _current_jitter_accel() -> float:
 	return _field.jitter_accel if _field != null else 40.0
 
-func _current_field_alpha() -> float:
-	return _field.field_alpha if _field != null else 0.35
+## Own opacity, previously read live from nucleotide_field.gd's field_alpha
+## (forcing both to match) — now its own independent ThemeManager field, so
+## the functional capture pool can be tuned separately from the purely
+## decorative background field.
+func _current_halo_alpha() -> float:
+	return _tm.polymerase_halo_alpha if _tm != null else 0.35
 
 func _current_blur_enabled() -> bool:
 	return _field.blur_enabled if _field != null else true
@@ -213,7 +221,7 @@ func _spawn_into_pool(bt: String) -> Node:
 	return dot
 
 func _process(delta: float) -> void:
-	modulate.a = _current_field_alpha()
+	modulate.a = _current_halo_alpha()
 
 	var softness_now = _current_blur_softness()
 	var softness_changed = abs(softness_now - _last_softness) > 0.005

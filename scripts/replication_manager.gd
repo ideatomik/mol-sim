@@ -48,6 +48,11 @@ extends Node
 var sim: Node = null  # Set by initialize(). Used for add_child(), geometry, etc.
 var tm: Node = null   # ThemeManager reference, cached in initialize()
 var zoom_mgr: Node = null  # ZoomManager reference, cached in initialize()
+# LongSequenceDesign.md follow-up — scrub index when each clamp's current
+# drag gesture began. Kept separate per clamp (only one is realistically
+# ever mid-drag at once, but no reason to share state that doesn't need to be).
+var _leading_drag_start_index: int = 0
+var _lagging_drag_start_index: int = 0
 
 # ---------- PER-SLOT STATE ARRAYS ----------
 var nucleotide_backbone_delta: Array[float] = []
@@ -175,6 +180,8 @@ func initialize(p_sim: Node) -> void:
 	lagging_clamp = PolymeraseClamp.new()
 	lagging_polymerase.add_child(lagging_clamp)
 	lagging_clamp.setup(sim, false)
+	lagging_clamp.scrub_drag_started.connect(_on_lagging_clamp_drag_started)
+	lagging_clamp.scrub_drag_delta.connect(_on_lagging_clamp_drag_delta)
 	lagging_halo = PolymeraseHalo.new()
 	lagging_polymerase.add_child(lagging_halo)
 	lagging_halo.setup(sim, false)
@@ -233,7 +240,6 @@ func update(delta: float, ctx: Dictionary) -> void:
 			leading_clamp.set_pump(sin(helicase_mgr.step_t * PI) if reached_first_slot else 0.0)
 	elif leading_clamp != null:
 		leading_clamp.set_pump(0.0)
-		#print("[DEBUG] leading_polymerase.position=", leading_polymerase.position, " template_strand_y=", ctx.template_strand_y, " dna_ribbons_gap=", ctx.dna_ribbons_gap, " global_pos=", leading_polymerase.global_position)
 
 	# Deliberately OUTSIDE the phase check above: if phase flips to DONE while
 	# a capture is still mid-flight (last slot's animation still running when
@@ -324,6 +330,14 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 		lagging_polymerase.modulate.a = 0.0 if ctx.is_done_phase else (1.0 if lagging_near else 0.0)
 		if lagging_pump_tween != null and lagging_pump_tween.is_valid():
 			lagging_pump_tween.kill()
+		# Any in-flight lagging_polymerase_tween must die here too, or it
+		# keeps animating toward its pre-scrub target and overwrites the
+		# snap below on its next update — every OTHER scrub path already
+		# instant-snaps correctly; this was the one gap, only visible when
+		# a scrub landed mid-tween (which live play's constant lagging-
+		# polymerase animation makes fairly likely, not a rare edge case).
+		if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
+			lagging_polymerase_tween.kill()
 		if lagging_clamp != null:
 			lagging_clamp.set_pump(0.0)
 
@@ -376,7 +390,6 @@ func render(delta: float, ctx: Dictionary) -> void:
 ## Fit percentages, same tunable-by-eye pattern that worked for the
 ## new-strand targets — nudge these directly if the framing needs
 ## adjustment once tested in-engine.
-const POLYMERASE_LEVEL3_FIT: float = 0.6  # "exclusively focused": polymerase alone, geometric footprint (shared by leading+lagging)
 
 ## Shared by both clamps — same clamp geometry either way. Reuses the EXACT
 ## formula polymerase_clamp.gd itself uses for its own label placement
@@ -389,10 +402,8 @@ func _polymerase_footprint_height() -> float:
 
 ## Level 2 fit percentages. Leading and lagging now use genuinely different
 ## MECHANISMS, not just different numbers — see the two functions below for
-## why — so each gets its own named constant even though both still land in
+## why — so each gets its own named field even though both still land in
 ## replication_manager.gd's shared "tune by eye" style.
-const LEADING_LEVEL2_FIT: float = 0.35   # anchor-centered bounding box with the helicase
-const LAGGING_LEVEL2_FIT: float = 0.35   # standalone footprint, no helicase in frame at all
 
 ## Level 2 — "regional context": camera CENTERS ON leading polymerase
 ## itself, sized just wide/tall enough that the helicase also fits in frame.
@@ -404,12 +415,12 @@ func _zoom_frame_leading_level2() -> Dictionary:
 	if leading_polymerase == null or not is_instance_valid(leading_polymerase):
 		return {}
 	if sim.helicase_node == null or not is_instance_valid(sim.helicase_node):
-		return _polymerase_footprint_frame(leading_polymerase, LEADING_LEVEL2_FIT)
+		return _polymerase_footprint_frame(leading_polymerase, tm.zoom_leading_level2_fit)
 	var context: Array = [sim.helicase_node.global_position]
-	return _anchor_centered_frame(leading_polymerase.global_position, context, LEADING_LEVEL2_FIT)
+	return _anchor_centered_frame(leading_polymerase.global_position, context, tm.zoom_leading_level2_fit)
 
 func _zoom_frame_leading_level3() -> Dictionary:
-	return _polymerase_footprint_frame(leading_polymerase, POLYMERASE_LEVEL3_FIT)
+	return _polymerase_footprint_frame(leading_polymerase, tm.zoom_polymerase_level3_fit)
 
 ## Level 2 — deliberately does NOT include the helicase in frame, unlike
 ## leading's version above. Lagging periodically jumps back to the start of
@@ -421,10 +432,10 @@ func _zoom_frame_leading_level3() -> Dictionary:
 ## behind again as the next fragment opens — without needing the helicase
 ## literally boxed into frame for that to read.
 func _zoom_frame_lagging_level2() -> Dictionary:
-	return _polymerase_footprint_frame(lagging_polymerase, LAGGING_LEVEL2_FIT)
+	return _polymerase_footprint_frame(lagging_polymerase, tm.zoom_lagging_level2_fit)
 
 func _zoom_frame_lagging_level3() -> Dictionary:
-	return _polymerase_footprint_frame(lagging_polymerase, POLYMERASE_LEVEL3_FIT)
+	return _polymerase_footprint_frame(lagging_polymerase, tm.zoom_polymerase_level3_fit)
 
 ## Centers the camera ON `anchor` (the highlighted object) rather than on
 ## the bounding-box midpoint of anchor+context — sizes the frame
@@ -524,6 +535,13 @@ func _zoom_frame_new_leading_level3() -> Dictionary:
 	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
 
 func _zoom_new_leading_visible() -> bool:
+	# LongSequenceDesign.md follow-up: doesn't make sense to zoom into a
+	# whole-strand bounding box while level 1 itself is in fit-to-height
+	# windowed mode (long sequence) — the strand sprawls far past what's
+	# on screen at once. Best highlighted once it's fully visible at the
+	# normal fit-to-track zoom.
+	if zoom_mgr != null and zoom_mgr.is_windowed_mode():
+		return false
 	return leading_backbone_line != null and is_instance_valid(leading_backbone_line) and leading_backbone_line.points.size() > 0
 
 # --- New Lagging Strand (pairs with the ORIGINAL BOTTOM template) ---
@@ -569,6 +587,9 @@ func _zoom_frame_new_lagging_level3() -> Dictionary:
 	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
 
 func _zoom_new_lagging_visible() -> bool:
+	# Same reasoning as _zoom_new_leading_visible() above.
+	if zoom_mgr != null and zoom_mgr.is_windowed_mode():
+		return false
 	return lagging_backbone_line != null and is_instance_valid(lagging_backbone_line) and lagging_backbone_line.points.size() > 0
 
 
@@ -626,20 +647,93 @@ func _apply_highlight() -> void:
 # QUERY FUNCTIONS
 # ==========================================
 
-func get_sequence_rich_text(helicase_x: float, nucleotide_original_x: Array) -> String:
-	var text = "5' "
+# LongSequenceDesign.md follow-up — drag-to-scrub handlers for both
+# polymerase clamps. Both funnel through the same _request_clamp_drag_scrub()
+# conversion, which is why the lagging polymerase's non-monotonic (fragment-
+# boundary jump-back) on-screen position is a non-issue here: the math never
+# reads the clamp's current position, only how far the mouse has moved
+# since the drag began, applied to wherever the scrub index was at that
+# moment. Same conversion simulation.gd uses for the helicase ring, so drag
+# feel is identical across all three enzymes.
+func _on_leading_clamp_drag_started() -> void:
+	_leading_drag_start_index = sim.get_synthesized_count()
+
+func _on_leading_clamp_drag_delta(cumulative_px: float) -> void:
+	_request_clamp_drag_scrub(_leading_drag_start_index, cumulative_px)
+
+func _on_lagging_clamp_drag_started() -> void:
+	_lagging_drag_start_index = sim.get_synthesized_count()
+
+func _on_lagging_clamp_drag_delta(cumulative_px: float) -> void:
+	_request_clamp_drag_scrub(_lagging_drag_start_index, cumulative_px)
+
+func _request_clamp_drag_scrub(start_index: int, cumulative_px: float) -> void:
+	if zoom_mgr == null or sim.nucleotide_slot_spacing <= 0.0:
+		return
+	var zoom_x: float = zoom_mgr.zoom.x
+	if zoom_x <= 0.0:
+		return
+	var px_per_slot: float = sim.nucleotide_slot_spacing * zoom_x
+	var slot_delta: int = int(round(cumulative_px / px_per_slot))
+	sim.request_drag_scrub(start_index + slot_delta)
+
+## Windowed slice, NOT the whole sequence — tm.legible_reference_length (57)
+## characters centered on the helicase's current progress, following the
+## fork rather than growing unboundedly wide with total sequence length (the
+## PlayerUI.tscn SequenceLabel overflow problem this replaces). Same shared
+## ThemeManager constant zoom_manager.gd's fit-to-height threshold uses, so
+## both subsystems agree on what "legible" means from one number rather than
+## two independently-tuned ones (this file used to have its own local copy —
+## folded into ThemeManager to remove that duplication). Each character is
+## wrapped in [url=ABSOLUTE_INDEX] — the absolute slot index, NOT its
+## position within the window — so PlayerUI's click/drag-to-scrub always
+## reads back a stable reference regardless of what's currently visible.
+## hover_index (-1 = none) gets a bgcolor + color treatment (colors also on
+## ThemeManager now, so themes can vary the hover look) layered on top of
+## its normal synthesized/unsynthesized color. Visual grouping marks real
+## Okazaki fragment boundaries (every okazaki_fragment_size slots) rather
+## than an arbitrary fixed interval.
+func get_sequence_rich_text(helicase_x: float, nucleotide_original_x: Array, hover_index: int = -1) -> String:
 	var seq_string = sim.dna_sequence._to_string()
 	if seq_string.is_empty():
 		return "5' [empty] 3'"
-	for i in range(seq_string.length()):
-		var base = seq_string[i]
+	var n = seq_string.length()
+
+	# Progress index: how many slots the helicase has already passed — the
+	# same boundary test already driving synthesized/unsynthesized coloring
+	# below, reused here as the window's center of attention, so the window
+	# naturally follows the fork as helicase_x advances each frame.
+	var progress_index = 0
+	for i in range(n):
 		if i < nucleotide_original_x.size() and nucleotide_original_x[i] <= helicase_x:
-			text += "[color=#" + tm.sequence_text_synthesized_color.to_html(false) + "]" + base + "[/color] "
+			progress_index = i
 		else:
-			text += "[color=#" + tm.sequence_text_unsynthesized_color.to_html(false) + "]" + base + "[/color] "
-		if (i + 1) % 10 == 0:
+			break
+
+	var window_size = min(tm.legible_reference_length, n)
+	var window_half = window_size / 2
+	var window_start = clamp(progress_index - window_half, 0, max(0, n - window_size))
+	var window_end = window_start + window_size  # exclusive
+
+	var text = "5' " if window_start == 0 else "… "
+	for i in range(window_start, window_end):
+		# Real fragment boundary, not the old arbitrary every-10-characters
+		# grouping — DESIGN.md's fixed, deterministic tiling ([0,F), [F,2F),
+		# … where F = okazaki_fragment_size) is the same formula this file's
+		# own tile math already relies on elsewhere, so this can't drift out
+		# of sync with the actual fragment logic.
+		if i > window_start and i % sim.okazaki_fragment_size == 0:
 			text += " "
-	text += "3'"
+		var base = seq_string[i]
+		var synthesized = i < nucleotide_original_x.size() and nucleotide_original_x[i] <= helicase_x
+		var base_color = tm.sequence_text_synthesized_color if synthesized else tm.sequence_text_unsynthesized_color
+		var char_markup: String
+		if i == hover_index:
+			char_markup = "[bgcolor=#" + tm.sequence_text_hover_bg_color.to_html(false) + "][color=#" + tm.sequence_text_hover_text_color.to_html(false) + "]" + base + "[/color][/bgcolor]"
+		else:
+			char_markup = "[color=#" + base_color.to_html(false) + "]" + base + "[/color]"
+		text += "[url=" + str(i) + "]" + char_markup + "[/url] "
+	text += "3'" if window_end >= n else "…"
 	return text
 
 # ==========================================
@@ -674,6 +768,8 @@ func _leading_setup_backbones() -> void:
 	leading_clamp = PolymeraseClamp.new()
 	leading_polymerase.add_child(leading_clamp)
 	leading_clamp.setup(sim, true)
+	leading_clamp.scrub_drag_started.connect(_on_leading_clamp_drag_started)
+	leading_clamp.scrub_drag_delta.connect(_on_leading_clamp_drag_delta)
 	leading_halo = PolymeraseHalo.new()
 	leading_polymerase.add_child(leading_halo)
 	leading_halo.setup(sim, true)
@@ -988,10 +1084,6 @@ func _lagging_fire_step(duration: float) -> void:
 		lagging_polymerase_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		lagging_polymerase_tween.tween_property(lagging_polymerase, "position", Vector2(lagging_polymerase_x, sim.new_bottom_template_y), duration)
 
-	print("[LAGGING] slot %d fired — fragment size %d/%d" % [
-		slot_index, lagging_current_fragment.slots.size(), sim.okazaki_fragment_size
-	])
-
 	# Pump the lagging clamp 0->1->0 over the same duration, matching the
 	# leading strand's sin(step_t*PI) shape — opens mid-move, clamps on arrival.
 	# Same call site for live and catch-up firing, so both are covered.
@@ -1017,7 +1109,6 @@ func _lagging_open_fragment() -> void:
 		marker_3p = null,
 		complete = false,
 	}
-	print("[LAGGING] fragment opened")
 
 func _lagging_open_next_fragment() -> void:
 	_lagging_open_fragment()
@@ -1028,7 +1119,6 @@ func _lagging_open_next_fragment() -> void:
 func _lagging_close_fragment() -> void:
 	lagging_current_fragment.complete = true
 	lagging_fragments.append(lagging_current_fragment)
-	print("[LAGGING] fragment closed — slots=%s" % [str(lagging_current_fragment.slots)])
 	lagging_current_fragment = null
 
 func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
@@ -1067,10 +1157,6 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 			lagging_telomere_gap = null
 	else:
 		lagging_telomere_gap = null
-
-	print("[LAGGING] DEBUG rebuild — is_done_phase=%s ctx.num_slots=%s attempted_consumed=%d catchup_step=%s total_consumed=%d" % [
-		is_done_phase, ctx.num_slots, attempted_consumed, ctx.get("lagging_catchup_step", "n/a"), total_consumed
-	])
 
 	# ---- Free old visuals, rebuild from scratch ----
 	var old_fragments = lagging_fragments.duplicate()
@@ -1143,12 +1229,6 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 	else:
 		lagging_polymerase_x = sim.nucleotide_original_x[0] - sim.polymerase_x_offset_slots * sim.nucleotide_slot_spacing
 
-	print("[LAGGING] scrub rebuild — consumed=%d fragments=%d current=%s gap=%s" % [
-		total_consumed, lagging_fragments.size(),
-		str(lagging_current_fragment.slots) if lagging_current_fragment != null else "none",
-		str(lagging_telomere_gap)
-	])
-
 func _on_helicase_phase_changed(new_phase: int) -> void:
 	if new_phase == connected_helicase_mgr.Phase.DONE and not sim.manual_override:
 		if sim.lagging_gap_enabled:
@@ -1170,7 +1250,6 @@ func _lagging_start_catchup() -> void:
 		lagging_catchup_timer.timeout.connect(_lagging_catchup_tick)
 	lagging_catchup_timer.wait_time = sim.lagging_catchup_step_duration
 	lagging_catchup_timer.start()
-	print("[LAGGING] catch-up started — %d slots remaining" % (sim.num_nucleotide_slots - lagging_total_consumed))
 
 func _lagging_catchup_tick() -> void:
 	if lagging_current_fragment == null:
@@ -1179,7 +1258,6 @@ func _lagging_catchup_tick() -> void:
 	if lagging_total_consumed >= sim.num_nucleotide_slots:
 		lagging_catchup_timer.stop()
 		lagging_polymerase_faded = true
-		print("[LAGGING] catch-up complete — strand fully synthesized")
 		_lagging_fade_enzyme_scene()
 
 func _lagging_discard_incomplete_at_end() -> void:

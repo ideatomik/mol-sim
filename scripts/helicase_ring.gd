@@ -86,6 +86,50 @@ extends Node2D
 
 const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn")
 
+# ---------- DRAG-TO-SCRUB ----------
+# LongSequenceDesign.md follow-up: click-and-drag anywhere on the ring
+# scrubs playback. This node stays exactly as simulation-agnostic as the
+# rest of the file — it only reports raw SCREEN-space mouse movement while
+# a drag is active. Converting that into a scrub index (which needs
+# nucleotide_slot_spacing, current zoom, and simulation.gd itself) is
+# entirely the owning script's job, not this one's.
+#
+# Manual hit-test via _unhandled_input() rather than Area2D/input_event —
+# Area2D picking silently depends on Viewport.physics_object_picking being
+# enabled project-wide, which is exactly the class of silent-failure trap
+# this project has hit before (CSV registration, LocaleManager unique-name).
+# A local-space point-in-rect check has no such hidden dependency.
+signal scrub_drag_started()
+signal scrub_drag_delta(cumulative_px: float)  # screen-space, since drag start
+signal scrub_drag_ended()
+
+var _dragging: bool = false
+var _drag_start_screen_x: float = 0.0
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if not _dragging and _point_in_click_region(get_global_mouse_position()):
+				_dragging = true
+				_drag_start_screen_x = event.position.x
+				scrub_drag_started.emit()
+				get_viewport().set_input_as_handled()
+		elif _dragging:
+			_dragging = false
+			scrub_drag_ended.emit()
+	elif event is InputEventMouseMotion and _dragging:
+		scrub_drag_delta.emit(event.position.x - _drag_start_screen_x)
+
+## Click region reuses the same footprint formula simulation.gd already
+## computes for this ring's label positioning (ring_radius + max_blob_height
+## * 0.5) — no new geometry invented. Width is generous (1.5x max_blob_width)
+## since blobs oscillate in width as they rotate.
+func _point_in_click_region(global_point: Vector2) -> bool:
+	var local_point = to_local(global_point)
+	var half_width = max_blob_width * 1.5
+	var half_height = ring_radius + max_blob_height * 0.5
+	return abs(local_point.x) <= half_width and abs(local_point.y) <= half_height
+
 var _blobs: Array[Polygon2D] = []
 var _roll: float = 0.0
 var _label: EnzymeLabel = null

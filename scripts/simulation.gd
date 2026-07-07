@@ -39,6 +39,11 @@ extends Node2D
 # ---------- SIGNALS ----------
 signal progress_changed(new_progress: float)  # 0.0 - 1.0
 signal simulation_initialized(total_bases: int)
+## LongSequenceDesign.md follow-up: emitted by request_drag_scrub() below,
+## the one funnel point for helicase_ring.gd's and both polymerase clamps'
+## drag-to-scrub gestures — player_ui.gd connects to this the same way it
+## already connects to the two signals above.
+signal drag_scrub_requested(index: int)
 
 # ---------- EXPORTS ----------
 const NewNitrogenBaseScene := preload("res://scenes/nitrogen_base.tscn")
@@ -97,6 +102,7 @@ var new_bottom_template_y: float = 0.0  # ADD — bottom template's unzipped row
 
 var helicase_node: Node2D = null
 var helicase_ring: HelicaseRing = null   # child of helicase_node; rides its position/modulate for free
+var _ring_drag_start_index: int = 0      # scrub index when the ring's current drag gesture began
 
 var wobble_time: float = 0.0
 
@@ -176,8 +182,6 @@ func _ready():
 ## Fit percentages, same tunable-by-eye pattern that worked for the
 ## new-strand targets — nudge these directly if the framing needs
 ## adjustment once tested in-engine.
-const HELICASE_LEVEL2_FIT: float = 0.6  # "regional context": helicase + leading polymerase only (lagging excluded — see function below)
-const HELICASE_LEVEL3_FIT: float = 0.8  # "exclusively focused": helicase alone, geometric footprint
 
 ## Level 2 — "regional context": camera CENTERS ON the helicase itself
 ## (the highlighted object), sized just wide/tall enough that LEADING
@@ -200,9 +204,9 @@ func _zoom_frame_helicase_level2() -> Dictionary:
 		context.append(replication_mgr.leading_polymerase.global_position)
 
 	if context.is_empty():
-		return _helicase_footprint_frame(HELICASE_LEVEL2_FIT)
+		return _helicase_footprint_frame(%ThemeManager.zoom_helicase_level2_fit)
 
-	return _anchor_centered_frame(helicase_node.global_position, context, HELICASE_LEVEL2_FIT)
+	return _anchor_centered_frame(helicase_node.global_position, context, %ThemeManager.zoom_helicase_level2_fit)
 
 ## Centers the camera ON `anchor` (the highlighted object) — NOT on the
 ## bounding-box midpoint of anchor+context, which is what a naive box-fit
@@ -223,7 +227,7 @@ func _anchor_centered_frame(anchor: Vector2, context: Array, fit_pct: float) -> 
 	return {zoom = target_zoom, position = anchor}
 
 func _zoom_frame_helicase_level3() -> Dictionary:
-	return _helicase_footprint_frame(HELICASE_LEVEL3_FIT)
+	return _helicase_footprint_frame(%ThemeManager.zoom_helicase_level3_fit)
 
 ## Geometrically-derived footprint, reusing the EXACT formula
 ## helicase_ring.gd already uses for its own label placement
@@ -291,9 +295,9 @@ func initialize_simulation(sequence: String):
 	# Validate and clean the sequence
 	sequence = dna_sequence.clean_sequence(sequence)
 	var min_sequence_length = int(polymerase_x_offset_slots) + okazaki_fragment_size + telomere_primer_footprint + 1
-	if sequence.length() > 57:
-		sequence = sequence.substr(0, 57)
-		print("[WARN] Sequence truncated to 57 bases")
+	if sequence.length() > DnaSequenceResource.MAX_LENGTH:
+		sequence = sequence.substr(0, DnaSequenceResource.MAX_LENGTH)
+		print("[WARN] Sequence truncated to %d bases" % DnaSequenceResource.MAX_LENGTH)
 	elif sequence.length() < min_sequence_length:
 		var pad_chars = "ATCG"
 		while sequence.length() < min_sequence_length:
@@ -678,7 +682,6 @@ func toggle_play():
 	manual_override = !manual_override
 	if replication_mgr != null:
 		replication_mgr.manual_override = manual_override
-	print("[TOGGLE] toggle_play — manual_override now=%s helicase_phase=%d is_done=%s" % [str(manual_override), helicase_mgr.get_phase() if helicase_mgr else -1, str(helicase_mgr.is_done() if helicase_mgr else false)])
 	if not manual_override and helicase_mgr != null:
 		if helicase_mgr.is_done():
 			scrub_to_nucleotide_index(0)
@@ -866,9 +869,9 @@ func get_synthesized_count() -> int:
 		return helicase_mgr.get_slot_index()
 	return 0
 
-func get_sequence_rich_text() -> String:
+func get_sequence_rich_text(hover_index: int = -1) -> String:
 	if replication_mgr != null:
-		return replication_mgr.get_sequence_rich_text(helicase_x, nucleotide_original_x)
+		return replication_mgr.get_sequence_rich_text(helicase_x, nucleotide_original_x, hover_index)
 	return "5' [empty] 3'"
 
 func get_max_scrub_index() -> int:
@@ -876,6 +879,35 @@ func get_max_scrub_index() -> int:
 	if replication_mgr != null and not lagging_gap_enabled:
 		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
 	return num_nucleotide_slots - 1 + catchup_needed
+
+## LongSequenceDesign.md follow-up — the one funnel point for drag-to-scrub
+## gestures from helicase_ring.gd (connected below) and both polymerase
+## clamps (connected in replication_manager.gd, which owns them directly).
+## Clamping lives here once rather than duplicated at each call site.
+## player_ui.gd connects to drag_scrub_requested and calls its existing
+## _scrub_to_index() — pause-on-drag and the UI refresh stay the one shared
+## code path that already handles the scrubber and SequenceLabel.
+func request_drag_scrub(target_index: int) -> void:
+	drag_scrub_requested.emit(clamp(target_index, 0, get_max_scrub_index()))
+
+func _on_helicase_ring_drag_started() -> void:
+	_ring_drag_start_index = get_synthesized_count()
+
+## Converts screen-space cumulative drag pixels into a slot delta relative
+## to _ring_drag_start_index — NOT the ring's own current position. Same
+## conversion replication_manager.gd uses for both polymerase clamps, so
+## drag feel is identical across all three enzymes regardless of which one
+## was grabbed.
+func _on_helicase_ring_drag_delta(cumulative_px: float) -> void:
+	var zoom_mgr = get_node_or_null("%ZoomManager")
+	if zoom_mgr == null or nucleotide_slot_spacing <= 0.0:
+		return
+	var zoom_x: float = zoom_mgr.zoom.x
+	if zoom_x <= 0.0:
+		return
+	var px_per_slot: float = nucleotide_slot_spacing * zoom_x
+	var slot_delta: int = int(round(cumulative_px / px_per_slot))
+	request_drag_scrub(_ring_drag_start_index + slot_delta)
 
 # ==========================================
 # HELICASE SIGNAL HANDLERS
@@ -885,10 +917,10 @@ func _on_helicase_slot_reached(index: int) -> void:
 	# Fired by helicase_mgr each time it steps to a new slot.
 	# Leading strand synthesis is handled by position in _process;
 	# this is a hook for future per-slot logic (e.g. primase, clamps).
-	print("[HELICASE] slot_reached: %d" % index)
+	pass
 
 func _on_helicase_phase_changed(new_phase: int) -> void:
-	print("[HELICASE] phase_changed: %d" % new_phase)
+	pass
 
 # ==========================================
 # SPAWNING FUNCTIONS
@@ -1148,6 +1180,8 @@ func _setup_helicase():
 	helicase_ring.back_z = %ThemeManager.helicase_ring_back_z
 	helicase_ring.ring_skew_deg = %ThemeManager.helicase_ring_skew_deg
 	helicase_node.add_child(helicase_ring)
+	helicase_ring.scrub_drag_started.connect(_on_helicase_ring_drag_started)
+	helicase_ring.scrub_drag_delta.connect(_on_helicase_ring_drag_delta)
 
 	helicase_node.position = Vector2(helicase_x, center_y)
 	add_child(helicase_node)

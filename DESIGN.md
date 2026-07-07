@@ -1,5 +1,5 @@
 # MolSim — Design Document
-_Last updated: v71 polymerase visuals + capture wrap session_
+_Last updated: v74 — long-sequence support (300-base ceiling, windowed zoom, SequenceLabel click-to-scrub)_
 
 ---
 
@@ -89,6 +89,25 @@ until the ligase enzyme visits and seals it. Both rendering paths already
 exist side by side in `replication_manager.gd`'s `_lagging_render()` — this
 is another toggle flip, not new plumbing, when the ligase tier lands.
 
+### Backbone color as a teaching signal (v73)
+
+`template_backbone_color` (ThemeManager) was added in v73 to visually
+distinguish the original template DNA backbone from newly-synthesized strand
+backbone (`backbone_color`, unchanged) — a classroom aid for "which strand is
+the original" that a single shared backbone color couldn't convey. Applied to
+`backbone_line` and `top_strand_backbone_line` in `simulation.gd` only;
+`replication_manager.gd`'s `leading_backbone_line`, `lagging_backbone_line`,
+and per-fragment Okazaki lines are untouched and keep reading `backbone_color`.
+
+**The reusable part for transcription is the *pattern*, not the *color*:**
+one dedicated ThemeManager color field per distinct strand role, applied at
+the `Line2D` level. RNA-vs-DNA (a backbone chemistry distinction) is not the
+same axis as replication's template-vs-new-strand distinction, so
+transcription's future mRNA strand should get its own field rather than
+inherit `template_backbone_color` — not designed further until
+transcription's own design pass begins, per SHARED_BASE_SEAM.md's caution
+against front-loading sibling-process detail.
+
 ---
 
 ## Biological Model
@@ -118,8 +137,12 @@ MolSim follows the **E. coli replication model** for accuracy and visual clarity
 - β-clamp (sliding clamp) on each strand increases polymerase processivity
 
 ### Didactic simplifications (intentional)
-- Sequences are short (≤57 bases) for visual clarity, with a computed minimum
-  floor (see Architecture) ensuring at least one full Okazaki fragment can fire
+- Sequences can be up to 300 bases (`DnaSequenceResource.MAX_LENGTH`, raised
+  from 57 in v74 — see Long-Sequence Support below), with a computed minimum
+  floor (see Architecture) ensuring at least one full Okazaki fragment can
+  fire. 57 is no longer a hard ceiling — it's now the shared "legible
+  reference length" the zoom system and SequenceLabel both key off of (see
+  Long-Sequence Support)
 - Single-slot Okazaki fragments use a combined "5'-3'" marker
 - Biological accuracy is didactic, not exhaustive
 - The base-complexity lagging strand model (independent polymerase,
@@ -386,6 +409,151 @@ simulation.gd  — Template Manager (thin scene coordinator)
   they're reserved for the telomerase and ligase tiers respectively. This is
   the intended pattern for future complexity-tier work: build the toggle
   seam, don't throw away validated code paths.
+- **Don't let two independently-tuned numbers just happen to agree.** The
+  old sequence-length cap (three separate hardcoded `57`s across
+  `dna_sequence_resource.gd`, `simulation.gd`, and `SequenceLoaderPopup.tscn`)
+  and, later, the zoom threshold / SequenceLabel window width (two more
+  independent `57`s) were both fixed this way in v74 — centralize into one
+  shared source (a constant or ThemeManager field) rather than trusting
+  coincidental agreement to hold as the codebase evolves. See Long-Sequence
+  Support below for both fixes.
+
+---
+
+## Long-Sequence Support (v74)
+
+Companion doc: `LongSequenceDesign.md` (implementation-level detail — exact
+edit anchors, function names, and the handful of items still needing
+in-engine tuning). This section is the DESIGN.md-level summary of what
+shipped.
+
+### Sequence length ceiling
+`DnaSequenceResource.MAX_LENGTH` raised from 57 to **300** — the single
+source of truth for validation (`is_valid_sequence()`) and random-length
+generation (`randomize_sequence()`). `simulation.gd`'s truncation logic and
+`SequenceLoaderPopup.tscn`'s `SequenceInput.max_length` both reference this
+constant now instead of independent hardcoded `57`s — three previously-
+separate enforcement points collapsed into one (see the new architectural
+rule above).
+
+### Preset catalogue rewrite
+`Aleatória`, `Telômeros`, and `Promotores` removed. Replaced with:
+- `PRESET_RICA_CG` / `PRESET_RICA_AT` — unchanged fixed-content presets,
+  renamed to stable translation keys (never shown to the user directly,
+  same split `EnzymeLabelsDesign.md` established for enzyme labels)
+- `PRESET_PCR_TEMPLATE` — new, 90 bases fixed content (forward anchor +
+  middle stretch + reverse anchor). A forward-reservation for the not-yet-
+  built PCR sibling simulation (`SHARED_BASE_SEAM.md`'s build order:
+  transcription → translation → PCR) — inert in replication today, same as
+  the old `Telômeros`/`Promotores` reservations were
+- `PRESET_CURTA` / `PRESET_MEDIA` / `PRESET_LONGA` / `PRESET_GRANDE` — new,
+  random content at pinned lengths (34 / 57 / 90 / 200), re-rolled on every
+  selection — replacing `Aleatória`'s fully-random-length behavior with four
+  reproducible size tiers
+
+`dna_sequence_resource.gd` now has two preset dictionaries — `PRESETS`
+(fixed content) and `RANDOM_LENGTH_PRESETS` (pinned-length random) — plus an
+explicit `PRESET_ORDER` array, since dropdown display order can't be relied
+on from two separate dictionaries' own key order.
+
+### Localization: presets + one UI string
+New `presets.csv` (7 keys) and `ui_strings.csv` (`UI_CHAR_COUNT`), following
+the same stable-key/CSV pattern `EnzymeLabelsDesign.md` established —
+**must be registered under Project Settings → Localization → Translations**,
+not just imported (the same silent-failure trap documented there).
+`sequence_loader_popup.gd`'s preset dropdown now uses the `tr()` +
+`set_item_metadata()` split already proven for the enzyme dropdown in
+`player_ui.gd`, since `OptionButton` items don't auto-translate the way
+`RichTextLabel`/`Label` text does.
+
+### Zoom: fit-to-height windowed mode (level 1)
+`zoom_manager.gd`'s `_compute_strand_fit()` now branches: below a live
+threshold, level 1 behaves exactly as before (fit the whole track to 90% of
+viewport width). Above it, level 1 switches to **fit-to-height** — zoom
+derived from a fixed vertical content span instead of the (now arbitrarily
+long) track width, with the camera's x-position following
+`(helicase_x + polymerase_x) / 2.0` (leading polymerase, not lagging — per
+`ZoomDesign.md`'s original reasoning: the lagging polymerase's per-fragment
+jump-back would make the anchor itself jump) instead of centering the whole
+track.
+
+The threshold is **not** a hardcoded nucleotide count — it's "would the
+whole track still fit legibly at the current viewport," computed live
+against the shared `legible_reference_length` (see below), so it stays
+correct if `nucleotide_slot_spacing` or viewport size ever change.
+
+**Pan auto-release**, scoped to level-1 fit-to-height mode only (levels 2/3
+keep their existing "sticky until deliberate change" pan behavior
+unchanged): an inactivity timeout, and an explicit `recenter_pan()` action
+wired to a new `RecenterPanButton` in `PlayerUI.tscn`'s `ZoomControls` row.
+Both tween `pan_offset_x` back to zero rather than snapping, except during
+scrub, which force-cancels any in-flight release tween and snaps instantly —
+this project's existing scrub-is-always-instant rule, extended to cover the
+new mechanism.
+
+**New-strand targets excluded above the threshold**: `new_leading_strand` /
+`new_lagging_strand`'s `is_visible_fn` callables now also return `false`
+whenever `zoom_mgr.is_windowed_mode()` is true — a whole-strand bounding box
+doesn't make sense to zoom into while it's sprawled off-screen; best
+highlighted once fully visible at the normal fit-to-track zoom. This reuses
+the existing visibility-gating plumbing (dropdown item disabling, auto-drop-
+to-level-1 if already focused on a target that becomes invisible) with no
+new mechanism needed.
+
+### SequenceLabel: windowed display + click/drag-to-scrub
+`replication_manager.gd`'s `get_sequence_rich_text()` no longer renders the
+whole sequence — it shows a fixed-width window (the same shared reference
+length as the zoom threshold) centered on the helicase's current progress,
+following the fork rather than growing unboundedly wide with sequence
+length. This incidentally also fixed `PlayerUI.tscn`'s `SequenceLabel`/
+scrubber-width-matching overflow problem with no additional code — since the
+label now always shows a bounded number of characters, the existing
+width-matching logic in `player_ui.gd`'s `_update_ui()` just works.
+
+Each visible character is wrapped in `[url=ABSOLUTE_SLOT_INDEX]` (the
+absolute slot index, not its position within the window), enabling:
+- **Click** → scrub to that slot (`meta_clicked`)
+- **Hover** → highlight + pointer cursor (`meta_hover_started`/`_ended`)
+- **Click-and-drag across letters** → continuous scrub, mirroring the
+  scrubber slider's own drag behavior — synthesized from raw mouse-button
+  state via `gui_input`, since `RichTextLabel` has no built-in drag concept
+  the way `HSlider` does
+
+`player_ui.gd`'s scrubber-drag handler and the label's click handler now
+share one `_scrub_to_index()` helper instead of duplicating the pause/
+scrub/update sequence.
+
+**Visual grouping now marks real Okazaki fragment boundaries**
+(`i % okazaki_fragment_size == 0`) instead of an arbitrary fixed
+every-10-characters interval that predated this pass and was never actually
+tied to fragment size. Same deterministic tiling formula (`[0,F), [F,2F),
+…`) this file's own fragment logic already relies on elsewhere, so the two
+can't drift out of sync.
+
+### Shared reference length: one number, not two
+`legible_reference_length` (ThemeManager, default `57`) is read by both the
+zoom threshold above and the SequenceLabel window width — the same
+"two independently-tuned numbers that happen to agree" trap the sequence-
+length ceiling fix addressed, applied here as well (see the new
+architectural rule above).
+
+### ThemeManager: new "Zoom & Long-Sequence Display" group
+All of `zoom_manager.gd`'s previously-local tuning constants —
+`zoom_strand_width_percentage`, `zoom_height_fit_percentage`,
+`zoom_vertical_content_span`, `zoom_level34_padding`,
+`zoom_level_transition_duration`, `zoom_pan_screen_speed`,
+`zoom_pan_release_inactivity_seconds`, `zoom_pan_release_tween_duration` —
+plus `legible_reference_length` now live in ThemeManager, Inspector-editable.
+Not because they're colors — because a broader zoom-tuning pass benefits
+from one place to iterate rather than values split across files.
+`zoom_manager.gd` caches a `tm` reference the same way `replication_manager.gd`
+already did (`get_node("%ThemeManager")`).
+
+The SequenceLabel hover highlight colors (`sequence_text_hover_bg_color` /
+`sequence_text_hover_text_color`) moved to ThemeManager's existing
+"Sequence Text" group too, alongside the synthesized/unsynthesized colors
+they work with — so future theme variants can vary the hover look, same as
+every other color in the project.
 
 ---
 
@@ -452,6 +620,27 @@ simulation.gd  — Template Manager (thin scene coordinator)
         translated-text call site to be re-runnable on a locale-changed
         signal) vs. restart-to-apply (simpler, no extra plumbing) — decide
         before building the hook, since it changes the hook's shape
+
+### v74 — Long-sequence support
+- [x] Sequence length ceiling raised 57 → 300 (`DnaSequenceResource.MAX_LENGTH`),
+      unifying three previously-independent hardcoded enforcement points
+- [x] Preset catalogue rewrite: removed `Aleatória`/`Telômeros`/`Promotores`;
+      added `PRESET_PCR_TEMPLATE` (90 bases, fixed, PCR-tier reservation) and
+      four pinned-length random tiers (`PRESET_CURTA`/`MEDIA`/`LONGA`/`GRANDE`
+      at 34/57/90/200); all preset names moved to stable translation keys
+      (`presets.csv`)
+- [x] Zoom: level 1 fit-to-height windowed mode for sequences past a live,
+      viewport-computed legibility threshold, with pan auto-release
+      (inactivity timeout + explicit recenter button), and the two
+      new-strand zoom targets excluded from the dropdown while windowed
+- [x] SequenceLabel: windowed live-follow display (fixes the unbounded-width
+      overflow at long sequences), click/drag-to-scrub via `[url]` meta +
+      hover/RichText signals, and real Okazaki-fragment-aligned visual
+      grouping (replacing an old arbitrary every-10-characters interval)
+- [x] `legible_reference_length` and all zoom-tuning floats centralized on
+      ThemeManager's new "Zoom & Long-Sequence Display" group; SequenceLabel
+      hover colors moved to the existing "Sequence Text" group
+- See `LongSequenceDesign.md` for full implementation detail
 
 ### Near term — Telomerase tier
 - [ ] Flip `lagging_gap_enabled` on for this tier; verify the

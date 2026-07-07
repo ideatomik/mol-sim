@@ -39,15 +39,17 @@ signal targets_changed()  # fires on register_target()/unregister_target() — l
                           # (PlayerUI's dropdown today; complexity-toggle-driven
                           # re-registration later) stay in sync without polling.
 
-const STRAND_WIDTH_PERCENTAGE: float = 0.90
-const LEVEL34_PADDING: float = 160.0  # world-space padding around framed points
-const LEVEL_TRANSITION_DURATION: float = 0.5
-const PAN_SCREEN_SPEED: float = 400.0  # px/sec on SCREEN — divided by zoom each
-                                        # frame so panning feels the same speed
-                                        # regardless of how zoomed in the camera is
-
 var pan_offset_x: float = 0.0  # left/right arrow offset, added on top of whatever the
                                 # current frame computes — reset on any target/level/sequence change
+
+# Set by _compute_strand_fit() as a side effect each time it runs — true
+# when level 1 is currently in fit-to-height mode (long sequence). Auto-
+# release below is scoped to this specifically, per LongSequenceDesign.md
+# Part 3: levels 2/3 keep today's "sticky until deliberate change" pan
+# behavior unchanged.
+var _is_windowed_mode: bool = false
+var _pan_idle_time: float = 0.0
+var _pan_release_tween: Tween = null
 
 var zoom_level: int = 1
 var current_target_id: String = ""  # persists across levels once set — see reset_zoom()
@@ -59,7 +61,12 @@ var _target_order: Array[String] = []  # registration order, used for the dropdo
 
 var _transition_tween: Tween = null
 
+var tm: Node = null  # ThemeManager reference, cached in _ready() — all
+                      # zoom-tuning floats + the shared legible_reference_length
+                      # live there now (see "Zoom & Long-Sequence Display" group).
+
 func _ready():
+	tm = get_node("%ThemeManager")
 	# Defer so simulation._ready() has time to call initialize_simulation()
 	# and compute track_length before we try to frame the strand.
 	_frame_strand.call_deferred()
@@ -88,7 +95,22 @@ func _process(delta):
 	if Input.is_action_pressed("ui_right"):
 		pan_dir += 1.0
 	if pan_dir != 0.0 and zoom.x > 0.0:
-		pan_offset_x += pan_dir * PAN_SCREEN_SPEED * delta / zoom.x
+		pan_offset_x += pan_dir * tm.zoom_pan_screen_speed * delta / zoom.x
+
+	# Auto-release: level-1 fit-to-height only (LongSequenceDesign.md Part 3
+	# — confirmed scope, levels 2/3 unchanged). Two release triggers exist:
+	# this inactivity timeout, and the explicit recenter_pan() a player can
+	# call directly (wired to a button in PlayerUI.tscn).
+	var in_level1_windowed = zoom_level == 1 and _is_windowed_mode
+	if pan_dir != 0.0:
+		_pan_idle_time = 0.0
+		if _pan_release_tween != null and _pan_release_tween.is_valid():
+			_pan_release_tween.kill()  # resuming manual pan cancels any in-flight release
+	elif in_level1_windowed and pan_offset_x != 0.0:
+		_pan_idle_time += delta
+		if _pan_idle_time >= tm.zoom_pan_release_inactivity_seconds:
+			_tween_pan_to_zero()
+			_pan_idle_time = 0.0
 
 	# If the enzyme we're focused on fades out mid-session (proximity fade
 	# ending, is_done_phase, etc.) while we're zoomed into it, drop back to
@@ -259,6 +281,27 @@ func set_highlight_enabled(enabled: bool) -> void:
 	highlight_enabled = enabled
 	highlight_changed.emit(enabled)
 
+## Whether level 1 is currently in fit-to-height windowed mode — lets
+## PlayerUI disable the recenter button when it isn't relevant (short
+## sequence, normal fit-to-track view).
+func is_windowed_mode() -> bool:
+	return _is_windowed_mode
+
+## Explicit recenter action (LongSequenceDesign.md Part 3) — distinct from
+## the full reset_zoom(), which also clears the target and returns to level
+## 1. This only tweens pan_offset_x back to zero, meaningful specifically in
+## the level-1 fit-to-height windowed mode where a player may have panned
+## away from the auto-follow point. Wired to a button in PlayerUI.tscn.
+func recenter_pan() -> void:
+	_tween_pan_to_zero()
+
+func _tween_pan_to_zero() -> void:
+	if _pan_release_tween != null and _pan_release_tween.is_valid():
+		_pan_release_tween.kill()
+	_pan_release_tween = create_tween()
+	_pan_release_tween.tween_property(self, "pan_offset_x", 0.0, tm.zoom_pan_release_tween_duration)\
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
 ## Full reset: clears the selected target AND returns to level 1, animated.
 func reset_zoom() -> void:
 	current_target_id = ""
@@ -270,8 +313,11 @@ func reset_zoom_instant() -> void:
 	current_target_id = ""
 	zoom_level = 1
 	pan_offset_x = 0.0
+	_pan_idle_time = 0.0
 	if _transition_tween != null and _transition_tween.is_valid():
 		_transition_tween.kill()
+	if _pan_release_tween != null and _pan_release_tween.is_valid():
+		_pan_release_tween.kill()
 	var fit = _compute_strand_fit()
 	zoom = Vector2(fit.zoom, fit.zoom)
 	global_position = fit.position
@@ -287,7 +333,10 @@ func reset_zoom_instant() -> void:
 func _transition_to_level(level: int) -> void:
 	if _transition_tween != null and _transition_tween.is_valid():
 		_transition_tween.kill()
+	if _pan_release_tween != null and _pan_release_tween.is_valid():
+		_pan_release_tween.kill()
 	pan_offset_x = 0.0  # any deliberate level/target change resets manual panning
+	_pan_idle_time = 0.0
 
 	var frame: Dictionary
 	if current_target_id != "" and level >= _target_entry_level(current_target_id):
@@ -298,9 +347,9 @@ func _transition_to_level(level: int) -> void:
 	zoom_level = level
 	_transition_tween = create_tween()
 	_transition_tween.set_parallel(true)
-	_transition_tween.tween_property(self, "zoom", Vector2(frame.zoom, frame.zoom), LEVEL_TRANSITION_DURATION)\
+	_transition_tween.tween_property(self, "zoom", Vector2(frame.zoom, frame.zoom), tm.zoom_level_transition_duration)\
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_transition_tween.tween_property(self, "global_position", frame.position, LEVEL_TRANSITION_DURATION)\
+	_transition_tween.tween_property(self, "global_position", frame.position, tm.zoom_level_transition_duration)\
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	zoom_level_changed.emit(level)
 
@@ -313,6 +362,10 @@ func _transition_to_level(level: int) -> void:
 func scrub_snap() -> void:
 	if _transition_tween != null and _transition_tween.is_valid():
 		_transition_tween.kill()
+	if _pan_release_tween != null and _pan_release_tween.is_valid():
+		_pan_release_tween.kill()
+		pan_offset_x = 0.0  # the release tween's own end state — snap rather
+		                    # than leave it frozen mid-interpolation
 	if current_target_id != "" and zoom_level >= _target_entry_level(current_target_id):
 		_apply_live_frame()
 	else:
@@ -350,7 +403,7 @@ func _compute_target_frame(level: int) -> Dictionary:
 	var points: Array = result
 	if points.is_empty():
 		return _compute_strand_fit()
-	return _fit_points(points, LEVEL34_PADDING)
+	return _fit_points(points, tm.zoom_level34_padding)
 
 func _fit_points(points: Array, padding: float) -> Dictionary:
 	var min_pos: Vector2 = points[0]
@@ -376,12 +429,70 @@ func _frame_strand() -> void:
 func _compute_strand_fit() -> Dictionary:
 	var simulation = get_parent()
 	if not "track_length" in simulation or simulation.track_length <= 0.0:
+		_is_windowed_mode = false
 		return {zoom = 1.0, position = global_position}
 	var track_length: float = simulation.track_length
 	var mid_y: float = simulation.center_y if "center_y" in simulation else 360.0
 	var viewport_width: float = get_viewport_rect().size.x
-	var target_zoom: float = (viewport_width * STRAND_WIDTH_PERCENTAGE) / track_length
-	return {zoom = target_zoom, position = Vector2(track_length / 2.0, mid_y)}
+	var track_zoom: float = (viewport_width * tm.zoom_strand_width_percentage) / track_length
+
+	# Threshold: would the whole track still fit legibly right now? Defined
+	# live against viewport math (per your call), tied to the shared
+	# legible_reference_length rather than an arbitrary standalone zoom
+	# float — see _compute_reference_zoom().
+	var min_readable_zoom = _compute_reference_zoom(simulation, viewport_width)
+	if min_readable_zoom <= 0.0 or track_zoom >= min_readable_zoom:
+		_is_windowed_mode = false
+		return {zoom = track_zoom, position = Vector2(track_length / 2.0, mid_y)}
+
+	_is_windowed_mode = true
+	return _compute_height_fit(simulation, mid_y)
+
+## The zoom _compute_strand_fit() would produce for a
+## tm.legible_reference_length (57) base sequence at the current viewport
+## width — "the last known-good size." Used as the live fit-to-height
+## threshold instead of a hardcoded nucleotide-count cutoff, so it stays
+## correct if nucleotide_slot_spacing or viewport size ever change. Returns
+## 0.0 (never triggers fit-to-height) if simulation doesn't expose the
+## geometry needed to compute it.
+func _compute_reference_zoom(simulation, viewport_width: float) -> float:
+	if not ("nucleotide_slot_spacing" in simulation and "polymerase_x_offset_slots" in simulation):
+		return 0.0
+	var spacing: float = simulation.nucleotide_slot_spacing
+	var offset: float = simulation.polymerase_x_offset_slots * spacing
+	var reference_track_length: float = float(tm.legible_reference_length - 1) * spacing + 2.0 * offset
+	if reference_track_length <= 0.0:
+		return 0.0
+	return (viewport_width * tm.zoom_strand_width_percentage) / reference_track_length
+
+## Level 1 for sequences long enough that fitting the whole track width would
+## fall below the readable floor (LongSequenceDesign.md Part 3's "windowed"
+## mode). Zoom is derived from a FIXED vertical content span instead of the
+## (now arbitrarily long) track width, so bases/enzymes stay a legible,
+## constant size regardless of sequence length — the width simply runs past
+## the viewport, and position.x below keeps the active synthesis point in
+## view instead of centering the whole (now off-screen-wide) track.
+##
+## tm.zoom_vertical_content_span/tm.zoom_height_fit_percentage are NOT YET
+## TUNED — placeholder values pending real numbers in-engine, per
+## LongSequenceDesign.md. Now Inspector-editable via ThemeManager.
+func _compute_height_fit(simulation, mid_y: float) -> Dictionary:
+	var viewport_size = get_viewport_rect().size
+	var target_zoom: float = (viewport_size.y * tm.zoom_height_fit_percentage) / tm.zoom_vertical_content_span
+
+	# Follow anchor: midpoint of helicase_x/polymerase_x (leading), per
+	# ZoomDesign.md's already-resolved decision — deliberately NOT the
+	# lagging polymerase, whose per-fragment jump-back would make the anchor
+	# itself jump. Falls back to keeping the camera's current x if simulation
+	# doesn't expose these (rather than defaulting to some dimensionally
+	# unrelated value).
+	var follow_x: float = global_position.x
+	if "helicase_x" in simulation and "polymerase_x" in simulation:
+		follow_x = (simulation.helicase_x + simulation.polymerase_x) / 2.0
+	elif "track_length" in simulation:
+		follow_x = simulation.track_length / 2.0
+
+	return {zoom = target_zoom, position = Vector2(follow_x, mid_y)}
 
 # ==========================================
 # HIGHLIGHT — queried by owning scripts, never written here (see file banner).

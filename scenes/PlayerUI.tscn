@@ -72,6 +72,7 @@ text = "GCTA"
 fit_content = true
 autowrap_mode = 0
 horizontal_alignment = 1
+meta_underlined = false
 text_direction = 1
 
 [node name="Scrubber" type="HSlider" parent="Panel/MarginContainer/VBoxContainer/VBoxContainer" unique_id=2076170533]
@@ -125,7 +126,20 @@ theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "+"
 
+[node name="WobbleToggle" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1042166077]
+custom_minimum_size = Vector2(28, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+toggle_mode = true
+button_pressed = true
+text = ""
+
 [node name="SpeedSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1667768660]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+
+[node name="SpeedSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1605540670]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
@@ -233,7 +247,20 @@ size_flags_horizontal = 2
 theme_override_constants/separation = 8
 alignment = 1
 
+[node name="NCloudToggle" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=31216635]
+custom_minimum_size = Vector2(28, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+toggle_mode = true
+button_pressed = true
+text = "N"
+
 [node name="ZoomSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=453914453]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+
+[node name="ZoomSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=179622597]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
@@ -269,4 +296,11 @@ custom_minimum_size = Vector2(28, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
-text = "⟲"
+text = ""
+
+[node name="RecenterPanButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029037]
+custom_minimum_size = Vector2(28, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = ""

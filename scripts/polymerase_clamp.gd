@@ -59,6 +59,39 @@ var _label: EnzymeLabel = null
 var _pump_t: float = 0.0
 var _anchor_local_y: float = 0.0
 
+# ---------- DRAG-TO-SCRUB ----------
+# LongSequenceDesign.md follow-up: click-and-drag anywhere on the clamp
+# scrubs playback — same mechanism as helicase_ring.gd (see that file for
+# the fuller rationale on manual hit-testing over Area2D). Click-region
+# half-extents are cached from _apply()'s own already-computed geometry
+# each frame, rather than recomputing the whole pipeline in the hit-test.
+signal scrub_drag_started()
+signal scrub_drag_delta(cumulative_px: float)  # screen-space, since drag start
+signal scrub_drag_ended()
+
+var _dragging: bool = false
+var _drag_start_screen_x: float = 0.0
+var _click_half_width: float = 0.0
+var _click_half_height: float = 0.0
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if not _dragging and _point_in_click_region(get_global_mouse_position()):
+				_dragging = true
+				_drag_start_screen_x = event.position.x
+				scrub_drag_started.emit()
+				get_viewport().set_input_as_handled()
+		elif _dragging:
+			_dragging = false
+			scrub_drag_ended.emit()
+	elif event is InputEventMouseMotion and _dragging:
+		scrub_drag_delta.emit(event.position.x - _drag_start_screen_x)
+
+func _point_in_click_region(global_point: Vector2) -> bool:
+	var local_point = to_local(global_point)
+	return abs(local_point.x) <= _click_half_width and abs(local_point.y) <= _click_half_height
+
 func setup(sim: Node, mirror: bool) -> void:
 	_sim = sim
 	_mirror = mirror
@@ -207,6 +240,12 @@ func _apply() -> void:
 			_label.set_style(null, label_font_size, label_text_color, label_panel_color)
 			_label.z_index = label_z
 			_label.set_anchor_pos(Vector2(0.0, half_down + label_margin_out))
+
+	# Click region for drag-to-scrub — widest of the back/jaw pieces, full
+	# vertical reach of the back body. Recomputed here (not cached across
+	# frames) so it stays correct as the clamp animates/tunes live.
+	_click_half_width = max(back_width, jaw_width) * 0.5
+	_click_half_height = half_down
 
 ## Live world-space position of the jaw's outer edge, right now. Walks the real
 ## transform chain (local point -> this clamp's scale/mirror/position -> the

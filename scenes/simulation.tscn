@@ -35,6 +35,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
 color = Color(0.15170373, 0.22658296, 0.44672376, 0)
 
 [node name="RailPath" type="Path2D" parent="." unique_id=1800472999]
@@ -84,7 +85,6 @@ simulation = NodePath("../..")
 
 [node name="NucleotideField" type="Node2D" parent="." unique_id=2115278003]
 script = ExtResource("8_160l5")
-field_alpha = 0.1
 max_speed = 200.0
 jitter_accel = 200.0
 
@@ -102,7 +102,7 @@ base_color_c = Color(0.8499613, 0.46963003, 0.09985284, 1)
 base_color_g = Color(0.1705673, 0.64293486, 0.16792625, 1)
 base_label_font_size = 20
 base_label_font = ExtResource("4_ehfb2")
-backbone_color = Color(0.84784794, 0.8280031, 0.56404775, 1)
+backbone_color = Color(0.52734846, 0.92303544, 0.51589483, 1)
 template_backbone_color = Color(0.68235296, 0.8392157, 1, 1)
 at_bond_color = Color(0.6238186, 1, 0.5938983, 1)
 cg_bond_color = Color(0, 1, 0.9920456, 1)
@@ -127,3 +127,5 @@ clamp_inside_chamfer_ratio = 0.15
 clamp_front_z = 2
 marker_font = ExtResource("5_160l5")
 sequence_text_synthesized_color = Color(0.28530824, 0.97445637, 0.57307744, 1)
+zoom_height_fit_percentage = 0.5
+zoom_vertical_content_span = 300.0

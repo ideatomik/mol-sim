@@ -38,7 +38,7 @@ theme/default_font_generate_mipmaps=true
 
 [internationalization]
 
-locale/translations=PackedStringArray("res://localization/enzyme_labels.en.translation", "res://localization/enzyme_labels.es.translation", "res://localization/enzyme_labels.pt_BR.translation")
+locale/translations=PackedStringArray("res://localization/enzyme_labels.en.translation", "res://localization/enzyme_labels.es.translation", "res://localization/enzyme_labels.pt_BR.translation", "res://localization/presets.en.translation", "res://localization/presets.es.translation", "res://localization/presets.pt_BR.translation", "res://localization/ui_strings.en.translation", "res://localization/ui_strings.es.translation", "res://localization/ui_strings.pt_BR.translation")
 
 [physics]
 

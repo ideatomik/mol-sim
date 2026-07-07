@@ -41,8 +41,13 @@ extends Node2D
 ## num_nucleotide_slots), recomputed on every on_sequence_changed() call —
 ## so the field scales with sequence length rather than being a fixed number.
 @export var particles_per_slot: float = 4.0
-## Overall opacity of the whole field (the "dim" knob for low-info mode).
-@export_range(0.0, 1.0) var field_alpha: float = 0.05 : set = set_field_alpha
+## Hard ceiling on particle_count regardless of sequence length — this is a
+## purely decorative layer, and at the new 300-base ceiling (LongSequenceDesign.md),
+## particles_per_slot * num_slots would otherwise scale to 1200 particles,
+## which is what caused the FPS drop on large sequences. 200 is comfortably
+## above what a short sequence ever produces (4 * 57 = 228 is the closest
+## case, so this only actually clamps once sequences get meaningfully long).
+@export var max_particles: int = 200
 ## Circle radius of each drifting nucleotide. 0.0 = auto-match the real
 ## synthesized bases' radius (tm.base_radius), resolved in _ready().
 ## Set a positive value here to override with a fixed size instead.
@@ -120,7 +125,7 @@ func _ready() -> void:
 	sim = get_parent()
 	tm = get_node("%ThemeManager")
 	z_index = field_z_index
-	modulate.a = field_alpha
+	modulate.a = tm.nucleotide_field_alpha
 	visible = enabled
 	set_process(enabled)
 	_font = tm.base_label_font if tm.base_label_font != null else ThemeDB.fallback_font
@@ -139,7 +144,7 @@ func _ready() -> void:
 ## its exact timing, we just wait a couple of frames — cheap, and the field
 ## is purely decorative so a two-frame-late rebuild is invisible in practice.)
 func on_sequence_changed(num_slots: int) -> void:
-	particle_count = max(0, roundi(particles_per_slot * num_slots))
+	particle_count = min(max(0, roundi(particles_per_slot * num_slots)), max_particles)
 	_request_rebuild()
 
 func _request_rebuild() -> void:
@@ -178,6 +183,7 @@ func _fill_for(bt: String) -> Color:
 # ==========================================
 
 func _process(delta: float) -> void:
+	modulate.a = tm.nucleotide_field_alpha
 	if not enabled or _pos.is_empty():
 		return
 	var rect = _visible_world_rect()
@@ -313,10 +319,6 @@ func set_enabled(v: bool) -> void:
 	enabled = v
 	visible = v
 	set_process(v)
-
-func set_field_alpha(v: float) -> void:
-	field_alpha = v
-	modulate.a = v
 
 func set_field_z_index(v: int) -> void:
 	field_z_index = v

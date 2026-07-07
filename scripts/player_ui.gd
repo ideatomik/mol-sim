@@ -28,6 +28,7 @@ extends CanvasLayer
 @onready var speed_decrease_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedDecreaseButton
 @onready var speed_value_label: Label = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedValueLabel
 @onready var speed_increase_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedIncreaseButton
+@onready var wobble_toggle: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/WobbleToggle
 
 # Zoom Controls
 @onready var zoom_controls: HBoxContainer = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls
@@ -36,10 +37,23 @@ extends CanvasLayer
 @onready var enzyme_dropdown: OptionButton = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/EnzymeDropdown
 @onready var zoom_in_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/ZoomInButton
 @onready var reset_zoom_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/ResetZoomButton
+@onready var recenter_pan_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/RecenterPanButton
+@onready var ncloud_toggle: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/NCloudToggle
 
 var zoom_mgr: Camera2D = null  # %ZoomManager, cached in _ready()
 
 var _is_dragging: bool = false
+
+# LongSequenceDesign.md Part 4 — SequenceLabel click/drag-to-scrub state.
+# _hover_index (-1 = none) is the absolute slot index currently under the
+# mouse, threaded into get_sequence_rich_text() each rebuild so the rebuild
+# function itself applies the hover highlight. _is_label_dragging is
+# synthesized from raw mouse-button state (RichTextLabel has no built-in
+# drag concept the way HSlider does) — while true, meta_hover_started's own
+# span-transition firing doubles as "which letter is the cursor over during
+# the drag," continuously scrubbing exactly like dragging the slider does.
+var _hover_index: int = -1
+var _is_label_dragging: bool = false
 
 var _stop_icon_default: String = ""
 
@@ -75,10 +89,25 @@ func _ready():
 	scrubber.step = 1.0
 	scrubber.value_changed.connect(_on_scrubber_dragged)
 
+	# LongSequenceDesign.md Part 4 — click/drag-to-scrub on SequenceLabel.
+	# meta_hover_started/ended fire regardless of button state (hover
+	# tracking is motion-based, not click-based), which is what lets the
+	# same hover signal double as "which letter during an active drag."
+	# gui_input is the only way to observe raw mouse-button state on a
+	# RichTextLabel, since it has no built-in Range-style drag handling.
+	sequence_label.meta_clicked.connect(_on_sequence_label_meta_clicked)
+	sequence_label.meta_hover_started.connect(_on_sequence_label_meta_hover_started)
+	sequence_label.meta_hover_ended.connect(_on_sequence_label_meta_hover_ended)
+	sequence_label.gui_input.connect(_on_sequence_label_gui_input)
+
 	# Connect simulation signals
 	if simulation:
 		simulation.progress_changed.connect(_on_simulation_progress_changed)
 		simulation.simulation_initialized.connect(_on_simulation_initialized)
+		# LongSequenceDesign.md follow-up — helicase_ring.gd's and both
+		# polymerase clamps' drag-to-scrub gestures all funnel through this
+		# one signal (see simulation.gd's request_drag_scrub()).
+		simulation.drag_scrub_requested.connect(_on_drag_scrub_requested)
 
 		# Connect all transport buttons
 		menu_button.pressed.connect(_on_menu_pressed)
@@ -109,6 +138,13 @@ func _ready():
 		# state being live (e.g. the scrubber's max_value setup below).
 		_update_speed_button_states()
 
+		# WobbleToggle controls ThemeManager's own wobble_enabled export —
+		# a cross-cutting visual dial, not something scoped to zoom_mgr.
+		wobble_toggle.toggled.connect(_on_wobble_toggled)
+		var tm = get_node_or_null("%ThemeManager")
+		if tm:
+			wobble_toggle.button_pressed = tm.wobble_enabled
+
 		# Connect zoom controls
 		zoom_mgr = get_node_or_null("%ZoomManager")
 		if zoom_mgr:
@@ -116,6 +152,7 @@ func _ready():
 			zoom_out_button.pressed.connect(_on_zoom_out_pressed)
 			zoom_in_button.pressed.connect(_on_zoom_in_pressed)
 			reset_zoom_button.pressed.connect(_on_reset_zoom_pressed)
+			recenter_pan_button.pressed.connect(_on_recenter_pan_pressed)
 			enzyme_dropdown.item_selected.connect(_on_enzyme_selected)
 			zoom_mgr.zoom_level_changed.connect(_on_zoom_level_changed)
 			zoom_mgr.target_changed.connect(_on_zoom_target_changed)
@@ -141,6 +178,13 @@ func _ready():
 			push_error("PlayerUI: %ZoomManager not found!")
 			zoom_controls.visible = false
 
+		# NCloudToggle controls nucleotide_field.gd's own "enabled" export —
+		# a separate decorative system, unrelated to zoom_mgr's presence, so
+		# this is wired independently of the block above.
+		ncloud_toggle.toggled.connect(_on_ncloud_toggled)
+		if simulation and simulation.nucleotide_field:
+			ncloud_toggle.button_pressed = simulation.nucleotide_field.enabled
+
 		# Connect the sequence loader popup (sibling under UI)
 		var popup = get_node("../SequenceLoaderPopup")
 		if popup:
@@ -157,21 +201,68 @@ func _ready():
 # SLIDER / SCRUBBER
 # ==========================================
 
-func _on_scrubber_dragged(value: float):
-	_is_dragging = true
-	var index = int(round(value))
+## Shared by the scrubber drag and SequenceLabel's click/drag-to-scrub
+## (LongSequenceDesign.md Part 4) — pause if not already manually stepping,
+## scrub, and refresh the UI. One code path instead of two copies of the
+## same pause/scrub/update sequence.
+func _scrub_to_index(index: int) -> void:
 	index = clamp(index, 0, simulation.get_max_scrub_index())
-
-	# Pause the simulation when the user drags
 	if not simulation.manual_override:
 		simulation.toggle_play()
 		play_pause_button.text = "▶"
-
 	simulation.scrub_to_nucleotide_index(index)
 	_update_ui()
 
+func _on_scrubber_dragged(value: float):
+	_is_dragging = true
+	_scrub_to_index(int(round(value)))
+
 	await get_tree().process_frame
 	_is_dragging = false
+
+## LongSequenceDesign.md follow-up — helicase_ring.gd / polymerase_clamp.gd
+## drag gestures arrive here already converted to a target index (see
+## simulation.gd's request_drag_scrub()); this just reuses the same shared
+## helper as the scrubber and SequenceLabel, so pause-on-drag and the UI
+## refresh stay one code path instead of a fourth copy of it.
+func _on_drag_scrub_requested(index: int) -> void:
+	_scrub_to_index(index)
+
+# ==========================================
+# SEQUENCE LABEL — click/drag-to-scrub (LongSequenceDesign.md Part 4)
+# Every visible character is wrapped in [url=ABSOLUTE_INDEX] by
+# get_sequence_rich_text(); these handlers convert that meta back into a
+# scrub action, reusing _scrub_to_index() above rather than duplicating it.
+# ==========================================
+
+func _on_sequence_label_meta_clicked(meta):
+	_scrub_to_index(int(meta))
+
+## Fires on every span transition regardless of button state (hover
+## tracking is motion-based, not click-based) — this is what lets the same
+## signal serve two purposes: plain hover highlighting, and (when
+## _is_label_dragging is true) continuous scrub-while-dragging, mirroring
+## how dragging the slider itself works.
+func _on_sequence_label_meta_hover_started(meta):
+	_hover_index = int(meta)
+	sequence_label.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	if _is_label_dragging:
+		_scrub_to_index(_hover_index)
+	else:
+		_update_ui()  # refresh immediately rather than waiting for the next progress tick
+
+func _on_sequence_label_meta_hover_ended(meta):
+	if int(meta) == _hover_index:
+		_hover_index = -1
+		sequence_label.mouse_default_cursor_shape = Control.CURSOR_ARROW
+		_update_ui()
+
+## The only way to observe raw mouse-button state on a RichTextLabel —
+## unlike HSlider, it has no built-in drag concept, so drag-to-scrub is
+## synthesized from this plus meta_hover_started's span transitions above.
+func _on_sequence_label_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		_is_label_dragging = event.pressed
 
 # ==========================================
 # TRANSPORT CONTROLS
@@ -296,6 +387,15 @@ func _update_speed_button_states():
 func _on_highlight_toggled(pressed: bool):
 	zoom_mgr.set_highlight_enabled(pressed)
 
+func _on_ncloud_toggled(pressed: bool):
+	if simulation and simulation.nucleotide_field:
+		simulation.nucleotide_field.enabled = pressed
+
+func _on_wobble_toggled(pressed: bool):
+	var tm = get_node_or_null("%ThemeManager")
+	if tm:
+		tm.wobble_enabled = pressed
+
 func _on_zoom_out_pressed():
 	zoom_mgr.set_zoom_level(zoom_mgr.zoom_level - 1)
 
@@ -309,6 +409,13 @@ func _on_zoom_in_pressed():
 func _on_reset_zoom_pressed():
 	zoom_mgr.reset_zoom()
 
+## LongSequenceDesign.md Part 3 — explicit recenter action, distinct from
+## the full reset_zoom() above (which also clears target and returns to
+## level 1). Only meaningful in level-1 fit-to-height mode; disabled
+## otherwise (see _update_zoom_button_states()).
+func _on_recenter_pan_pressed():
+	zoom_mgr.recenter_pan()
+
 func _on_enzyme_selected(index: int):
 	var id = enzyme_dropdown.get_item_metadata(index)
 	if id != null:
@@ -320,33 +427,49 @@ func _on_zoom_level_changed(_new_level: int):
 func _on_zoom_target_changed(new_target_id: String):
 	# Keep the dropdown in sync if the target changed via some other input
 	# method (keyboard/click/voice, later) rather than the dropdown itself.
-	for i in range(enzyme_dropdown.item_count):
-		if enzyme_dropdown.get_item_metadata(i) == new_target_id:
-			enzyme_dropdown.select(i)
-			break
+	if new_target_id == "":
+		enzyme_dropdown.select(0)  # placeholder
+	else:
+		for i in range(enzyme_dropdown.item_count):
+			if enzyme_dropdown.get_item_metadata(i) == new_target_id:
+				enzyme_dropdown.select(i)
+				break
 	_update_zoom_button_states()
 
 func _populate_enzyme_dropdown():
 	var previous_id = zoom_mgr.current_target_id
 	enzyme_dropdown.clear()
+
+	# Placeholder — shown until the player actually picks an enzyme, rather
+	# than defaulting to whichever one happens to be registered first
+	# (previously always "Helicase"). Disabled so it can't be re-selected
+	# once a real choice is made; metadata stays null, already guarded in
+	# _on_enzyme_selected().
+	enzyme_dropdown.add_item(tr("UI_ENZYME_DROPDOWN_PLACEHOLDER"))
+	enzyme_dropdown.set_item_disabled(0, true)
+
 	var ids = zoom_mgr.get_target_ids()
 	for id in ids:
 		var display_name = zoom_mgr.get_target_display_name(id)
 		enzyme_dropdown.add_item(display_name)
 		enzyme_dropdown.set_item_metadata(enzyme_dropdown.item_count - 1, id)
 
-	if ids.is_empty():
+	if ids.is_empty() or previous_id == "" or not ids.has(previous_id):
+		# Nothing valid was previously selected — show the placeholder
+		# rather than auto-picking the first registered enzyme. Still a UI
+		# sync, so explicitly clears current_target_id (rather than leaving
+		# a stale/now-invalid id behind) instead of just skipping the call.
+		enzyme_dropdown.select(0)
+		zoom_mgr.set_pending_target("")
 		_update_zoom_button_states()
 		return
 
 	# Restore whichever target was already current (e.g. after a future
-	# complexity toggle re-registers targets), or default to the first item
-	# if nothing was selected yet. Either way this is a UI sync, not a
-	# player action, so it uses set_pending_target() rather than
-	# select_target() — no jump to level 3.
-	var restore_id = previous_id if (previous_id != "" and ids.has(previous_id)) else ids[0]
-	enzyme_dropdown.select(ids.find(restore_id))
-	zoom_mgr.set_pending_target(restore_id)
+	# complexity toggle re-registers targets) — a UI sync, not a player
+	# action, so it uses set_pending_target() rather than select_target()
+	# — no jump to level 3.
+	enzyme_dropdown.select(ids.find(previous_id) + 1)  # +1 for the placeholder at index 0
+	zoom_mgr.set_pending_target(previous_id)
 	_update_zoom_button_states()
 
 func _update_zoom_button_states():
@@ -356,6 +479,7 @@ func _update_zoom_button_states():
 	var no_target_yet = zoom_mgr.current_target_id == ""
 	var target_unavailable = no_target_yet or not zoom_mgr.is_target_visible(zoom_mgr.current_target_id)
 	zoom_in_button.disabled = (zoom_mgr.zoom_level >= 3) or target_unavailable
+	recenter_pan_button.disabled = not zoom_mgr.is_windowed_mode()
 
 ## Called every frame (see _process below) since enzyme visibility changes
 ## continuously during play (proximity fade-in/out), not just on discrete
@@ -441,7 +565,7 @@ func _update_ui():
 	scrubber.custom_minimum_size.x = max(label_width, 100)  # Minimum 100px for usability
 
 	# Update sequence label with rich text
-	sequence_label.bbcode_text = simulation.get_sequence_rich_text()
+	sequence_label.bbcode_text = simulation.get_sequence_rich_text(_hover_index)
 
 	_update_speed_display()
 	_update_button_states()
@@ -455,4 +579,4 @@ func _update_button_states():
 	fast_backward.disabled = (count <= 0)
 	fast_forward.disabled = (count >= total)
 
-	stop_button.text = "" if _is_simulation_done() else _stop_icon_default
+	stop_button.text = "" if _is_simulation_done() else _stop_icon_default
