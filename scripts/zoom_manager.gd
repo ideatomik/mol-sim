@@ -55,6 +55,24 @@ var zoom_level: int = 1
 var current_target_id: String = ""  # persists across levels once set — see reset_zoom()
 var highlight_enabled: bool = false
 
+# ---------- Free camera mode (mouse pan/zoom) ----------
+# Orthogonal to the discrete zoom_level system above — while active, NEITHER
+# _apply_live_frame() (target-driven) NOR _frame_strand()/_compute_strand_fit()
+# (auto-fit) touch the camera at all; _process() below early-returns and the
+# camera is driven entirely by _unhandled_input(). Entered by any background
+# left-click-drag or any scroll-wheel input (both also clear current_target_id
+# — "background" here just means the click/scroll wasn't already claimed by
+# an enzyme's own drag-scrub, checked via is_input_handled() rather than any
+# collision detection of our own). Exited only two ways, both explicit
+# player actions: picking a target again (select_target()), or ResetZoomButton
+# (reset_zoom()) — no automatic snap-back on its own.
+var _free_camera_mode: bool = false
+var _free_camera_zoom: float = 1.0
+var _free_camera_position: Vector2 = Vector2.ZERO
+var _free_camera_dragging: bool = false
+var _free_camera_drag_last_mouse: Vector2 = Vector2.ZERO
+var _free_camera_recenter_tween: Tween = null  # separate from _pan_release_tween — tweens a Vector2, not pan_offset_x
+
 # id -> {frame_fns: Dictionary[int, Callable], entry_level: int, display_name: String, is_visible_fn: Callable}
 var _targets: Dictionary = {}
 var _target_order: Array[String] = []  # registration order, used for the dropdown + cycling
@@ -81,7 +99,52 @@ func _input(event: InputEvent) -> void:
 	if event.is_action("ui_left") or event.is_action("ui_right"):
 		get_viewport().set_input_as_handled()
 
+## Background click-drag (pan) and scroll-wheel (zoom) — free camera mode,
+## see the var block above. Runs as _unhandled_input specifically so any
+## enzyme's own drag-scrub (helicase_ring.gd / polymerase_clamp.gd, both
+## call set_input_as_handled() when THEY claim a click) gets first refusal —
+## is_input_handled() is checked explicitly rather than relying on sibling
+## node call-order alone.
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				if get_viewport().is_input_handled():
+					return  # an enzyme already claimed this click
+				_enter_free_camera_mode()
+				if _free_camera_recenter_tween != null and _free_camera_recenter_tween.is_valid():
+					_free_camera_recenter_tween.kill()
+				_free_camera_dragging = true
+				_free_camera_drag_last_mouse = event.position
+				get_viewport().set_input_as_handled()
+			elif _free_camera_dragging:
+				_free_camera_dragging = false
+				get_viewport().set_input_as_handled()
+		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			if get_viewport().is_input_handled():
+				return
+			_free_camera_scroll_zoom(event.position, 1)
+			get_viewport().set_input_as_handled()
+		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			if get_viewport().is_input_handled():
+				return
+			_free_camera_scroll_zoom(event.position, -1)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and _free_camera_dragging:
+		# Standard "grab canvas" convention: content follows the mouse, so
+		# the camera moves OPPOSITE the drag, converted from screen pixels
+		# to world units via the current zoom.
+		var delta_screen: Vector2 = event.position - _free_camera_drag_last_mouse
+		_free_camera_drag_last_mouse = event.position
+		if _free_camera_zoom > 0.0:
+			_free_camera_position -= delta_screen / _free_camera_zoom
+			zoom = Vector2(_free_camera_zoom, _free_camera_zoom)
+			global_position = _free_camera_position
+
 func _process(delta):
+	if _free_camera_mode:
+		return  # camera fully owned by _unhandled_input() while this is active
+
 	# Live tracking (_apply_live_frame / _frame_strand, in the branch below)
 	# already recomputes from the current viewport size every frame, so no
 	# separate resize hook is needed here anymore.
@@ -227,6 +290,7 @@ func select_target(id: String) -> void:
 	if not is_target_visible(id):
 		push_warning("ZoomManager: target '%s' isn't visible on screen yet, refusing to zoom in" % id)
 		return
+	_free_camera_mode = false  # exits free camera — picking a target is one of its two explicit exits
 	current_target_id = id
 	_transition_to_level(_target_entry_level(id))
 	target_changed.emit(id)
@@ -250,6 +314,14 @@ func set_pending_target(id: String) -> void:
 ## visible yet (same guard as select_target()) — this is what PlayerUI's +
 ## button relies on.
 func set_zoom_level(level: int) -> void:
+	if _free_camera_mode:
+		# Zoom In/Out buttons become continuous nudges here instead of
+		# discrete level jumps — there's no target to frame against in this
+		# mode. Direction is reliably encoded by level vs. the (otherwise
+		# stale, unused-for-math) zoom_level, since both button handlers
+		# always pass zoom_level ± 1.
+		_free_camera_nudge_zoom(1 if level > zoom_level else -1)
+		return
 	level = clamp(level, 1, 3)
 	if current_target_id == "" and _target_order.size() > 0 and level >= 2:
 		# Safety net if something calls this directly without a target ever
@@ -289,11 +361,36 @@ func is_windowed_mode() -> bool:
 
 ## Explicit recenter action (LongSequenceDesign.md Part 3) — distinct from
 ## the full reset_zoom(), which also clears the target and returns to level
-## 1. This only tweens pan_offset_x back to zero, meaningful specifically in
-## the level-1 fit-to-height windowed mode where a player may have panned
-## away from the auto-follow point. Wired to a button in PlayerUI.tscn.
+## 1. In level-1 fit-to-height mode, this tweens pan_offset_x back to zero.
+## In free-camera mode, it pulls double duty (per your ask): centers the
+## whole track horizontally (and vertically, back to center_y) WITHOUT
+## touching zoom — same position ResetZoomButton's level-1 snap would use,
+## just without the zoom part.
 func recenter_pan() -> void:
-	_tween_pan_to_zero()
+	if _free_camera_mode:
+		_recenter_free_camera()
+	else:
+		_tween_pan_to_zero()
+
+func _recenter_free_camera() -> void:
+	var simulation = get_parent()
+	var track_length: float = simulation.track_length if "track_length" in simulation else 0.0
+	var mid_y: float = simulation.center_y if "center_y" in simulation else global_position.y
+	var target_pos: Vector2 = Vector2(track_length * 0.5, mid_y)
+	if _free_camera_recenter_tween != null and _free_camera_recenter_tween.is_valid():
+		_free_camera_recenter_tween.kill()
+	_free_camera_recenter_tween = create_tween()
+	_free_camera_recenter_tween.tween_method(_set_free_camera_position, _free_camera_position, target_pos, tm.zoom_pan_release_tween_duration)\
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+## tween_method callback rather than tweening global_position directly —
+## keeps _free_camera_position (the authoritative state the drag/scroll
+## handlers read and write) in sync throughout, so the next drag or scroll
+## doesn't yank the view back to a stale pre-tween value. Same class of bug
+## the missing lagging_polymerase_tween.kill() caused earlier this session.
+func _set_free_camera_position(p: Vector2) -> void:
+	_free_camera_position = p
+	global_position = p
 
 func _tween_pan_to_zero() -> void:
 	if _pan_release_tween != null and _pan_release_tween.is_valid():
@@ -303,13 +400,17 @@ func _tween_pan_to_zero() -> void:
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 ## Full reset: clears the selected target AND returns to level 1, animated.
+## Also the second (and only other) explicit exit from free-camera mode —
+## per your call, a clean snap back to level 1 via ResetZoomButton.
 func reset_zoom() -> void:
+	_free_camera_mode = false
 	current_target_id = ""
 	_transition_to_level(1)
 
 ## Same as reset_zoom() but instant — for a fresh sequence load, where an
 ## animated pan across the old track would look wrong.
 func reset_zoom_instant() -> void:
+	_free_camera_mode = false
 	current_target_id = ""
 	zoom_level = 1
 	pan_offset_x = 0.0
@@ -318,6 +419,8 @@ func reset_zoom_instant() -> void:
 		_transition_tween.kill()
 	if _pan_release_tween != null and _pan_release_tween.is_valid():
 		_pan_release_tween.kill()
+	if _free_camera_recenter_tween != null and _free_camera_recenter_tween.is_valid():
+		_free_camera_recenter_tween.kill()
 	var fit = _compute_strand_fit()
 	zoom = Vector2(fit.zoom, fit.zoom)
 	global_position = fit.position
@@ -335,6 +438,8 @@ func _transition_to_level(level: int) -> void:
 		_transition_tween.kill()
 	if _pan_release_tween != null and _pan_release_tween.is_valid():
 		_pan_release_tween.kill()
+	if _free_camera_recenter_tween != null and _free_camera_recenter_tween.is_valid():
+		_free_camera_recenter_tween.kill()
 	pan_offset_x = 0.0  # any deliberate level/target change resets manual panning
 	_pan_idle_time = 0.0
 
@@ -360,6 +465,9 @@ func _transition_to_level(level: int) -> void:
 ## pan_offset_x deliberately persists through scrub (only target/level/
 ## sequence changes reset it — scrubbing through time doesn't).
 func scrub_snap() -> void:
+	if _free_camera_mode:
+		return  # scrubbing changes which base is synthesized, not where the
+		        # player is looking — free camera stays exactly where it is
 	if _transition_tween != null and _transition_tween.is_valid():
 		_transition_tween.kill()
 	if _pan_release_tween != null and _pan_release_tween.is_valid():
@@ -434,7 +542,7 @@ func _compute_strand_fit() -> Dictionary:
 	var track_length: float = simulation.track_length
 	var mid_y: float = simulation.center_y if "center_y" in simulation else 360.0
 	var viewport_width: float = get_viewport_rect().size.x
-	var track_zoom: float = (viewport_width * tm.zoom_strand_width_percentage) / track_length
+	var track_zoom: float = _compute_track_fit_zoom(viewport_width, track_length)
 
 	# Threshold: would the whole track still fit legibly right now? Defined
 	# live against viewport math (per your call), tied to the shared
@@ -447,6 +555,15 @@ func _compute_strand_fit() -> Dictionary:
 
 	_is_windowed_mode = true
 	return _compute_height_fit(simulation, mid_y)
+
+## Shared by _compute_strand_fit() above (level 1, gated by the legibility
+## threshold) and _compute_free_camera_min_zoom() below (free-camera mode's
+## zoom-out floor, UNGATED — this doubles as "Level 0" with no separate fit
+## formula needed: for short sequences it's identical to what level 1
+## already shows, for long ones it's smaller than the windowed level-1 zoom,
+## letting the player scroll out further to see the whole track).
+func _compute_track_fit_zoom(viewport_width: float, track_length: float) -> float:
+	return (viewport_width * tm.zoom_strand_width_percentage) / track_length
 
 ## The zoom _compute_strand_fit() would produce for a
 ## tm.legible_reference_length (57) base sequence at the current viewport
@@ -463,7 +580,7 @@ func _compute_reference_zoom(simulation, viewport_width: float) -> float:
 	var reference_track_length: float = float(tm.legible_reference_length - 1) * spacing + 2.0 * offset
 	if reference_track_length <= 0.0:
 		return 0.0
-	return (viewport_width * tm.zoom_strand_width_percentage) / reference_track_length
+	return _compute_track_fit_zoom(viewport_width, reference_track_length)
 
 ## Level 1 for sequences long enough that fitting the whole track width would
 ## fall below the readable floor (LongSequenceDesign.md Part 3's "windowed"
@@ -493,6 +610,73 @@ func _compute_height_fit(simulation, mid_y: float) -> Dictionary:
 		follow_x = simulation.track_length / 2.0
 
 	return {zoom = target_zoom, position = Vector2(follow_x, mid_y)}
+
+# ==========================================
+# FREE CAMERA MODE (mouse pan/zoom)
+# ==========================================
+
+## Entered by any background drag-start or scroll-wheel input. Seeds free-
+## camera state from the camera's CURRENT zoom/position, so entry is
+## seamless — whatever level/target framing was showing stays exactly where
+## it was, just now under full manual control. Idempotent for the mode-entry
+## part (a second call while already active doesn't re-seed), but still
+## clears the target every time — "background drag/scroll always clears the
+## target," even if it was already clear.
+func _enter_free_camera_mode() -> void:
+	if not _free_camera_mode:
+		_free_camera_mode = true
+		_free_camera_zoom = zoom.x
+		_free_camera_position = global_position
+		if _transition_tween != null and _transition_tween.is_valid():
+			_transition_tween.kill()
+		if _pan_release_tween != null and _pan_release_tween.is_valid():
+			_pan_release_tween.kill()
+	set_pending_target("")
+
+## Whether the camera is currently in free camera mode — lets PlayerUI adapt
+## button behavior/disabled-state (Zoom In/Out become continuous nudges;
+## RecenterPanButton doesn't apply here since pan_offset_x isn't in play).
+func free_camera_mode() -> bool:
+	return _free_camera_mode
+
+## Zoom-toward-cursor (Illustrator/Photoshop convention): keeps the world
+## point under mouse_screen fixed across the zoom change, rather than
+## zooming toward the viewport center. Also used by _free_camera_nudge_zoom()
+## below (Zoom In/Out buttons), passing the viewport center as mouse_screen
+## since a button press has no cursor position of its own to anchor to.
+func _free_camera_scroll_zoom(mouse_screen: Vector2, direction: int) -> void:
+	_enter_free_camera_mode()
+	if _free_camera_recenter_tween != null and _free_camera_recenter_tween.is_valid():
+		_free_camera_recenter_tween.kill()
+	var old_zoom: float = _free_camera_zoom
+	var step: float = tm.zoom_free_camera_scroll_step
+	_free_camera_zoom = old_zoom * step if direction > 0 else old_zoom / step
+	_free_camera_zoom = clamp(_free_camera_zoom, _compute_free_camera_min_zoom(), tm.zoom_free_camera_max_zoom_in)
+
+	var viewport_size: Vector2 = get_viewport_rect().size
+	var world_before: Vector2 = _free_camera_position + (mouse_screen - viewport_size * 0.5) / old_zoom
+	var world_after: Vector2 = _free_camera_position + (mouse_screen - viewport_size * 0.5) / _free_camera_zoom
+	_free_camera_position += world_before - world_after
+
+	zoom = Vector2(_free_camera_zoom, _free_camera_zoom)
+	global_position = _free_camera_position
+
+## Zoom In/Out buttons while in free-camera mode — see set_zoom_level()'s
+## free-camera branch. No cursor position associated with a button press, so
+## this zooms toward the viewport center instead of reusing scroll-zoom's
+## cursor-anchored math directly.
+func _free_camera_nudge_zoom(direction: int) -> void:
+	_free_camera_scroll_zoom(get_viewport_rect().size * 0.5, direction)
+
+## The zoom-out FLOOR for free-camera mode — literally _compute_strand_fit()'s
+## own ungated whole-track-fit value (see _compute_track_fit_zoom()'s doc
+## comment for why this doubles as "Level 0" with no separate fit formula
+## needed).
+func _compute_free_camera_min_zoom() -> float:
+	var simulation = get_parent()
+	if not "track_length" in simulation or simulation.track_length <= 0.0:
+		return 0.1
+	return _compute_track_fit_zoom(get_viewport_rect().size.x, simulation.track_length)
 
 # ==========================================
 # HIGHLIGHT — queried by owning scripts, never written here (see file banner).

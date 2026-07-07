@@ -1,5 +1,5 @@
 # MolSim — Design Document
-_Last updated: v74 — long-sequence support (300-base ceiling, windowed zoom, SequenceLabel click-to-scrub)_
+_Last updated: v75 — zoom system extensions: per-enzyme drag-to-scrub, free camera mode (mouse pan/zoom), nucleotide field/halo tuning_
 
 ---
 
@@ -417,6 +417,15 @@ simulation.gd  — Template Manager (thin scene coordinator)
   shared source (a constant or ThemeManager field) rather than trusting
   coincidental agreement to hold as the codebase evolves. See Long-Sequence
   Support below for both fixes.
+- **Prefer relative deltas over absolute position when driving an
+  interaction from something whose position isn't stable.** The enzyme
+  drag-to-scrub feature (v75) needed to work identically for the lagging
+  polymerase, whose own on-screen position is deliberately non-monotonic
+  (Okazaki jump-back — a sawtooth, not a line). Tracking cumulative
+  screen-space mouse movement since the drag began, and never reading the
+  dragged node's current position, sidesteps the instability entirely: the
+  same math works for all three enzymes with no special-casing. See Zoom
+  System Extensions below.
 
 ---
 
@@ -557,6 +566,139 @@ every other color in the project.
 
 ---
 
+## Zoom System Extensions & Free Camera (v75)
+
+Companion doc: `LongSequenceDesign.md` covers the pass that motivated this
+one (windowed zoom, SequenceLabel). This section covers everything built on
+top of it once the zoom system was actually implemented and put through
+real use.
+
+### Per-enzyme Level 2/3 fit percentages restored, centralized correctly
+`HELICASE_LEVEL2_FIT`/`LEVEL3_FIT` (`simulation.gd`) and
+`LEADING_LEVEL2_FIT`/`LAGGING_LEVEL2_FIT`/`POLYMERASE_LEVEL3_FIT`
+(`replication_manager.gd`) moved to ThemeManager's new "Enzyme Level 2/3
+Fit" subgroup — `zoom_helicase_level2_fit` (0.6), `zoom_helicase_level3_fit`
+(0.8), `zoom_leading_level2_fit` (0.35), `zoom_lagging_level2_fit` (0.35),
+`zoom_polymerase_level3_fit` (0.6, shared by leading+lagging Level 3 only —
+not further split, matching the original single constant). Each stays
+independently tunable — an earlier centralization pass had accidentally
+merged these into one shared value; corrected once the regression was
+reported.
+
+### Nucleotide field & polymerase halo — alpha decoupled, particle count capped
+`nucleotide_field.gd`'s free-floating particle count
+(`particles_per_slot * num_slots`) was scaling to over 1000 particles on
+long sequences, causing a measurable FPS drop — capped with a new
+`max_particles` export (default 200). Separately, `polymerase_halo.gd` used
+to read its own opacity live from `nucleotide_field.gd`'s alpha every
+frame, forcing the two to always match — decoupled into ThemeManager's new
+"Nucleotide Field & Halo" group (`nucleotide_field_alpha` /
+`polymerase_halo_alpha`), so the functional capture-pool halo can be tuned
+independently from the purely decorative background field.
+
+### Click/drag-to-scrub on the enzymes themselves
+`helicase_ring.gd` and `polymerase_clamp.gd` (covering both leading and
+lagging) each got a manual `_unhandled_input()` hit-test — deliberately not
+`Area2D`/`input_event`, which silently depends on
+`Viewport.physics_object_picking` being enabled project-wide, exactly the
+class of trap this project has hit before (CSV registration,
+`LocaleManager` unique-name). Both emit sim-agnostic drag signals
+(`scrub_drag_started`/`scrub_drag_delta`/`scrub_drag_ended`, screen-space
+only, no simulation/zoom knowledge); `simulation.gd` (owns the ring) and
+`replication_manager.gd` (owns both clamps) convert the delta into a scrub
+index and funnel it through `simulation.gd`'s new `request_drag_scrub()`,
+which `player_ui.gd` already listens to and routes into the same
+`_scrub_to_index()` helper the slider and `SequenceLabel` already share.
+
+**The key design decision, worth recording explicitly** (see the new
+architectural rule above): dragging never reads an enzyme's *current
+on-screen position* — only how far the mouse has moved, in screen pixels,
+since the drag began, applied to whatever the scrub index was at that
+moment. This is what makes the lagging polymerase draggable at all despite
+its non-monotonic position — the math simply never touches that position,
+so the sawtooth is irrelevant to it. Confirmed working in practice:
+dragging smoothly moved the scrub index back and forth across a real
+fragment-boundary jump with no special-casing needed.
+
+### Free camera mode (mouse pan/zoom)
+A new camera state, orthogonal to the discrete `zoom_level` system —
+`zoom_manager.gd`'s `_free_camera_mode`. While active, neither
+`_apply_live_frame()` (target-driven) nor `_compute_strand_fit()` (level-1
+auto-fit) touch the camera; `_process()` early-returns and a new
+`_unhandled_input()` drives everything directly:
+
+- **Left-click-drag anywhere not already claimed by an enzyme's own
+  drag-scrub** (checked via `is_input_handled()`, not any collision
+  detection of `zoom_manager.gd`'s own) pans the camera in full 2D — the
+  standard "grab canvas" convention, content follows the mouse.
+- **Scroll wheel** zooms continuously, toward the cursor (the
+  Illustrator/Photoshop convention), bounded between a new zoom-out floor
+  (see below) and `zoom_free_camera_max_zoom_in` (ThemeManager, new "Free
+  Camera Mode" subgroup, alongside `zoom_free_camera_scroll_step`).
+- **Either gesture clears the currently selected target** (dropdown resets
+  to the "Enzymes" placeholder) but does **not** reset the camera itself —
+  entry seeds free-camera state from wherever the camera already was, so
+  the transition is seamless.
+- **Exit is only via two explicit player actions**: picking a target again
+  (`select_target()`), or `ResetZoomButton` (`reset_zoom()`) — no automatic
+  snap-back on its own.
+
+**"Level 0" needed no new fit formula.** The zoom-out floor is literally
+`_compute_strand_fit()`'s own whole-track-fit value, computed *before* its
+windowed-mode legibility check — extracted into a shared
+`_compute_track_fit_zoom()` helper both now call. For short sequences this
+is identical to what level 1 already shows (nothing new); for long ones
+it's smaller than the windowed level-1 zoom, letting the player scroll out
+far enough to see the entire track at once — exactly the requested
+behavior, and only for the sequences where it actually matters (>57 bases),
+with no explicit length check required anywhere.
+
+**`RecenterPanButton` pulls double duty.** In level-1 fit-to-height mode it
+still tweens `pan_offset_x` back to zero (unchanged from v74). In free
+camera mode, it instead centers the whole track (both axes) on screen
+*without touching zoom* — same position `ResetZoomButton`'s level-1 snap
+would use, just without the zoom part. Implemented via `tween_method()`
+against a dedicated `_free_camera_position` var rather than tweening
+`global_position` directly — tweening the Camera2D property alone would
+leave the authoritative `_free_camera_position` state stale, so the very
+next drag/scroll would read the old value and yank the view back. Same
+class of bug as the missing `lagging_polymerase_tween.kill()` below, just
+caught before it shipped this time.
+
+### UI additions
+- **Enzyme dropdown default**: no longer auto-selects Helicase on load —
+  shows a disabled "Enzymes" placeholder (`UI_ENZYME_DROPDOWN_PLACEHOLDER`)
+  until the player actually picks something.
+- **`WobbleToggle`** wired to ThemeManager's existing `wobble_enabled`.
+- **`NCloudToggle`** wired to `nucleotide_field.gd`'s `enabled` export.
+- **`SequenceLabel`**: the automatic `[url]`-meta underline (a Godot
+  default behavior, not something this project deliberately set) turned
+  off via `meta_underlined = false`. Its visual grouping (already tied to
+  real Okazaki fragment boundaries as of v74) needed no further change —
+  it was never actually tied to fragment size before v74 despite briefly
+  appearing to be.
+
+### Bugs found and fixed this pass
+- **`scrub_rebuild()` never killed `lagging_polymerase_tween`** — only
+  `lagging_pump_tween`. Since the lagging polymerase's position tween is
+  essentially always in flight during live play, any scrub landing
+  mid-tween would snap correctly for one frame, then the stale tween's own
+  next update would silently drag it right back toward its pre-scrub
+  target — "everything paused except the lagging polymerase." This bug
+  predates v75; the new drag-to-scrub paths just made it far more likely to
+  actually trigger (many more scrub events per second than the slider ever
+  produced), which is how it surfaced.
+- **A full-screen background `ColorRect`'s `mouse_filter` was left at its
+  Godot default (`Stop`)**, silently absorbing every mouse click at the GUI
+  stage before it could ever reach the new enzyme-drag/free-camera
+  `_unhandled_input()` handlers — zero clicks, zero errors, nothing to go on
+  except a diagnostic print that should have fired but never did. Same
+  silent-failure shape as the CSV-registration and `LocaleManager`
+  unique-name traps already documented in this project. Fixed by setting it
+  to `Ignore`.
+
+---
+
 ## Development Conventions
 
 - **Architecture-first**: discuss design before writing any code
@@ -642,6 +784,31 @@ every other color in the project.
       hover colors moved to the existing "Sequence Text" group
 - See `LongSequenceDesign.md` for full implementation detail
 
+### v75 — Zoom system extensions + free camera
+- [x] Per-enzyme Level 2/3 zoom fit percentages restored to independent,
+      correctly-scoped ThemeManager fields after an earlier centralization
+      pass had accidentally merged them
+- [x] Nucleotide field particle count capped (`max_particles`, fixes a real
+      FPS drop on long sequences); polymerase halo alpha decoupled from the
+      field's own alpha into its own ThemeManager field
+- [x] Click/drag-to-scrub on the helicase ring and both polymerase clamps —
+      relative screen-space delta, not absolute position, which is what
+      makes it work for the lagging polymerase's non-monotonic motion with
+      no special-casing
+- [x] Free camera mode: click-drag pan (2D) + scroll-wheel zoom-toward-
+      cursor, clears the selected target without resetting the camera,
+      exits only via picking a target again or `ResetZoomButton`; zoom-out
+      floor doubles as "Level 0" with no new fit formula needed
+      (`_compute_track_fit_zoom()`, shared with level 1's own fit)
+- [x] `RecenterPanButton` double-duty: centers the track (no zoom change)
+      while in free camera mode
+- [x] UI: "Enzymes" placeholder default (no more auto-selecting Helicase),
+      `WobbleToggle`, `NCloudToggle`
+- [x] Two real bugs found and fixed: `scrub_rebuild()`'s missing
+      `lagging_polymerase_tween.kill()`, and a background `ColorRect` left
+      at Godot's default `mouse_filter = Stop` silently swallowing all
+      clicks
+
 ### Near term — Telomerase tier
 - [ ] Flip `lagging_gap_enabled` on for this tier; verify the
       already-built discard/gap-recording path
@@ -713,6 +880,20 @@ interchangeable" trap):**
   wide, producing out-of-range indices whenever the *final* tile was
   genuinely short — fixed by deriving the tile's true end
   (`min(tile_start + F, num_slots)`) instead of assuming `tile_start + F`.
+- **Missing tween kill in `scrub_rebuild()` (v75)**: the dispatcher killed
+  `lagging_pump_tween` on every scrub but never `lagging_polymerase_tween` —
+  the tween that actually moves the lagging polymerase's *position*, and is
+  essentially always in flight during live play. Any scrub landing
+  mid-tween would snap correctly for one frame, then the stale tween's own
+  next update silently dragged it back toward its pre-scrub target —
+  "everything paused except the lagging polymerase." Predates v75; the new
+  enzyme drag-to-scrub paths just made it far more likely to trigger.
+- **Background `ColorRect` left at default `mouse_filter = Stop` (v75)**:
+  silently absorbed every mouse click at the GUI stage before the new
+  enzyme-drag/free-camera `_unhandled_input()` handlers could ever see
+  them — zero clicks, zero errors. Same silent-failure shape as the CSV
+  registration and `LocaleManager` unique-name traps. Fixed by setting it
+  to `Ignore`.
 
 ---
 

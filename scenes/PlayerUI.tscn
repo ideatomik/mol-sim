@@ -226,6 +226,7 @@ custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
+disabled = true
 text = ""
 
 [node name="Button" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=415854509]

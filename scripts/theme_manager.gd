@@ -193,6 +193,17 @@ extends Node
 ## POLYMERASE_LEVEL3_FIT constant exactly, not further split.
 @export_range(0.0, 1.0) var zoom_polymerase_level3_fit: float = 0.6
 
+@export_subgroup("Free Camera Mode")
+## Max zoom-in ceiling for free-camera mode (mouse drag-pan + scroll-zoom,
+## no target selected). There's no enzyme footprint to size against once no
+## target is selected, so this is a flat number rather than a per-target
+## Level 3 fit. NOT YET TUNED — placeholder pending real numbers in-engine.
+@export var zoom_free_camera_max_zoom_in: float = 4.0
+## Multiplier applied per scroll-wheel tick, or per Zoom In/Out button press
+## while already in free-camera mode (zoom *= this per step in, /= this per
+## step out). NOT YET TUNED.
+@export var zoom_free_camera_scroll_step: float = 1.15
+
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:
 	match base_type:

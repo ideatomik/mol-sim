@@ -401,8 +401,10 @@ func _on_zoom_out_pressed():
 
 func _on_zoom_in_pressed():
 	# Guard mirrors the disabled state set in _update_zoom_button_states():
-	# + should be a no-op at level 1 with nothing ever selected yet.
-	if zoom_mgr.zoom_level == 1 and zoom_mgr.current_target_id == "":
+	# + should be a no-op at level 1 with nothing ever selected yet — but
+	# free-camera mode is a separate state where current_target_id is always
+	# "" by construction, so this guard doesn't apply there.
+	if not zoom_mgr.free_camera_mode() and zoom_mgr.zoom_level == 1 and zoom_mgr.current_target_id == "":
 		return
 	zoom_mgr.set_zoom_level(zoom_mgr.zoom_level + 1)
 
@@ -475,11 +477,20 @@ func _populate_enzyme_dropdown():
 func _update_zoom_button_states():
 	if not zoom_mgr:
 		return
-	zoom_out_button.disabled = (zoom_mgr.zoom_level <= 1)
-	var no_target_yet = zoom_mgr.current_target_id == ""
-	var target_unavailable = no_target_yet or not zoom_mgr.is_target_visible(zoom_mgr.current_target_id)
-	zoom_in_button.disabled = (zoom_mgr.zoom_level >= 3) or target_unavailable
-	recenter_pan_button.disabled = not zoom_mgr.is_windowed_mode()
+	if zoom_mgr.free_camera_mode():
+		# Continuous zoom in this mode — always available, no discrete
+		# ladder to reach the top/bottom of.
+		zoom_out_button.disabled = false
+		zoom_in_button.disabled = false
+	else:
+		zoom_out_button.disabled = (zoom_mgr.zoom_level <= 1)
+		var no_target_yet = zoom_mgr.current_target_id == ""
+		var target_unavailable = no_target_yet or not zoom_mgr.is_target_visible(zoom_mgr.current_target_id)
+		zoom_in_button.disabled = (zoom_mgr.zoom_level >= 3) or target_unavailable
+	# Free-camera mode: always available now (centers the track, see
+	# recenter_pan()'s free-camera branch). Otherwise: only meaningful in
+	# level-1 fit-to-height windowed mode.
+	recenter_pan_button.disabled = not zoom_mgr.free_camera_mode() and not zoom_mgr.is_windowed_mode()
 
 ## Called every frame (see _process below) since enzyme visibility changes
 ## continuously during play (proximity fade-in/out), not just on discrete
