@@ -20,7 +20,7 @@ class_name LocaleManager
 # unique name enabled (%LocaleManager), so it's reachable the same way.
 # ==========================================
 
-@export var default_locale: String = "en"
+@export var default_locale: String = "pt_BR"
 
 signal locale_changed(new_locale: String)
 

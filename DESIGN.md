@@ -750,10 +750,10 @@ caught before it shipped this time.
       no-op, safe to delete once this is confirmed stable across more QA.
       Scrub unaffected — never runs capture, same "instant, finished slots
       only" rule the pump already followed.
-- [ ] Helicase vector graphics: six-blob barrel-roll ring, driven by
+- [x] Helicase vector graphics: six-blob barrel-roll ring, driven by
       `get_eased_step_t()`. See HelicaseDesign.md. **Next up.**
-- [ ] Add text labels to enzymes for visual polish and learning support
-- [ ] Localization hook: Godot's built-in `TranslationServer` + CSV
+- [x] Add text labels to enzymes for visual polish and learning support
+- [x] Localization hook: Godot's built-in `TranslationServer` + CSV
       (`tr("KEY")`), set up once enzyme labels exist so their text is written
       through translation keys from day one rather than retrofitted. Base
       letters (A/T/C/G) and polarity markers (`5'`/`3'`) are NOT translated —

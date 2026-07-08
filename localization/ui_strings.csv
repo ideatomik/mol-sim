@@ -6,3 +6,9 @@ UI_SELECT_SEQUENCE_LABEL,SELECT SEQUENCE:,SELECIONAR SEQUÊNCIA:,SELECCIONAR SEC
 UI_CANCEL_BUTTON,CANCEL,CANCELAR,CANCELAR
 UI_LOAD_BUTTON,LOAD,CARREGAR,CARGAR
 UI_ENZYME_DROPDOWN_PLACEHOLDER,Enzymes,Enzimas,Enzimas
+UI_COMPLEXITY_SETUP_TITLE,COMPLEXITY SETTINGS,CONFIGURAÇÕES DE COMPLEXIDADE,CONFIGURACIÓN DE COMPLEJIDAD
+UI_PRIMASE_TOGGLE_LABEL,Primase (RNA primers),Primase (primers de RNA),Primasa (cebadores de ARN)
+UI_LIGASE_TOGGLE_LABEL,Ligase (seal fragments),Ligase (selar fragmentos),Ligasa (sellar fragmentos)
+UI_POL1_TOGGLE_LABEL,Pol I (primer removal),Pol I (remoção do primer),Pol I (eliminación del cebador)
+UI_CONTINUE_BUTTON,CONTINUE,CONTINUAR,CONTINUAR
+UI_POL1_COMING_SOON,Coming soon — requires Primase and Ligase,Em breve — requer Primase e Ligase,Próximamente — requiere Primasa y Ligasa

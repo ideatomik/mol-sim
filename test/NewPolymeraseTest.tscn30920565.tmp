@@ -1,6 +1,0 @@
-[gd_scene format=3 uid="uid://be7x40o1s7p46"]
-
-[ext_resource type="Script" uid="uid://b3uomqwnfvxtf" path="res://scripts/polymerase_clamp_test.gd" id="1_5ggs7"]
-
-[node name="NewPolymeraseTest" type="Node2D" unique_id=744220885]
-script = ExtResource("1_5ggs7")
