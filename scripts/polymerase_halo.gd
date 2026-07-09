@@ -35,12 +35,22 @@ class_name PolymeraseHalo
 # ==========================================
 
 const Z_IDLE := 3   # in front of backbone(-1)/bonds(0)/clamp-back(-3,-2), behind bases(2)/markers(3)/clamp-front(4)
-const BASES := ["A", "T", "C", "G"]
 
 @export_group("Halo")
 @export var particle_count: int = 5 : set = set_particle_count
 ## How far the cloud is allowed to wander from the clamp center, in pixels.
 @export var halo_radius: float = 60.0
+## Which letters this halo's particles can show. Default matches DNA
+## nucleotides (Pol III's own halo); set to ["A","U","C","G"] for an RNA
+## pool (primase's halo — see replication_manager.gd's initialize()) BEFORE
+## calling setup(), since _build_particles() reads this during initial fill.
+@export var base_letters: PackedStringArray = ["A", "T", "C", "G"]
+## Optional per-letter color overrides, checked before falling back to
+## sim._get_base_fill() — needed for any letter that function doesn't know
+## (e.g. "U", which has no DNA equivalent) and to make an RNA halo's whole
+## ambient cloud read as RNA-tinted rather than only the captured/placed
+## base. Set BEFORE calling setup(), same reason as base_letters above.
+var color_overrides: Dictionary = {}
 
 var _tex: ImageTexture = null
 var _pos: Array = []
@@ -71,8 +81,13 @@ func setup(sim: Node, mirror: bool) -> void:
 	set_process(true)
 
 func _fill_for(bt: String) -> Color:
-	# Same single source of truth nucleotide_field.gd uses, so halo particles
-	# always match the real bases' and field's palette.
+	# color_overrides first (needed for any letter sim._get_base_fill()
+	# doesn't know, e.g. "U" — and to make an RNA halo's whole ambient cloud
+	# read as RNA-tinted, not just the captured/placed base).
+	if color_overrides.has(bt):
+		return color_overrides[bt]
+	# Same single source of truth nucleotide_field.gd uses otherwise, so
+	# halo particles match the real bases' and field's DNA palette.
 	if _sim != null and _sim.has_method("_get_base_fill"):
 		return _sim._get_base_fill(bt)
 	return Color.WHITE
@@ -116,7 +131,7 @@ func capture_particle(letter: String) -> Vector2:
 	_vel.remove_at(idx)
 	dot.queue_free()
 
-	_spawn_into_pool(BASES[randi() % BASES.size()])
+	_spawn_into_pool(base_letters[randi() % base_letters.size()])
 	return world_pos
 
 func _current_radius() -> float:
@@ -144,19 +159,19 @@ func _current_blur_extent() -> float:
 func _current_blur_softness() -> float:
 	return _field.blur_softness if _field != null else 0.45
 
-## Guarantees at least min(count, BASES.size()) distinct types are represented
+## Guarantees at least min(count, base_letters.size()) distinct types are represented
 ## — plain independent-random draws don't, and with a small pool (~5 across 4
 ## types) that was leaving types missing entirely. Any slots beyond the
 ## guaranteed set are free-random. Shuffled so the guaranteed types aren't
 ## always in the same particle indices.
 func _assign_types(count: int) -> Array:
 	var result: Array = []
-	var guaranteed: Array = BASES.duplicate()
+	var guaranteed: Array = base_letters.duplicate()
 	guaranteed.shuffle()
 	for i in range(min(count, guaranteed.size())):
 		result.append(guaranteed[i])
 	for i in range(guaranteed.size(), count):
-		result.append(BASES[randi() % BASES.size()])
+		result.append(base_letters[randi() % base_letters.size()])
 	result.shuffle()
 	return result
 

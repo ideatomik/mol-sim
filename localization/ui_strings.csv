@@ -11,4 +11,5 @@ UI_PRIMASE_TOGGLE_LABEL,Primase (RNA primers),Primase (primers de RNA),Primasa (
 UI_LIGASE_TOGGLE_LABEL,Ligase (seal fragments),Ligase (selar fragmentos),Ligasa (sellar fragmentos)
 UI_POL1_TOGGLE_LABEL,Pol I (primer removal),Pol I (remoção do primer),Pol I (eliminación del cebador)
 UI_CONTINUE_BUTTON,CONTINUE,CONTINUAR,CONTINUAR
+UI_QUIT_BUTTON,QUIT,SAIR,SALIR
 UI_POL1_COMING_SOON,Coming soon — requires Primase and Ligase,Em breve — requer Primase e Ligase,Próximamente — requiere Primasa y Ligasa

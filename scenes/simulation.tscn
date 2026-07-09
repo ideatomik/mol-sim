@@ -9,6 +9,8 @@
 [ext_resource type="PackedScene" uid="uid://bkcyhxg58gv21" path="res://scenes/SequenceLoaderPopup.tscn" id="5_mwrr7"]
 [ext_resource type="Script" uid="uid://bm4g4syy0jl62" path="res://scripts/nucleotide_field.gd" id="8_160l5"]
 [ext_resource type="Script" uid="uid://c3nm7346tpsle" path="res://scripts/locale_manager.gd" id="9_1hwtu"]
+[ext_resource type="Script" uid="uid://bx1dn0be8htfd" path="res://scripts/complexity_manager.gd" id="10_cplxmgr"]
+[ext_resource type="PackedScene" uid="uid://culfpeb6hrg2j" path="res://scenes/ComplexitySetupPopup.tscn" id="11_cplxpop"]
 
 [sub_resource type="Curve2D" id="Curve2D_mwrr7"]
 
@@ -16,6 +18,7 @@
 script = ExtResource("1_5eski")
 num_nucleotide_slots = 34
 dna_ribbons_gap = 60.0
+okazaki_fragment_size = 12
 fade_duration = 1.0
 wobble_amplitude = 0.9
 wobble_speed = 1.0
@@ -80,6 +83,8 @@ default_color = Color(0, 0, 0, 1)
 
 [node name="SequenceLoaderPopup" parent="UI" unique_id=1037424246 instance=ExtResource("5_mwrr7")]
 
+[node name="ComplexitySetupPopup" parent="UI" unique_id=197054953 instance=ExtResource("11_cplxpop")]
+
 [node name="PlayerUI" parent="UI" unique_id=1005777864 node_paths=PackedStringArray("simulation") instance=ExtResource("5_gimvv")]
 simulation = NodePath("../..")
 
@@ -91,6 +96,10 @@ jitter_accel = 200.0
 [node name="LocaleManager" type="Node" parent="." unique_id=2027790647]
 unique_name_in_owner = true
 script = ExtResource("9_1hwtu")
+
+[node name="ComplexityManager" type="Node" parent="." unique_id=1075586656]
+unique_name_in_owner = true
+script = ExtResource("10_cplxmgr")
 
 [node name="ThemeManager" type="Node" parent="." unique_id=264924326]
 unique_name_in_owner = true
@@ -125,6 +134,11 @@ clamp_lower_jaw_height_ratio = 0.26
 clamp_outside_chamfer_ratio = 0.15
 clamp_inside_chamfer_ratio = 0.15
 clamp_front_z = 2
+ligase_rest_color = Color(1, 1, 0.13335153, 1)
+ligase_pulse_color = Color(0.77254903, 0.9490196, 0.13333334, 1)
+primase_blip_size = 54.0
+primase_blip_color = Color(0.98400563, 0.25030932, 0.750307, 1)
+primase_blip_label_margin = 24.0
 marker_font = ExtResource("5_160l5")
 sequence_text_synthesized_color = Color(0.28530824, 0.97445637, 0.57307744, 1)
 zoom_height_fit_percentage = 0.5

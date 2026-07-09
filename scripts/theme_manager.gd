@@ -98,6 +98,72 @@ extends Node
 @export var clamp_lagging_back_color: Color = Color(0.80, 0.32, 0.32, 1.0)
 @export var clamp_lagging_front_color: Color = Color(0.95, 0.52, 0.52, 1.0)
 
+@export_group("Ligase")
+## Single procedural blob (ligase.gd) — Complex-tier trailing enzyme, see
+## OkazakiMaturationDesign.md. Position is driven externally (replication_
+## manager.gd tweens this node's own position); these params tune only its
+## shape/color/pulse.
+@export var ligase_base_size: float = 36.0
+@export_range(0.1, 1.0) var ligase_pinch_ratio: float = 0.55   # width at full pulse, relative to base_size
+@export_range(0.0, 1.0) var ligase_chamfer_ratio: float = 0.35
+@export_range(0.0, 1.0) var ligase_corner_radius_ratio: float = 0.6
+@export_range(2, 8) var ligase_corner_segments: int = 4
+@export var ligase_rest_color: Color = Color(0.85, 0.65, 0.13, 1.0)
+@export var ligase_pulse_color: Color = Color(1.0, 0.85, 0.3, 1.0)
+@export var ligase_z: int = 5
+@export var ligase_label_margin: float = 12.0
+## Time to travel to the next pending fragment boundary, and total pulse
+## duration once there (split 50/50 between the pinch-in and pinch-out
+## halves) — independently tunable, per this project's "never let two
+## numbers coincidentally agree" rule.
+@export var ligase_travel_duration: float = 0.4
+## How long ligase sits parked at the nick, fully visible, before it starts
+## pulsing/sealing — decoupled from travel speed so the gap stays legible
+## regardless of how snappy ligase's own movement is (feedback: the seal was
+## too fast to actually see the nick before it closed).
+@export var ligase_hold_duration: float = 0.5
+@export var ligase_seal_duration: float = 0.3
+
+@export_group("Primase")
+## Now does REAL per-slot placement (RNA primer persistence pass) — no longer
+## a purely decorative blip. Fires once per slot within a fragment's primer
+## span, driven by the SAME helicase-passage event as everything else (see
+## replication_manager.gd's _primase_check_slot()) — no independent pacing
+## constant needed, its cadence already IS the helicase's cadence.
+@export var primase_blip_size: float = 30.0
+@export_range(0.0, 1.0) var primase_blip_chamfer_ratio: float = 0.35
+@export_range(0.0, 1.0) var primase_blip_corner_radius_ratio: float = 0.6
+@export_range(2, 8) var primase_blip_corner_segments: int = 4
+@export var primase_blip_color: Color = Color(0.6, 0.25, 0.75, 1.0)  # also reused as the primer backbone color
+@export var primase_pulse_color: Color = Color(0.85, 0.55, 1.0, 1.0)
+## Primase's pulse GROWS (unlike ligase's pinch/shrink) — a distinct enough
+## motion language that the two enzymes don't read as the same gesture.
+@export_range(1.0, 2.0) var primase_pulse_scale_ratio: float = 1.3
+@export var primase_blip_z: int = 5
+@export var primase_blip_label_margin: float = 12.0
+@export var primase_blip_fade_in_duration: float = 0.15
+## Held fixed again (not fragment-duration-tied, per the earlier scrapped
+## approach) — the PLACED BASES are the real persisted state now, RNA-colored
+## until Pol I exists; the enzyme itself just needs a brief settle before
+## leaving, not to stay parked for a whole fragment's duration.
+@export var primase_blip_hold_duration: float = 0.2
+@export var primase_blip_fade_out_duration: float = 0.2
+## Single-leg flight duration for each captured ribonucleotide, halo capture
+## point -> final resting position (Pol III's own capture routes through the
+## clamp's jaw as an extra leg — primase has no clamp, so one leg is the
+## honest version, not a shortcut).
+@export var primase_capture_duration: float = 0.15
+
+@export_group("RNA Primer")
+## Ratio of okazaki_fragment_size, not a fixed slot count — scales if fragment
+## size is tuned per-domain (see COMPLEXITY_MODEL.md's Okazaki fragment size
+## note). 0.25 against the current default of 12 yields a clean 3-slot primer.
+@export_range(0.05, 0.5) var primer_length_ratio: float = 0.25
+@export var rna_base_color_a: Color = Color(0.85, 0.55, 0.85, 1.0)
+@export var rna_base_color_u: Color = Color(0.55, 0.55, 0.9, 1.0)  # uracil, not thymine — RNA has no T
+@export var rna_base_color_c: Color = Color(0.9, 0.7, 0.5, 1.0)
+@export var rna_base_color_g: Color = Color(0.6, 0.85, 0.6, 1.0)
+
 @export_group("Markers")
 @export var marker_color: Color = Color(0.0, 0.0, 0.0, 0.0)
 @export var marker_font_color: Color = Color(1.0, 1.0, 1.0, 1.0)

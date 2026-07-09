@@ -1,6 +1,26 @@
 extends Node2D
 
 # ==========================================
+# v 76 — Complexity setup startup gate
+# - _ready() no longer auto-generates a random default sequence and calls
+#   initialize_simulation() directly. Instead it shows ComplexitySetupPopup
+#   (Pol I / Ligase / Primase toggles, backed by the new ComplexityManager
+#   node) first, then SequenceLoaderPopup — reusing PlayerUI's existing
+#   sequence_loaded -> initialize_simulation() wiring for the actual load
+#   rather than adding a second listener on the same signal.
+# - New _on_startup_complexity_confirmed() bridges the two popups. Falls
+#   back to the old random-sequence boot if either popup node is missing,
+#   so a broken scene reference degrades gracefully instead of soft-locking
+#   at a popup that will never show.
+# - _process() now early-returns while helicase_mgr == null (fix, same
+#   pass): real frames now run before the first initialize_simulation()
+#   call, and section 3's "always runs, even when paused" rendering touched
+#   nodes (top_strand_backbone_line, etc.) that don't exist yet in that
+#   window, crashing on the very first frame after the popups appeared.
+# - See OkazakiMaturationDesign.md for the toggle set and cascade logic.
+# ==========================================
+
+# ==========================================
 # v 71.x — helicase ring
 # - Placeholder capsule in _setup_helicase() replaced by HelicaseRing
 #   (helicase_ring.gd): six see-through octagonal blobs in a barrel-roll,
@@ -166,7 +186,30 @@ func _ready():
 	if zoom_mgr != null:
 		zoom_mgr.register_target("helicase", {2: _zoom_frame_helicase_level2, 3: _zoom_frame_helicase_level3}, "ENZYME_HELICASE", _zoom_helicase_visible)
 
-	# Generate a random sequence as the default
+	# Startup gate (v76): complexity toggles first, then sequence selection —
+	# replaces the old auto-random-sequence boot. See OkazakiMaturationDesign.md
+	# for the toggle set this screen exposes.
+	var complexity_popup = get_node_or_null("UI/ComplexitySetupPopup")
+	if complexity_popup != null:
+		complexity_popup.setup_confirmed.connect(_on_startup_complexity_confirmed, CONNECT_ONE_SHOT)
+		complexity_popup.show_dialog(true)
+	else:
+		push_error("Simulation: ComplexitySetupPopup not found — falling back to default boot")
+		_boot_with_random_sequence()
+
+func _on_startup_complexity_confirmed() -> void:
+	# Hands off to the existing SequenceLoaderPopup. Its sequence_loaded
+	# signal is already connected in player_ui.gd's _ready() to
+	# simulation.initialize_simulation() — this just decides WHEN it first
+	# opens, it does not add a second listener on that signal.
+	var seq_popup = get_node_or_null("UI/SequenceLoaderPopup")
+	if seq_popup != null:
+		seq_popup.show_dialog()
+	else:
+		push_error("Simulation: SequenceLoaderPopup not found — falling back to default boot")
+		_boot_with_random_sequence()
+
+func _boot_with_random_sequence() -> void:
 	dna_sequence.randomize_sequence(num_nucleotide_slots)
 	initialize_simulation(dna_sequence._to_string())
 
@@ -314,7 +357,7 @@ func initialize_simulation(sequence: String):
 	num_nucleotide_slots = dna_sequence.get_length()
 	var polymerase_x_offset = polymerase_x_offset_slots * nucleotide_slot_spacing
 	track_length = (num_nucleotide_slots - 1) * nucleotide_slot_spacing + 2.0 * polymerase_x_offset
-	
+
 	# Environmental free-nucleotide field — count scales with sequence length;
 	# runs on every load, including the first.
 	if nucleotide_field != null:
@@ -472,6 +515,19 @@ func teardown_simulation():
 
 
 func _process(delta):
+	# v76 startup-gate fix: the complexity/sequence popups now delay
+	# initialize_simulation() past the first several frames (previously it
+	# ran synchronously in _ready(), before _process() ever fired). Section 3
+	# below ("Always runs, even when paused") touches nodes — e.g.
+	# top_strand_backbone_line — that only exist after the first
+	# initialize_simulation() call, so bail out entirely until that's
+	# happened at least once. helicase_mgr is null only in that pre-init
+	# window; every reload after that recreates it synchronously inside
+	# initialize_simulation() itself, so this never skips a real frame once
+	# a sequence has loaded.
+	if helicase_mgr == null:
+		return
+
 	# ---------- 1. DERIVE VISUAL HELICASE POSITION ----------
 	# helicase_x is computed from helicase_mgr's discrete slot index and eased step_t.
 	# This is the only place helicase_x and polymerase_x are written.
@@ -802,7 +858,7 @@ func scrub_to_nucleotide_index(index: int):
 	var catchup_needed = 0
 	if replication_mgr != null and not lagging_gap_enabled:
 		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
-	
+
 	if index <= num_nucleotide_slots - 1:
 		var progress = float(index) / float(num_nucleotide_slots - 1)
 		scrub_to(progress)

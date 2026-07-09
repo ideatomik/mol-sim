@@ -329,9 +329,19 @@ func _on_eject_pressed():
 	popup.show_dialog()
 
 func _on_menu_pressed():
-	"""Open the main menu (placeholder for now)."""
-	print("[PlayerUI] Menu button pressed - TODO: Open main menu")
-	# Later we'll add a proper menu system here
+	"""Reopen the complexity setup popup (Pol I / Ligase / Primase toggles)."""
+	var popup = get_node_or_null("../ComplexitySetupPopup")
+	if not popup:
+		push_error("PlayerUI: ComplexitySetupPopup not found!")
+		return
+
+	# Pause the simulation while reconfiguring — same pattern as
+	# _on_eject_pressed()'s SequenceLoaderPopup handling below.
+	if not simulation.manual_override:
+		simulation.toggle_play()
+		play_pause_button.text = "▶"
+
+	popup.show_dialog()
 
 # ==========================================
 # SPEED CONTROLS

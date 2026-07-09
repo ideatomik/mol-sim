@@ -1,0 +1,138 @@
+[gd_scene format=3 uid="uid://culfpeb6hrg2j"]
+
+[ext_resource type="Script" uid="uid://cvql8e3nlhp1b" path="res://scripts/complexity_setup_popup.gd" id="1_cplxpop"]
+[ext_resource type="FontFile" uid="uid://q1v5f1fmoxhk" path="res://fonts/Raleway/static/Raleway-SemiBold.ttf" id="2_cplxpop"]
+[ext_resource type="FontFile" uid="uid://dkyjnrbvkb6g6" path="res://fonts/GoogleSans/GoogleSans-Medium.ttf" id="3_cplxpop"]
+[ext_resource type="FontFile" uid="uid://dxdsv5nrybqcb" path="res://fonts/Raleway/static/Raleway-ExtraBold.ttf" id="4_cplxpop"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cplxpanel"]
+bg_color = Color(0.89827347, 0.89827347, 0.9138015, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.3, 0.35, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+corner_detail = 10
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_cplxsep"]
+color = Color(1, 1, 1, 0)
+grow_begin = 0.0
+grow_end = 0.0
+thickness = 2
+
+[node name="ComplexitySetupPopup" type="ColorRect" unique_id=104349965]
+visible = false
+z_index = 50
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.1)
+script = ExtResource("1_cplxpop")
+
+[node name="CenterContainer" type="CenterContainer" parent="." unique_id=1782095278]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="DialogPanel" type="PanelContainer" parent="CenterContainer" unique_id=255383636]
+custom_minimum_size = Vector2(480, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_cplxpanel")
+
+[node name="MarginContainer" type="MarginContainer" parent="CenterContainer/DialogPanel" unique_id=1664479038]
+layout_mode = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 32
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 32
+
+[node name="MainLayout" type="VBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer" unique_id=200785866]
+layout_mode = 2
+theme_override_constants/separation = 15
+alignment = 1
+
+[node name="TitleLabel" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=531592403]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("2_cplxpop")
+theme_override_font_sizes/font_size = 22
+text = "UI_COMPLEXITY_SETUP_TITLE"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936138]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
+
+[node name="PrimaseRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=410113442]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/PrimaseRow" unique_id=545144890]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_font_sizes/font_size = 15
+text = "UI_PRIMASE_TOGGLE_LABEL"
+
+[node name="PrimaseToggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/PrimaseRow" unique_id=1473359048]
+layout_mode = 2
+
+[node name="LigaseRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1202048261]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/LigaseRow" unique_id=1251862437]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_font_sizes/font_size = 15
+text = "UI_LIGASE_TOGGLE_LABEL"
+
+[node name="LigaseToggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/LigaseRow" unique_id=486984644]
+layout_mode = 2
+
+[node name="Pol1Row" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1240096145]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/Pol1Row" unique_id=1031963647]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_font_sizes/font_size = 15
+text = "UI_POL1_TOGGLE_LABEL"
+
+[node name="Pol1Toggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/Pol1Row" unique_id=371483688]
+layout_mode = 2
+disabled = true
+
+[node name="ActionsRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=134919167]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+alignment = 1
+
+[node name="CancelButton" type="Button" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow" unique_id=116585711]
+custom_minimum_size = Vector2(150, 30)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_cplxpop")
+text = "UI_CANCEL_BUTTON"
+
+[node name="ContinueButton" type="Button" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow" unique_id=212206013]
+custom_minimum_size = Vector2(150, 30)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_cplxpop")
+text = "UI_CONTINUE_BUTTON"
