@@ -163,6 +163,23 @@ extends Node
 @export var rna_base_color_u: Color = Color(0.55, 0.55, 0.9, 1.0)  # uracil, not thymine — RNA has no T
 @export var rna_base_color_c: Color = Color(0.9, 0.7, 0.5, 1.0)
 @export var rna_base_color_g: Color = Color(0.6, 0.85, 0.6, 1.0)
+## Accessibility: RNA is distinguished from DNA by SHAPE and THICKNESS, not
+## color alone — the primer segment's backbone reuses backbone_color, not
+## its own hue. Values pushed for strong contrast, not a subtle nudge: a
+## 16px vs 10px width step plus filled-vs-open on two same-colored green
+## shapes proved genuinely unreadable even paused and zoomed in — this
+## needs to look unmistakably like a different material at a glance, not
+## a difference you have to go looking for.
+## rna_backbone_line_width: the segment's own thickness (much thinner than
+## backbone_line_width). rna_bond_mark_width: the chevron's own horizontal
+## span — wider than bond_mark_width, so it reads as a distinctly wide open
+## "V" rather than a smaller/fainter version of the DNA triangle.
+## rna_bond_mark_line_width: the chevron's stroke thickness — needs to be
+## thick enough to read as a real line, not a hairline that blends into
+## the ribbon underneath.
+@export var rna_backbone_line_width: float = 5.0
+@export var rna_bond_mark_width: float = 22.0
+@export var rna_bond_mark_line_width: float = 3.0
 
 @export_group("Markers")
 @export var marker_color: Color = Color(0.0, 0.0, 0.0, 0.0)

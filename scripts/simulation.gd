@@ -12,11 +12,6 @@ extends Node2D
 #   back to the old random-sequence boot if either popup node is missing,
 #   so a broken scene reference degrades gracefully instead of soft-locking
 #   at a popup that will never show.
-# - _process() now early-returns while helicase_mgr == null (fix, same
-#   pass): real frames now run before the first initialize_simulation()
-#   call, and section 3's "always runs, even when paused" rendering touched
-#   nodes (top_strand_backbone_line, etc.) that don't exist yet in that
-#   window, crashing on the very first frame after the popups appeared.
 # - See OkazakiMaturationDesign.md for the toggle set and cascade logic.
 # ==========================================
 
@@ -99,7 +94,7 @@ var track_length: float = 0.0
 @export var pll_slot_count: int = 4
 
 @export_group("Speeds & Timing")
-@export var okazaki_fragment_size: int = 6  # Slots per Okazaki fragment (boundary arithmetic only)
+@export var okazaki_fragment_size: int = 12  # Slots per Okazaki fragment (boundary arithmetic only). Raised from 6 so a 3-slot primer (primer_length_ratio = 0.25, see OkazakiMaturationDesign.md) is a sensible fraction of the fragment rather than half of it.
 @export var telomere_primer_footprint: int = 2  # Slots at the strand's terminal end the lagging polymerase can never synthesize — end-replication-problem stand-in; primer/primase not modeled yet  # Slots per Okazaki fragment (boundary arithmetic only)
 @export var fade_duration: float = 0.6
 @export var settling_duration: float = 0.5
@@ -192,7 +187,7 @@ func _ready():
 	var complexity_popup = get_node_or_null("UI/ComplexitySetupPopup")
 	if complexity_popup != null:
 		complexity_popup.setup_confirmed.connect(_on_startup_complexity_confirmed, CONNECT_ONE_SHOT)
-		complexity_popup.show_dialog(true)
+		complexity_popup.show_dialog()
 	else:
 		push_error("Simulation: ComplexitySetupPopup not found — falling back to default boot")
 		_boot_with_random_sequence()
@@ -357,7 +352,7 @@ func initialize_simulation(sequence: String):
 	num_nucleotide_slots = dna_sequence.get_length()
 	var polymerase_x_offset = polymerase_x_offset_slots * nucleotide_slot_spacing
 	track_length = (num_nucleotide_slots - 1) * nucleotide_slot_spacing + 2.0 * polymerase_x_offset
-
+	
 	# Environmental free-nucleotide field — count scales with sequence length;
 	# runs on every load, including the first.
 	if nucleotide_field != null:
@@ -515,7 +510,7 @@ func teardown_simulation():
 
 
 func _process(delta):
-	# v76 startup-gate fix: the complexity/sequence popups now delay
+	# v76 startup-gate fix: the complexity/sequence popups delay
 	# initialize_simulation() past the first several frames (previously it
 	# ran synchronously in _ready(), before _process() ever fired). Section 3
 	# below ("Always runs, even when paused") touches nodes — e.g.
@@ -858,7 +853,7 @@ func scrub_to_nucleotide_index(index: int):
 	var catchup_needed = 0
 	if replication_mgr != null and not lagging_gap_enabled:
 		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
-
+	
 	if index <= num_nucleotide_slots - 1:
 		var progress = float(index) / float(num_nucleotide_slots - 1)
 		scrub_to(progress)
@@ -1338,6 +1333,37 @@ func _create_bond_mark_sprite_reversed() -> Node2D:
 	])
 	triangle.color = %ThemeManager.bond_mark_color
 	holder.add_child(triangle)
+	holder.z_index = 1
+	add_child(holder)
+	return holder
+
+func _create_bond_mark_sprite_rna_reversed() -> Node2D:
+	# Same corner geometry as _create_bond_mark_sprite_reversed() (tip
+	# pointing right), but as an OPEN 3-point Line2D instead of a filled
+	# Polygon2D — the "back" edge is simply never drawn, which is exactly
+	# what turns a solid triangle into an open ">" chevron ("an equilateral
+	# triangle without one of its sides"). Accessibility: RNA backbone must
+	# be distinguishable by shape, not color alone, per the same rule the
+	# rounded-square base shape follows. Sized off rna_backbone_line_width
+	# and its own rna_bond_mark_width — NOT bond_mark_width, which is the
+	# DNA triangle's — a filled-vs-open distinction at the SAME size proved
+	# too subtle to read even paused and zoomed in; this needs to be
+	# noticeably WIDER, not just a stylistic variant of the same geometry.
+	var holder = Node2D.new()
+	var h = %ThemeManager.rna_backbone_line_width / 2.0
+	var w = %ThemeManager.rna_bond_mark_width
+	var chevron = Line2D.new()
+	chevron.points = PackedVector2Array([
+		Vector2(0, -h),
+		Vector2(w / 2.0, 0),
+		Vector2(0, h),
+	])
+	chevron.default_color = %ThemeManager.bond_mark_color
+	chevron.width = %ThemeManager.rna_bond_mark_line_width
+	chevron.joint_mode = Line2D.LINE_JOINT_ROUND
+	chevron.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	chevron.end_cap_mode = Line2D.LINE_CAP_ROUND
+	holder.add_child(chevron)
 	holder.z_index = 1
 	add_child(holder)
 	return holder

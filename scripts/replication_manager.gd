@@ -133,6 +133,11 @@ var _ligase_state: int = LigaseState.IDLE
 var primase_blip: PrimaseBlip = null
 var primase_halo: PolymeraseHalo = null
 var _primase_tween: Tween = null
+## tile_end (int) -> {backbone: Line2D, bond_marks: Array} — primer backbone
+## geometry for a tile whose bases primase has placed but whose fragment
+## Pol III hasn't opened yet. Adopted (not recreated) by
+## _lagging_open_next_fragment() the moment it opens that same tile.
+var primase_pending_backbones: Dictionary = {}
 
 # ---------- COMPLEXITY MANAGER ----------
 var complexity_mgr: Node = null  # %ComplexityManager, cached in initialize()
@@ -422,6 +427,7 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	# the PRIMASE section banner), but an in-flight blip from right before
 	# the scrub started still needs killing, same as any other tween here.
 	_primase_blip_reset_visual()
+	_primase_clear_pending_backbones()
 
 # ==========================================
 # ENZYME ANIMATION — called from simulation.gd toggle_play() / _run_intro()
@@ -723,6 +729,8 @@ func _apply_highlight() -> void:
 		if frag.backbone != null and is_instance_valid(frag.backbone):
 			frag.backbone.modulate.a = strand_dim
 		for mark in frag.bond_marks:
+			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
+		for mark in frag.get("primer_bond_marks", []):
 			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
 	if lagging_current_fragment != null:
 		if lagging_current_fragment.backbone != null and is_instance_valid(lagging_current_fragment.backbone):
@@ -1100,6 +1108,7 @@ func _lagging_reset(num_slots: int) -> void:
 		lagging_polymerase_tween.kill()
 	_ligase_reset_visual()
 	_primase_blip_reset_visual()
+	_primase_clear_pending_backbones()
 
 func _lagging_setup_backbones() -> void:
 	if lagging_backbone_line != null and is_instance_valid(lagging_backbone_line):
@@ -1130,6 +1139,8 @@ func _lagging_teardown() -> void:
 		if frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone):
 			frag.primer_backbone.queue_free()
 		for mark in frag.bond_marks:
+			if mark != null and is_instance_valid(mark): mark.queue_free()
+		for mark in frag.get("primer_bond_marks", []):
 			if mark != null and is_instance_valid(mark): mark.queue_free()
 		if frag.marker_5p != null and is_instance_valid(frag.marker_5p):
 			frag.marker_5p.queue_free()
@@ -1205,6 +1216,7 @@ func _lagging_open_fragment() -> void:
 		backbone = null,
 		primer_backbone = null,
 		bond_marks = [],
+		primer_bond_marks = [],
 		marker_5p = null,
 		marker_3p = null,
 		complete = false,
@@ -1216,6 +1228,18 @@ func _lagging_open_next_fragment() -> void:
 	var remaining = sim.num_nucleotide_slots - lagging_total_consumed
 	var this_fragment_size = min(sim.okazaki_fragment_size, remaining)
 	lagging_batch_cursor = lagging_total_consumed + this_fragment_size - 1
+
+	# Adopt (not recreate) any pending primer backbone primase already built
+	# for this tile — see _primase_ensure_pending_backbone()/_lagging_render()'s
+	# pending-backbone pass. tile_end here is always lagging_batch_cursor + 1,
+	# same formula _primase_tile_end() uses (verified equal for both full and
+	# short-final tiles).
+	var tile_end = lagging_batch_cursor + 1
+	if primase_pending_backbones.has(tile_end):
+		var entry = primase_pending_backbones[tile_end]
+		lagging_current_fragment.primer_backbone = entry.backbone
+		lagging_current_fragment.primer_bond_marks = entry.bond_marks
+		primase_pending_backbones.erase(tile_end)
 
 func _lagging_close_fragment() -> void:
 	lagging_current_fragment.complete = true
@@ -1274,6 +1298,18 @@ func _lagging_close_fragment() -> void:
 # tween-kill every other transient animation here already gets.
 # ==========================================
 
+## Live-samples the SAME bottom-template rail curve the template row's own
+## rendering uses (simulation.gd's _process()) — needed because a slot's row
+## is still transitioning (bonded -> unzipped) for several slots after the
+## helicase passes it, and primase places real bases there well before that
+## transition completes. Converges to new_bottom_template_y automatically
+## once a slot's row has settled, so this is safe to use unconditionally.
+func _lagging_template_y_at(world_x: float) -> float:
+	var curve = sim.rail_path.curve if sim.rail_path else null
+	if curve == null:
+		return sim.new_bottom_template_y
+	return sim._sample_curve_y_at_x(curve.get_baked_points(), world_x, sim.template_strand_y)
+
 ## Which tile does `index` belong to, and where does that tile actually end
 ## (one past its highest slot) — accounting for a short final tile the same
 ## way _lagging_scrub_rebuild() already does (true_tile_end = min(tile_start+F, num_slots)).
@@ -1302,6 +1338,40 @@ func _is_primer_slot(index: int) -> bool:
 	return (tile_end - index) <= span
 
 ## Expects an RNA letter (post T->U substitution) — see _primase_place_primer_base().
+## Pol III "absorbing Pol I's job" at Light-tier complexity (per
+## OkazakiMaturationDesign.md's original proposal, now unblocked now that
+## primer state actually persists): converts an already-placed primer base
+## to DNA in place the instant Pol III's fire-step passes over it, instead
+## of just skipping it silently. Recolor + reshape only — instant, not
+## animated (shape can't smoothly interpolate between a custom-drawn circle
+## and rounded-square without real polygon morphing, so animating color
+## alone while shape snaps would look like a mismatch; simplicity matches
+## this feature's own Light-tier spirit).
+func _pol3_convert_primer_if_needed(index: int) -> void:
+	if complexity_mgr == null or not complexity_mgr.is_enabled("primase"):
+		return
+	if not _is_primer_slot(index):
+		return
+	var node = lagging_synthesized_bases[index]
+	if node == null or node.shape != "rounded_square":
+		return  # already converted, or nothing there yet
+	var base_type = sim.dna_sequence.get_base(index)  # real letter — converting back to DNA, T not U
+	node.set_base_type(base_type)
+	node.set_shape("circle")
+	node.set_colors(sim._get_base_fill(base_type), tm.base_label_color)
+
+## Supersedes pure-geometry _is_primer_slot() for RENDERING purposes (backbone
+## split) once conversion exists — a slot can be geometrically within the
+## primer span but already converted, so geometry alone isn't enough anymore.
+## _is_primer_slot() itself stays pure geometry — still needed as-is for the
+## placement TRIGGER, which only ever asks "is this slot part of a primer
+## span" before the base exists to have a shape at all.
+func _is_still_primer(index: int) -> bool:
+	if not _is_primer_slot(index):
+		return false
+	var node = lagging_synthesized_bases[index]
+	return node != null and node.shape == "rounded_square"
+
 func _primer_rna_color_for(base_type: String) -> Color:
 	match base_type:
 		"A": return tm.rna_base_color_a
@@ -1313,26 +1383,83 @@ func _primer_rna_color_for(base_type: String) -> Color:
 func _primase_check_slot(index: int) -> void:
 	if primase_blip == null or complexity_mgr == null or not complexity_mgr.is_enabled("primase"):
 		return
-	if not _is_primer_slot(index):
-		return
 	var tile_end = _primase_tile_end(index)
+	# Only the anchor (highest index in the span) kicks off the sequence.
+	# The helicase sweeps low-to-high, so the anchor is always the LAST
+	# slot of the span to become available — waiting for it guarantees the
+	# whole span is already exposed before primase places anything. This
+	# lets the 3 placements play in Pol III's own high-to-low order, so the
+	# whole fragment (primer + DNA) reads as one consistent synthesis
+	# direction instead of two opposing ones (previously: primer placed
+	# low-to-high as each slot was individually exposed, then Pol III
+	# continuing high-to-low into the DNA portion — two strands built in
+	# opposite directions within what's meant to read as one fragment).
+	if index != tile_end - 1:
+		return
 	var span = _primase_primer_length()
-	var is_first = (index == tile_end - span)
-	var is_last = (index == tile_end - 1)
-	_primase_place_primer_base(index, is_first, is_last)
+	var seq: Array = []
+	for slot_index in range(tile_end - 1, tile_end - span - 1, -1):
+		seq.append(slot_index)
+	_primase_place_sequence(seq, 0)
+
+## Chains through `seq` (already ordered high-to-low) one slot at a time —
+## each placement's own tween triggers the next once its pulse completes.
+## Stops naturally once seq_pos runs past the end.
+func _primase_place_sequence(seq: Array, seq_pos: int) -> void:
+	if seq_pos >= seq.size():
+		return
+	var index = seq[seq_pos]
+	var is_first = (seq_pos == 0)
+	var is_last = (seq_pos == seq.size() - 1)
+	_primase_place_primer_base(index, is_first, is_last, seq, seq_pos)
+
+## Creates the tile's pending backbone Line2D if it doesn't exist yet.
+## Points are NOT computed here — _lagging_render()'s own pending-backbone
+## pass recomputes them fresh every frame, same "derive don't patch"
+## approach as everything else in this file.
+func _primase_ensure_pending_backbone(tile_end: int) -> void:
+	if primase_pending_backbones.has(tile_end):
+		return
+	var line = Line2D.new()
+	line.default_color = tm.backbone_color
+	line.width = tm.rna_backbone_line_width
+	line.z_index = -1
+	line.joint_mode = Line2D.LINE_JOINT_ROUND
+	line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	line.end_cap_mode = Line2D.LINE_CAP_ROUND
+	sim.add_child(line)
+	primase_pending_backbones[tile_end] = { backbone = line, bond_marks = [] }
+
+## Frees every pending backbone — used on a fresh sequence load and during
+## scrub (any scrub invalidates live-play pending state; scrub reconstructs
+## fragments directly via the tile rebuild, never through this mechanism).
+func _primase_clear_pending_backbones() -> void:
+	for tile_end in primase_pending_backbones.keys():
+		var entry = primase_pending_backbones[tile_end]
+		if entry.backbone != null and is_instance_valid(entry.backbone):
+			entry.backbone.queue_free()
+		for mark in entry.bond_marks:
+			if mark != null and is_instance_valid(mark): mark.queue_free()
+	primase_pending_backbones.clear()
 
 ## Places one real, RNA-colored ribonucleotide at `index` and drives the
-## blob's own appear/pulse/[hold/fade] lifecycle for this step.
-func _primase_place_primer_base(index: int, is_first: bool, is_last: bool) -> void:
+## blob's own appear/pulse/[hold/fade] lifecycle for this step, chaining to
+## the next step in `seq` once this one's pulse completes.
+func _primase_place_primer_base(index: int, is_first: bool, is_last: bool, seq: Array, seq_pos: int) -> void:
 	if lagging_synthesized_bases[index] != null:
-		return  # already placed — stay idempotent, same guard _capture_begin_lagging() uses
+		# Shouldn't normally happen (the anchor trigger guarantees a fresh
+		# sequence each time) — but stay idempotent and advance the chain
+		# rather than silently stalling on a stray already-placed slot.
+		_primase_place_sequence(seq, seq_pos + 1)
+		return
+	_primase_ensure_pending_backbone(_primase_tile_end(index))
 	var base_type = sim.dna_sequence.get_base(index)
 	if base_type == "T":
 		base_type = "U"  # rendering-layer only — real RNA has no thymine. The
 		# underlying sequence data (re-read via get_base() by anything else,
 		# e.g. Pol III's own skipped capture attempt) is untouched.
 	var target_x = sim.nucleotide_original_x[index]
-	var target_y = sim.new_bottom_template_y + sim.dna_ribbons_gap
+	var target_y = _lagging_template_y_at(target_x) + sim.dna_ribbons_gap
 
 	if _primase_tween != null and _primase_tween.is_valid():
 		_primase_tween.kill()
@@ -1351,20 +1478,23 @@ func _primase_place_primer_base(index: int, is_first: bool, is_last: bool) -> vo
 	if is_last:
 		_primase_tween.tween_interval(tm.primase_blip_hold_duration)
 		_primase_tween.tween_property(primase_blip, "modulate:a", 0.0, tm.primase_blip_fade_out_duration)
+	else:
+		_primase_tween.tween_callback(_primase_place_sequence.bind(seq, seq_pos + 1))
 
 	# The placed base is its own separate node/tween/lifecycle — same
 	# separation Pol III's own capture keeps between the polymerase's
 	# position tween and the captured base's own flight.
 	var start_pos = primase_halo.capture_particle(base_type) if primase_halo != null else Vector2(target_x, target_y)
 	var color = _primer_rna_color_for(base_type)
-	var node = _spawn_lagging_base(index, base_type, start_pos, color)
+	var node = _spawn_lagging_base(index, base_type, start_pos, color, "rounded_square")
 	var base_tween = sim.create_tween()
 	base_tween.tween_property(node, "position", Vector2(target_x, target_y), tm.primase_capture_duration)\
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	base_tween.tween_callback(_primase_finish_base.bind(index, node))
 
 func _primase_finish_base(index: int, node: Node2D) -> void:
-	node.position = Vector2(sim.nucleotide_original_x[index], sim.new_bottom_template_y + sim.dna_ribbons_gap)
+	var world_x = sim.nucleotide_original_x[index]
+	node.position = Vector2(world_x, _lagging_template_y_at(world_x) + sim.dna_ribbons_gap)
 	lagging_synthesized_bases[index] = node
 	lagging_hydrogen_bonds[index] = _spawn_lagging_hydrogen_bonds(index)
 
@@ -1485,6 +1615,8 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 		if frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone): frag.primer_backbone.queue_free()
 		for mark in frag.bond_marks:
 			if mark != null and is_instance_valid(mark): mark.queue_free()
+		for mark in frag.get("primer_bond_marks", []):
+			if mark != null and is_instance_valid(mark): mark.queue_free()
 		if frag.marker_5p != null and is_instance_valid(frag.marker_5p): frag.marker_5p.queue_free()
 		if frag.marker_3p != null and is_instance_valid(frag.marker_3p): frag.marker_3p.queue_free()
 	lagging_fragments.clear()
@@ -1511,7 +1643,7 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 
 	for k in range(full_tiles):
 		var frag = { slots = range(k * sim.okazaki_fragment_size, (k + 1) * sim.okazaki_fragment_size),
-			loop_queue = [], backbone = null, primer_backbone = null, bond_marks = [], marker_5p = null, marker_3p = null, complete = true, sealed = true }
+			loop_queue = [], backbone = null, primer_backbone = null, bond_marks = [], primer_bond_marks = [], marker_5p = null, marker_3p = null, complete = true, sealed = true }
 		lagging_fragments.append(frag)
 
 	if remainder > 0:
@@ -1520,11 +1652,11 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 		var frag_slots = range(true_tile_end - remainder, true_tile_end)
 		if total_consumed >= num_slots:
 			var frag = { slots = frag_slots,
-				loop_queue = [], backbone = null, primer_backbone = null, bond_marks = [], marker_5p = null, marker_3p = null, complete = true, sealed = true }
+				loop_queue = [], backbone = null, primer_backbone = null, bond_marks = [], primer_bond_marks = [], marker_5p = null, marker_3p = null, complete = true, sealed = true }
 			lagging_fragments.append(frag)
 		else:
 			lagging_current_fragment = { slots = frag_slots,
-				loop_queue = [], backbone = null, primer_backbone = null, bond_marks = [], marker_5p = null, marker_3p = null, complete = false, sealed = false }
+				loop_queue = [], backbone = null, primer_backbone = null, bond_marks = [], primer_bond_marks = [], marker_5p = null, marker_3p = null, complete = false, sealed = false }
 
 	var slots_to_spawn: Array = []
 	for frag in lagging_fragments:
@@ -1532,15 +1664,18 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 	if lagging_current_fragment != null:
 		slots_to_spawn.append_array(lagging_current_fragment.slots)
 
-	var primase_on = complexity_mgr != null and complexity_mgr.is_enabled("primase")
+	# No primer coloring/shaping here (unlike the live placement path) — any
+	# slot scrub shows as consumed is within Pol III's own progress, and Pol
+	# III now converts every primer slot the instant it passes over it (see
+	# _pol3_convert_primer_if_needed()). So by the time a slot appears here
+	# at all, it would already be converted in the real timeline — scrub
+	# showing it as still-primer-styled would misrepresent that. This also
+	# means scrub never needs to model primase's own ahead-of-Pol-III
+	# pending placements (a real simplification, not a corner cut): nothing
+	# scrub ever shows is still primer, so there's nothing extra to derive.
 	for i in slots_to_spawn:
 		var base_type = sim.dna_sequence.get_base(i)
-		var color_override = null
-		if primase_on and _is_primer_slot(i):
-			if base_type == "T":
-				base_type = "U"  # rendering-layer only, same as live placement — see _primase_place_primer_base()
-			color_override = _primer_rna_color_for(base_type)
-		lagging_synthesized_bases[i] = _spawn_lagging_base(i, base_type, null, color_override)
+		lagging_synthesized_bases[i] = _spawn_lagging_base(i, base_type)
 		lagging_hydrogen_bonds[i] = _spawn_lagging_hydrogen_bonds(i)
 
 	# ---- Polymerase position + visibility ----
@@ -1641,7 +1776,7 @@ func _lagging_fade_enzyme_scene() -> void:
 	if ligase != null:
 		fade_tween.parallel().tween_property(ligase, "modulate:a", 0.0, sim.fade_duration)
 
-func _spawn_lagging_base(index: int, base_type: String, start_pos = null, color_override = null) -> Node2D:
+func _spawn_lagging_base(index: int, base_type: String, start_pos = null, color_override = null, shape_override = null) -> Node2D:
 	var base = sim.NewNitrogenBaseScene.instantiate()
 	var world_x = sim.nucleotide_original_x[index]
 	var lagging_y = sim.new_bottom_template_y + sim.dna_ribbons_gap
@@ -1653,6 +1788,8 @@ func _spawn_lagging_base(index: int, base_type: String, start_pos = null, color_
 	var fill_color = color_override if color_override != null else sim._get_base_fill(base_type)
 	base.set_colors(fill_color, tm.base_label_color)
 	base.set_font(tm.base_label_font_size, tm.base_label_font)
+	if shape_override != null:
+		base.set_shape(shape_override)
 	return base
 
 func _spawn_lagging_hydrogen_bonds(index: int) -> Node2D:
@@ -1683,16 +1820,49 @@ func _lagging_render(ctx: Dictionary) -> void:
 	var new_bottom_template_y: float = ctx.new_bottom_template_y
 	var nucleotide_original_x = ctx.nucleotide_original_x
 
+	# Live-sampled per-slot template Y, NOT the fixed new_bottom_template_y —
+	# needed because a base can be registered here well before its row has
+	# visually finished the bonded->unzipped transition (primase places
+	# bases the instant the helicase passes their slot, long before
+	# polymerase_x — which anchors where the curve settles — reaches them).
+	# Safe to apply unconditionally to every base, not just primase's: the
+	# curve sample converges to new_bottom_template_y automatically once a
+	# slot's row has settled, so this changes nothing for Pol III's own
+	# already-settled bases, only fixes the ones placed ahead of that.
 	for i in range(lagging_synthesized_bases.size()):
 		if lagging_synthesized_bases[i] != null:
 			var wobble_y = sim.get_wobble_y(i, wobble_t)
 			var world_x = nucleotide_original_x[i]
-			var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
+			var template_y = _lagging_template_y_at(world_x)
+			var lagging_y = template_y + dna_ribbons_gap + wobble_y
 			lagging_synthesized_bases[i].position = Vector2(world_x, lagging_y)
 			if lagging_hydrogen_bonds[i] != null:
-				var bottom_template_y = new_bottom_template_y + wobble_y
+				var bottom_template_y = template_y + wobble_y
 				lagging_hydrogen_bonds[i].position = Vector2(world_x, bottom_template_y)
 				sim._update_hydrogen_bond_height(lagging_hydrogen_bonds[i], lagging_y - bottom_template_y)
+
+	# Primase-placed bases can exist for a tile BEFORE Pol III has opened
+	# that fragment at all — primase fires the instant the helicase passes
+	# a slot, well ahead of Pol III's own backlog-delayed arrival at the
+	# same tile. Without this, those bases would sit with no connecting
+	# backbone until Pol III's own (much later) bookkeeping happened to
+	# reach them. Rendered fresh every frame like everything else here;
+	# ADOPTED (not recreated) by the real fragment the moment
+	# _lagging_open_next_fragment() opens that same tile — see there for
+	# the handoff.
+	for tile_end in primase_pending_backbones.keys():
+		var entry = primase_pending_backbones[tile_end]
+		var span = _primase_primer_length()
+		var pending_points = PackedVector2Array()
+		for slot_index in range(max(0, tile_end - span), tile_end):
+			if lagging_synthesized_bases[slot_index] != null:
+				var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
+				var world_x = nucleotide_original_x[slot_index]
+				var template_y = _lagging_template_y_at(world_x)
+				pending_points.append(Vector2(world_x, template_y + dna_ribbons_gap + wobble_y + tm.backbone_offset_distance))
+		entry.backbone.points = pending_points
+		entry.backbone.width = tm.rna_backbone_line_width
+		entry.bond_marks = _update_bond_marks_generic(entry.bond_marks, pending_points, sim._create_bond_mark_sprite_rna_reversed)
 
 	if sim.ligase_enabled:
 		# Fragments merge into the one continuous backbone line once ligase
@@ -1733,6 +1903,18 @@ func _lagging_render(ctx: Dictionary) -> void:
 				if frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone):
 					frag.primer_backbone.queue_free()
 					frag.primer_backbone = null
+				# Pre-existing gap, fixed alongside the primer_bond_marks
+				# addition below: bond_marks were never freed when a
+				# fragment merges into the sealed continuous line, so they
+				# were left dangling (this branch stops calling
+				# _lagging_render_fragment_backbone() for merged fragments,
+				# so nothing else was going to shrink these back to 0 either).
+				for mark in frag.bond_marks:
+					if mark != null and is_instance_valid(mark): mark.queue_free()
+				frag.bond_marks = []
+				for mark in frag.get("primer_bond_marks", []):
+					if mark != null and is_instance_valid(mark): mark.queue_free()
+				frag.primer_bond_marks = []
 				for slot_index in frag.slots:
 					var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
 					var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
@@ -1786,6 +1968,12 @@ func _lagging_render(ctx: Dictionary) -> void:
 		if frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone):
 			frag.primer_backbone.queue_free()
 			frag.primer_backbone = null
+		for mark in frag.bond_marks:
+			if mark != null and is_instance_valid(mark): mark.queue_free()
+		frag.bond_marks = []
+		for mark in frag.get("primer_bond_marks", []):
+			if mark != null and is_instance_valid(mark): mark.queue_free()
+		frag.primer_bond_marks = []
 		for slot_index in frag.slots:
 			var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
 			var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
@@ -1859,17 +2047,19 @@ func _lagging_render_fragment_backbone(frag: Dictionary, wobble_t: float, dna_ri
 		sim.add_child(line)
 		frag.backbone = line
 
-	# Primer segment (RNA primer persistence pass): the chemical backbone
-	# really is a different material over a primer's slots (ribose vs.
-	# deoxyribose), so this fragment's backbone splits into two colored
-	# Line2Ds for as long as any of its slots fall in a primer span. Only
-	# relevant while primase is on. This never un-splits at Light tier —
-	# same "held until Pol I" rule the base colors themselves follow.
+	# Primer segment (RNA primer persistence pass): distinguished from the
+	# DNA segment by THICKNESS and MARKER SHAPE, not color — accessibility:
+	# never rely on color alone to depict a difference. Same backbone_color
+	# as the DNA segment; rna_backbone_line_width instead of
+	# backbone_line_width. Splits for as long as any of this fragment's
+	# slots fall in a primer span — only relevant while primase is on.
+	# Never un-splits at Light tier, same "held until Pol I" rule the base
+	# colors/shapes themselves follow.
 	var primase_on = complexity_mgr != null and complexity_mgr.is_enabled("primase")
 	if primase_on and frag.get("primer_backbone", null) == null:
 		var pline = Line2D.new()
-		pline.default_color = tm.primase_blip_color
-		pline.width = tm.backbone_line_width
+		pline.default_color = tm.backbone_color
+		pline.width = tm.rna_backbone_line_width
 		pline.z_index = -1
 		pline.joint_mode = Line2D.LINE_JOINT_ROUND
 		pline.begin_cap_mode = Line2D.LINE_CAP_ROUND
@@ -1885,49 +2075,87 @@ func _lagging_render_fragment_backbone(frag: Dictionary, wobble_t: float, dna_ri
 			var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
 			points.append(Vector2(world_x, lagging_y + tm.backbone_offset_distance))
 
-	# frag.slots is always ascending, and a primer span always occupies the
-	# TOP of a tile — so non-primer slots are always a contiguous PREFIX of
-	# this fragment (never interleaved). One scan finds the split point;
-	# both segments include the boundary point so they join with no gap.
+	# Primer segment computed from the DETERMINISTIC primer span (same math
+	# _lagging_render()'s pending-backbone pass already uses), NOT from
+	# frag.slots membership. frag.slots lags behind reality here: Pol III
+	# still walks through already-primase-placed primer slots one
+	# bookkeeping entry per fire-step even though it skips re-spawning them
+	# (_capture_begin_lagging()'s guard) — so right after adoption,
+	# frag.slots can briefly contain only 1 of the primer's 3 slots even
+	# though all 3 are already placed. Deriving primer_points from
+	# frag.slots instead of the deterministic span made an already-fully-
+	# placed primer visibly SHRINK for a couple of fire-steps right after
+	# Pol III opened the fragment, before catching back up — this is what
+	# was actually behind the "stuck with RNA specs" reports. The DNA
+	# portion still genuinely depends on frag.slots/Pol III's own progress
+	# (those slots aren't placed until Pol III gets there), so that part is
+	# unchanged.
 	var dna_points = points
 	var primer_points = PackedVector2Array()
-	if primase_on and points.size() > 0:
-		var split_count = 0
+	if primase_on and frag.slots.size() > 0:
+		var tile_end = _primase_tile_end(frag.slots[-1])
+		var span = _primase_primer_length()
+		for slot_index in range(max(0, tile_end - span), tile_end):
+			if lagging_synthesized_bases[slot_index] != null and _is_still_primer(slot_index):
+				var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
+				var world_x = nucleotide_original_x[slot_index]
+				var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
+				primer_points.append(Vector2(world_x, lagging_y + tm.backbone_offset_distance))
+
+		# DNA points: everything in frag.slots that ISN'T still primer-styled
+		# (includes both slots that were never primer, and primer slots Pol
+		# III has already converted).
+		dna_points = PackedVector2Array()
 		for slot_index in frag.slots:
-			if lagging_synthesized_bases[slot_index] == null or _is_primer_slot(slot_index):
-				break
-			split_count += 1
-		if split_count < points.size():
-			dna_points = points.slice(0, split_count + 1)
-			primer_points = points.slice(split_count)
-		else:
-			primer_points = PackedVector2Array()
+			if lagging_synthesized_bases[slot_index] != null and not _is_still_primer(slot_index):
+				var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
+				var world_x = nucleotide_original_x[slot_index]
+				var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
+				dna_points.append(Vector2(world_x, lagging_y + tm.backbone_offset_distance))
+
+		# Shared boundary point so the two segments join with no visual gap
+		# — previously free (a shared array slice), now explicit since the
+		# two point sets are built independently.
+		if dna_points.size() > 0 and primer_points.size() > 0:
+			dna_points.append(primer_points[0])
 
 	frag.backbone.points = dna_points
 	frag.backbone.width = tm.backbone_line_width
+	frag.backbone.z_index = -1
 	if frag.get("primer_backbone", null) != null:
 		frag.primer_backbone.points = primer_points
-		frag.primer_backbone.width = tm.backbone_line_width
+		frag.primer_backbone.width = tm.rna_backbone_line_width
+		# Draws BEHIND the DNA segment at their shared boundary point —
+		# previously both sat at the same z_index, so draw order came down
+		# to child-add order (primer_backbone created second, drawing on
+		# top). Not confirmed as the root cause of the reported bug, but a
+		# real ordering issue worth fixing regardless.
+		frag.primer_backbone.z_index = -2
 
-	_update_bond_marks_fragment(frag, points)
+	frag.bond_marks = _update_bond_marks_generic(frag.bond_marks, dna_points, sim._create_bond_mark_sprite_reversed)
+	if frag.get("primer_backbone", null) != null:
+		frag.primer_bond_marks = _update_bond_marks_generic(frag.get("primer_bond_marks", []), primer_points, sim._create_bond_mark_sprite_rna_reversed)
 
-func _update_bond_marks_fragment(frag: Dictionary, points: PackedVector2Array) -> void:
+## Shared grow/shrink/position loop for a fragment's bond-mark holders —
+## `sprite_fn` is whichever mark shape this segment needs (filled triangle
+## for DNA, open chevron for RNA), so the same loop serves both without
+## duplicating it.
+func _update_bond_marks_generic(marks: Array, points: PackedVector2Array, sprite_fn: Callable) -> Array:
 	var needed = max(0, points.size() - 1)
-	while frag.bond_marks.size() < needed:
-		frag.bond_marks.append(sim._create_bond_mark_sprite_reversed())
-	while frag.bond_marks.size() > needed:
-		var extra = frag.bond_marks.pop_back()
+	while marks.size() < needed:
+		marks.append(sprite_fn.call())
+	while marks.size() > needed:
+		var extra = marks.pop_back()
 		extra.queue_free()
 	for i in range(needed):
 		var a = points[i]
 		var b = points[i + 1]
 		var mid = (a + b) / 2.0
 		var segment = b - a
-		var mark = frag.bond_marks[i]
+		var mark = marks[i]
 		mark.position = mid
 		mark.visible = segment.length() > 0.0
-		if mark.visible:
-			mark.rotation = segment.angle()
+	return marks
 
 func _lagging_natural_done_consumed(num_slots: int, nucleotide_original_x: Array) -> int:
 	# How many lagging slots would be consumed by pure position-based tiling
@@ -2151,6 +2379,7 @@ func _capture_finish_leading(index: int, node: Node2D) -> void:
 
 func _capture_begin_lagging(index: int, duration: float) -> void:
 	if lagging_synthesized_bases[index] != null:
+		_pol3_convert_primer_if_needed(index)
 		return
 	if lagging_capture_node != null:
 		_capture_finish_lagging(lagging_capture_target_slot, lagging_capture_node)

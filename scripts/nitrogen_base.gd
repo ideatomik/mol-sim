@@ -13,15 +13,25 @@ extends RigidBody2D
 # ==========================================
 
 @export_group("Base Identity")
-## The nitrogen base type: "A", "T", "C", or "G" (or "5'" / "3'" for markers).
+## The nitrogen base type: "A", "T"/"U", "C", or "G" (or "5'" / "3'" for markers).
 ## Set via set_base_type() after instantiation.
 @export var base_type: String = "A"
+## "circle" (default, DNA) or "rounded_square" (RNA) — accessibility: RNA
+## primer bases must be distinguishable by shape, not color alone. Set via
+## set_shape() after instantiation.
+@export var shape: String = "circle"
 
 @export_group("Label")
 @export var label_font_size: int = 14
 
 @export_group("Body Visual")
 @export var body_radius: float = 10.0
+## Hardcoded, not ThemeManager-driven — this node is deliberately
+## ThemeManager-free (see the header comment); a rounding ratio is a shape
+## constant, not something that needs per-project Inspector tuning the way
+## colors/sizes do.
+const ROUNDED_SQUARE_CORNER_RATIO: float = 0.35
+const ROUNDED_SQUARE_CORNER_SEGMENTS: int = 4
 
 @export_group("Physics")
 ## If true (default), this RigidBody2D stays kinematically frozen.
@@ -42,7 +52,44 @@ func _ready():
 	_center_label.call_deferred()
 
 func _draw():
-	draw_circle(Vector2.ZERO, body_radius, body_fill_color, true, -1.0, true)
+	if shape == "rounded_square":
+		var half = body_radius
+		var square = PackedVector2Array([
+			Vector2(-half, -half), Vector2(half, -half),
+			Vector2(half, half), Vector2(-half, half),
+		])
+		draw_polygon(_round_corners(square, ROUNDED_SQUARE_CORNER_RATIO, ROUNDED_SQUARE_CORNER_SEGMENTS), PackedColorArray([body_fill_color]))
+	else:
+		draw_circle(Vector2.ZERO, body_radius, body_fill_color, true, -1.0, true)
+
+## NOTE: duplicated from helicase_ring.gd / polymerase_clamp.gd / ligase.gd /
+## primase_blip.gd — same deferred shared-utility extraction all of those
+## already flag.
+func _round_corners(pts: PackedVector2Array, radius_ratio: float, segments: int) -> PackedVector2Array:
+	var n = pts.size()
+	if n < 3 or radius_ratio <= 0.0:
+		return pts
+	var out = PackedVector2Array()
+	for i in range(n):
+		var prev = pts[(i - 1 + n) % n]
+		var cur = pts[i]
+		var next = pts[(i + 1) % n]
+		var to_prev = prev - cur
+		var to_next = next - cur
+		var len_prev = to_prev.length()
+		var len_next = to_next.length()
+		if len_prev < 0.0001 or len_next < 0.0001:
+			out.append(cur)
+			continue
+		var r = radius_ratio * min(len_prev, len_next) * 0.5
+		var p1 = cur + to_prev.normalized() * r
+		var p2 = cur + to_next.normalized() * r
+		for s in range(segments + 1):
+			var t = float(s) / float(segments)
+			var a = p1.lerp(cur, t)
+			var b = cur.lerp(p2, t)
+			out.append(a.lerp(b, t))
+	return out
 
 func _center_label():
 	if label:
@@ -54,6 +101,11 @@ func set_base_type(new_type: String) -> void:
 	base_type = new_type
 	if label:
 		label.text = new_type
+
+## Set the body shape ("circle" or "rounded_square") and redraw.
+func set_shape(new_shape: String) -> void:
+	shape = new_shape
+	queue_redraw()
 
 ## Apply fill and label colors. Called by simulation.gd after instantiation
 ## using values from %ThemeManager, keeping this node ThemeManager-free.
