@@ -154,6 +154,24 @@ extends Node
 ## honest version, not a shortcut).
 @export var primase_capture_duration: float = 0.15
 
+@export_group("Pol I")
+@export var pol1_lobe_size: float = 30.0
+@export var pol1_lobe_gap: float = 24.0
+@export_range(1.0, 2.0) var pol1_pulse_scale_ratio: float = 1.3
+@export_range(0.0, 1.0) var pol1_chamfer_ratio: float = 0.35
+@export_range(0.0, 1.0) var pol1_corner_radius_ratio: float = 0.6
+@export_range(2, 8) var pol1_corner_segments: int = 4
+@export var pol1_exo_color: Color = Color(0.75, 0.30, 0.30, 1.0)
+@export var pol1_exo_pulse_color: Color = Color(0.95, 0.45, 0.45, 1.0)
+@export var pol1_pol_color: Color = Color(0.30, 0.55, 0.75, 1.0)
+@export var pol1_pol_pulse_color: Color = Color(0.45, 0.75, 0.95, 1.0)
+@export var pol1_z: int = 5
+@export var pol1_label_margin: float = 12.0
+@export var pol1_offstage_drop: float = 40.0
+@export var pol1_travel_duration: float = 0.35
+@export var pol1_step_duration: float = 0.2
+@export var pol1_leave_duration: float = 0.35
+
 @export_group("RNA Primer")
 ## Ratio of okazaki_fragment_size, not a fixed slot count — scales if fragment
 ## size is tuned per-domain (see COMPLEXITY_MODEL.md's Okazaki fragment size

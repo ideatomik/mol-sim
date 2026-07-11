@@ -41,6 +41,14 @@ class_name PolymeraseClamp
 # Mirroring is handled by the label itself (set_mirror), so its glyphs stay
 # upright on the leading strand despite this node's own scale.y = -1.
 #
+# LABEL KEY is tier-conditional (Pol I pass, OkazakiMaturationDesign.md):
+# plain "ENZYME_POLYMERASE" ("Polymerase") at every tier except Complex,
+# where it switches to "ENZYME_POL3" ("Pol III") — the only tier where Pol I
+# and Pol III are both visible at once, so it's the only tier where the
+# generic name would actually be ambiguous. Read live in _apply() (moved out
+# of the one-time _build()) off sim.pol1_enabled, same convenience property
+# _ligase_kick() already reads as sim.ligase_enabled.
+#
 # All geometry/colour params live in ThemeManager's "Polymerase Clamp" group and
 # are read live each frame, so Inspector tuning works while running. Colours are
 # per-strand (leading = mirror; lagging = non-mirror). No pump clock in here —
@@ -112,8 +120,10 @@ func _build() -> void:
 	_label = ENZYME_LABEL_SCENE.instantiate()
 	_label.z_as_relative = false
 	add_child(_label)
-	_label.set_key("ENZYME_POLYMERASE")
 	_label.set_mirror(_mirror)
+	# NOTE: set_key() no longer called here — the key is tier-conditional
+	# now (see _apply()), so it has to be read live rather than fixed once
+	# at build time.
 
 ## Lift the jaw. t = 0 -> DOWN (clamped, scrub rests here), t = 1 -> UP (open).
 ## Fed the already-shaped step value by replication_manager (sin(step_t*PI) /
@@ -232,6 +242,11 @@ func _apply() -> void:
 		var label_enabled: bool = tm.enzyme_labels_enabled
 		_label.visible = label_enabled
 		if label_enabled:
+			# Tier-conditional key: plain "Polymerase" except at Complex tier
+			# (pol1_enabled), where Pol I and Pol III share the screen and the
+			# generic name would be ambiguous — see file header.
+			var complex_tier: bool = _sim.pol1_enabled if _sim != null else false
+			_label.set_key("ENZYME_POL3" if complex_tier else "ENZYME_POLYMERASE")
 			var label_margin_out: float = tm.polymerase_label_margin
 			var label_font_size: int = tm.label_font_size
 			var label_text_color: Color = tm.label_color
