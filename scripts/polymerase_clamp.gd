@@ -46,8 +46,9 @@ class_name PolymeraseClamp
 # where it switches to "ENZYME_POL3" ("Pol III") — the only tier where Pol I
 # and Pol III are both visible at once, so it's the only tier where the
 # generic name would actually be ambiguous. Read live in _apply() (moved out
-# of the one-time _build()) off sim.pol1_enabled, same convenience property
-# _ligase_kick() already reads as sim.ligase_enabled.
+# of the one-time _build()) via %ComplexityManager.is_enabled("pol1") —
+# pol1_enabled lives on ComplexityManager itself, unlike ligase_enabled
+# (which predates ComplexityManager and still lives directly on sim).
 #
 # All geometry/colour params live in ThemeManager's "Polymerase Clamp" group and
 # are read live each frame, so Inspector tuning works while running. Colours are
@@ -60,6 +61,7 @@ const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn"
 var _mirror: bool = false
 var _sim: Node = null
 var _tm: Node = null
+var _complexity_mgr: Node = null
 var _back: Polygon2D = null
 var _jaw: Polygon2D = null
 var _lowerjaw: Polygon2D = null
@@ -104,6 +106,7 @@ func setup(sim: Node, mirror: bool) -> void:
 	_sim = sim
 	_mirror = mirror
 	_tm = sim.get_node("%ThemeManager")
+	_complexity_mgr = sim.get_node_or_null("%ComplexityManager")
 	_build()
 	set_pump(0.0)
 
@@ -183,7 +186,7 @@ func _apply() -> void:
 	var cx_back: float = out_ratio * (back_width * 0.5)
 	var cy_out_back: float = out_ratio * half_down                                        # crisp, sized off the rest-state half height
 	var cy_in_back: float = lerpf(out_ratio * half_down, in_ratio * (h_back * 0.5), t)    # stretches with t
-	_back.polygon = _round_corners(_octagon(back_width, h_back, cx_back, cy_in_back, cy_out_back), corner_ratio, corner_segs)
+	_back.polygon = ProceduralShapeUtils.round_corners(_octagon(back_width, h_back, cx_back, cy_in_back, cy_out_back), corner_ratio, corner_segs)
 	_back.position = Vector2.ZERO   # symmetric growth keeps it centred on the duplex midline
 	_back.color = back_col
 	_back.z_index = back_z
@@ -200,7 +203,7 @@ func _apply() -> void:
 		cy_in_jaw *= k
 		cy_out_jaw *= k
 	var cx_jaw: float = minf(cx_back, jaw_width * 0.5)
-	_jaw.polygon = _round_corners(_octagon(jaw_width, jaw_h, cx_jaw, cy_in_jaw, cy_out_jaw), corner_ratio, corner_segs)
+	_jaw.polygon = ProceduralShapeUtils.round_corners(_octagon(jaw_width, jaw_h, cx_jaw, cy_in_jaw, cy_out_jaw), corner_ratio, corner_segs)
 	_jaw.position = Vector2(0.0, back_inner_y + half_jaw)
 	_jaw.color = front_col
 	_jaw.z_index = front_z
@@ -225,7 +228,7 @@ func _apply() -> void:
 		cy_out_lower *= k_lower
 	var cx_lower: float = minf(cx_back, lower_jaw_width * 0.5)
 	# top(-hh)=free/near-DNA edge -> crisp; bottom(+hh)=glued/far edge -> stretchy
-	_lowerjaw.polygon = _round_corners(_octagon(lower_jaw_width, lower_jaw_h, cx_lower, cy_out_lower, cy_in_lower), corner_ratio, corner_segs)
+	_lowerjaw.polygon = ProceduralShapeUtils.round_corners(_octagon(lower_jaw_width, lower_jaw_h, cx_lower, cy_out_lower, cy_in_lower), corner_ratio, corner_segs)
 	_lowerjaw.position = Vector2(0.0, -back_inner_y - half_lower_jaw)
 	_lowerjaw.color = front_col
 	_lowerjaw.z_index = front_z
@@ -244,8 +247,11 @@ func _apply() -> void:
 		if label_enabled:
 			# Tier-conditional key: plain "Polymerase" except at Complex tier
 			# (pol1_enabled), where Pol I and Pol III share the screen and the
-			# generic name would be ambiguous — see file header.
-			var complex_tier: bool = _sim.pol1_enabled if _sim != null else false
+			# generic name would be ambiguous — see file header. pol1_enabled
+			# lives on ComplexityManager itself, not on sim (unlike
+			# ligase_enabled, which predates ComplexityManager) — see
+			# complexity_manager.gd's migration note.
+			var complex_tier: bool = _complexity_mgr.is_enabled("pol1") if _complexity_mgr != null else false
 			_label.set_key("ENZYME_POL3" if complex_tier else "ENZYME_POLYMERASE")
 			var label_margin_out: float = tm.polymerase_label_margin
 			var label_font_size: int = tm.label_font_size
@@ -273,9 +279,12 @@ func get_jaw_cap_inner_anchor() -> Vector2:
 	return to_global(Vector2(0.0, _anchor_local_y))
 
 # ---------- octagon building block (asymmetric caps: inside vs outside) ----------
-# NOTE: _octagon + _round_corners are duplicated from helicase_ring.gd. Briefing
-# item #7 (extract _round_corners to a shared utility both scripts call) is
-# deferred until the ring script is in hand — kept self-contained here for now.
+# NOTE: this asymmetric _octagon() (separate inside/outside chamfer per
+# top/bottom) is genuinely unique to this file's back/jaw pieces — never
+# duplicated elsewhere, so nothing to extract here. round_corners() WAS
+# duplicated (identically) across all five procedural enzyme files —
+# extracted to procedural_shape_utils.gd (ProceduralShapeUtils); see that
+# file's own header for the full list.
 
 func _octagon(w: float, h: float, cx: float, cy_top: float, cy_bottom: float) -> PackedVector2Array:
 	# TOP (-hh) = INSIDE (up) -> cy_top; BOTTOM (+hh) = OUTSIDE (down) -> cy_bottom.
@@ -291,29 +300,3 @@ func _octagon(w: float, h: float, cx: float, cy_top: float, cy_bottom: float) ->
 		Vector2(-hw,  hh - cy_bottom), # lower-left shoulder   (outside)
 		Vector2(-hw, -hh + cy_top),    # upper-left shoulder   (inside)
 	])
-
-func _round_corners(pts: PackedVector2Array, radius_ratio: float, segments: int) -> PackedVector2Array:
-	var n := pts.size()
-	if n < 3 or radius_ratio <= 0.0:
-		return pts
-	var out := PackedVector2Array()
-	for i in range(n):
-		var prev := pts[(i - 1 + n) % n]
-		var cur := pts[i]
-		var next := pts[(i + 1) % n]
-		var to_prev := prev - cur
-		var to_next := next - cur
-		var len_prev := to_prev.length()
-		var len_next := to_next.length()
-		if len_prev < 0.0001 or len_next < 0.0001:
-			out.append(cur)
-			continue
-		var r := radius_ratio * minf(len_prev, len_next) * 0.5
-		var p1 := cur + to_prev.normalized() * r
-		var p2 := cur + to_next.normalized() * r
-		for s in range(segments + 1):
-			var st := float(s) / float(segments)
-			var a := p1.lerp(cur, st)
-			var b := cur.lerp(p2, st)
-			out.append(a.lerp(b, st))
-	return out

@@ -117,7 +117,6 @@ text = "UI_POL1_TOGGLE_LABEL"
 
 [node name="Pol1Toggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/Pol1Row" unique_id=371483688]
 layout_mode = 2
-disabled = true
 
 [node name="ActionsRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=134919167]
 layout_mode = 2

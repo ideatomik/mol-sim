@@ -46,15 +46,9 @@ func _ready() -> void:
 		push_error("ComplexitySetupPopup: %ComplexityManager not found!")
 		return
 
-	# Pol I's Complex tier isn't built yet (OkazakiMaturationDesign.md) —
-	# shown disabled as a toggle-seam placeholder ahead of the feature, per
-	# COMPLEXITY_MODEL.md's "gray out, don't hide" convention for a
-	# dependent that can't yet be meaningfully turned on.
-	pol1_toggle.disabled = true
-	pol1_toggle.tooltip_text = tr("UI_POL1_COMING_SOON")
-
 	primase_toggle.toggled.connect(_on_primase_toggled)
 	ligase_toggle.toggled.connect(_on_ligase_toggled)
+	pol1_toggle.toggled.connect(_on_pol1_toggled)
 	continue_button.pressed.connect(_on_continue_pressed)
 	cancel_button.pressed.connect(_on_cancel_pressed)
 
@@ -93,6 +87,9 @@ func _on_primase_toggled(pressed: bool) -> void:
 
 func _on_ligase_toggled(pressed: bool) -> void:
 	complexity_mgr.set_ligase_enabled(pressed)
+
+func _on_pol1_toggled(pressed: bool) -> void:
+	complexity_mgr.set_pol1_enabled(pressed)
 
 func _on_continue_pressed() -> void:
 	setup_confirmed.emit()

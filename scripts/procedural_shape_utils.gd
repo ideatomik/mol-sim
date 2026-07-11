@@ -1,0 +1,75 @@
+class_name ProceduralShapeUtils
+extends RefCounted
+
+# ==========================================
+# procedural_shape_utils.gd
+# Shared building blocks for every procedural enzyme visual in this project
+# (helicase_ring.gd, polymerase_clamp.gd, ligase.gd, primase_blip.gd,
+# pol1.gd) — extracted after `_round_corners()` ended up duplicated five
+# times over, the shared-utility item every one of those files' own header
+# comments had been individually flagging and deferring since
+# helicase_ring.gd first shipped it.
+#
+# `class_name` makes this globally accessible with no preload — call
+# ProceduralShapeUtils.octagon(...) / ProceduralShapeUtils.round_corners(...)
+# directly. Static methods only; this is never instantiated.
+#
+# octagon() covers the SYMMETRIC case only (same chamfer on every corner) —
+# helicase_ring.gd, ligase.gd, primase_blip.gd, and pol1.gd all only ever
+# needed this variant. polymerase_clamp.gd's own asymmetric octagon (separate
+# inside/outside chamfer per its back/jaw pieces) stays local to that file —
+# a genuinely different shape, not more duplication to extract; it was never
+# copied anywhere else.
+#
+# round_corners() was the one truly identical across all five files
+# (including polymerase_clamp.gd) — the actual target of this extraction.
+# ==========================================
+
+## Symmetric octagon — flat vertical sides, chamfered top/bottom caps. Same
+## shape all four single-piece procedural blobs in this project use.
+static func octagon(w: float, h: float, chamfer: float) -> PackedVector2Array:
+	var hw = w * 0.5
+	var hh = h * 0.5
+	var cx = hw * chamfer
+	var cy = hh * chamfer
+	return PackedVector2Array([
+		Vector2(-hw + cx, -hh),
+		Vector2( hw - cx, -hh),
+		Vector2( hw, -hh + cy),
+		Vector2( hw,  hh - cy),
+		Vector2( hw - cx,  hh),
+		Vector2(-hw + cx,  hh),
+		Vector2(-hw,  hh - cy),
+		Vector2(-hw, -hh + cy),
+	])
+
+## Generic rounding for any convex polygon: at each vertex, pull back along
+## both adjacent edges by a radius relative to that edge's own length, then
+## bridge the gap with a sampled quadratic bezier instead of a sharp point.
+## Edge-relative radius is what keeps this collapse-safe — as a shape
+## squashes and edges shrink, the rounding shrinks with them.
+static func round_corners(pts: PackedVector2Array, radius_ratio: float, segments: int) -> PackedVector2Array:
+	var n = pts.size()
+	if n < 3 or radius_ratio <= 0.0:
+		return pts
+	var out = PackedVector2Array()
+	for i in range(n):
+		var prev = pts[(i - 1 + n) % n]
+		var cur = pts[i]
+		var next = pts[(i + 1) % n]
+		var to_prev = prev - cur
+		var to_next = next - cur
+		var len_prev = to_prev.length()
+		var len_next = to_next.length()
+		if len_prev < 0.0001 or len_next < 0.0001:
+			out.append(cur)
+			continue
+		var r = radius_ratio * minf(len_prev, len_next) * 0.5
+		var p1 = cur + to_prev.normalized() * r
+		var p2 = cur + to_next.normalized() * r
+		for s in range(segments + 1):
+			var t = float(s) / float(segments)
+			var a = p1.lerp(cur, t)
+			var b = cur.lerp(p2, t)
+			out.append(a.lerp(b, t))
+	return out

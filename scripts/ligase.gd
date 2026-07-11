@@ -25,11 +25,15 @@ class_name Ligase
 # reproduce for an arbitrary scrub target, matching the rule the nucleotide
 # capture animation and the primase blip already follow).
 #
-# STAND-IN TRIGGER (see replication_manager.gd's LIGASE section): this
-# enzyme's queue today is fed by Pol III's own fragment-completion event
-# rather than Pol I's not-yet-built primer_removed. Nothing in this file
-# knows or cares which trigger is driving it — only replication_manager.gd's
-# _ligase_kick() needs to change once Pol I exists.
+# STAND-IN TRIGGER: ligase's queue is fed by _lagging_close_fragment() at
+# Light tier, and ALSO by _pol1_finish_job() at Complex tier (an added
+# condition on _ligase_kick()'s own eligibility check, not a trigger swap —
+# see OkazakiMaturationDesign.md's Pol I Implementation Status). Nothing in
+# this file knows or cares which trigger fired.
+#
+# _octagon()/_round_corners() extracted to procedural_shape_utils.gd
+# (ProceduralShapeUtils) — this was the third of five duplicated copies
+# project-wide; see that file's own header for the full list.
 # ==========================================
 
 const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn")
@@ -79,7 +83,7 @@ func _apply() -> void:
 	var t := _pulse_t
 	var w: float = base_size * lerpf(1.0, pinch_ratio, t)
 	var h: float = base_size
-	_blob.polygon = _round_corners(_octagon(w, h, chamfer), corner_ratio, corner_segs)
+	_blob.polygon = ProceduralShapeUtils.round_corners(ProceduralShapeUtils.octagon(w, h, chamfer), corner_ratio, corner_segs)
 	_blob.color = rest_color.lerp(pulse_color, t)
 	_blob.z_index = z
 
@@ -90,53 +94,3 @@ func _apply() -> void:
 			_label.set_style(null, tm.label_font_size, tm.label_color, tm.label_panel_color)
 			_label.z_index = tm.label_z
 			_label.set_anchor_pos(Vector2(0.0, base_size * 0.5 + tm.ligase_label_margin))
-
-# ---------- octagon building block ----------
-# NOTE: _octagon + _round_corners are duplicated from helicase_ring.gd /
-# polymerase_clamp.gd (the shared-utility extraction both of those already
-# flag as deferred). A third copy here rather than resolving that now —
-# consistent with the existing "kept self-contained for now" call.
-
-func _octagon(w: float, h: float, chamfer: float) -> PackedVector2Array:
-	# Symmetric octagon — no inside/outside distinction needed for a single-
-	# piece enzyme (unlike the clamp's asymmetric back/jaw pieces).
-	var hw = w * 0.5
-	var hh = h * 0.5
-	var cx = hw * chamfer
-	var cy = hh * chamfer
-	return PackedVector2Array([
-		Vector2(-hw + cx, -hh),
-		Vector2( hw - cx, -hh),
-		Vector2( hw, -hh + cy),
-		Vector2( hw,  hh - cy),
-		Vector2( hw - cx,  hh),
-		Vector2(-hw + cx,  hh),
-		Vector2(-hw,  hh - cy),
-		Vector2(-hw, -hh + cy),
-	])
-
-func _round_corners(pts: PackedVector2Array, radius_ratio: float, segments: int) -> PackedVector2Array:
-	var n = pts.size()
-	if n < 3 or radius_ratio <= 0.0:
-		return pts
-	var out = PackedVector2Array()
-	for i in range(n):
-		var prev = pts[(i - 1 + n) % n]
-		var cur = pts[i]
-		var next = pts[(i + 1) % n]
-		var to_prev = prev - cur
-		var to_next = next - cur
-		var len_prev = to_prev.length()
-		var len_next = to_next.length()
-		if len_prev < 0.0001 or len_next < 0.0001:
-			out.append(cur)
-			continue
-		var r = radius_ratio * min(len_prev, len_next) * 0.5
-		var p1 = cur + to_prev.normalized() * r
-		var p2 = cur + to_next.normalized() * r
-		for s in range(segments + 1):
-			var t = float(s) / float(segments)
-			var a = p1.lerp(cur, t)
-			var b = cur.lerp(p2, t)
-			out.append(a.lerp(b, t))
-	return out

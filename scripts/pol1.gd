@@ -5,23 +5,22 @@ class_name Pol1Enzyme
 # pol1.gd — Complex-tier trailing enzyme (nick translation), see
 # OkazakiMaturationDesign.md.
 #
-# Two connected lobes along the TRAVEL axis — same "two procedural pieces,
-# one shared shape family" precedent polymerase_clamp.gd already set with
-# its back/jaw split, but split along local X (direction of travel) instead
-# of the duplex's inside/outside axis. Pol I's two simultaneous activities
-# (5'->3' exonuclease chewing the RNA primer ahead of it, 5'->3' polymerase
-# filling DNA in behind it) are sequential ALONG the strand, not front/back
-# relative to it — hence a different axis than the clamp's split.
+# Two connected lobes stacked VERTICALLY (local Y), not along the travel
+# axis. Originally split along local X (leading/trailing, mirroring the
+# clamp's back/jaw precedent) — moved to a vertical stack instead: at the
+# in-scene scale, both activities happening at essentially the same nick
+# point read as a blur when spread along the strand, especially the
+# RNA-removal side, which got visually lost against the strand line itself.
+# Stacking makes both lobes legible without slowing the sim down to see them.
 #
-# EXO lobe = local -x (leading edge). Primer removal sweeps right-to-left
-#   (high-to-low index) across a fragment's primer span — the same chained
-#   order Pol III itself already used to originally write those slots, so
-#   the leading edge points toward lower x.
-# POL lobe = local +x (trailing edge). Sits over already-converted DNA.
-# A fixed lobe_gap holds both a constant distance apart — matched exo/pol
-# rates, so the nick slides forward without growing or shrinking, which is
-# the real biological behavior this enzyme models (not an approximation of
-# convenience).
+# EXO lobe (RNA removal) = the reference point, sitting exactly at local
+#   origin — which is the node's own position (the lagging strand's base
+#   row, see replication_manager.gd's _pol1_kick()). Placed as the anchor
+#   deliberately: it's the harder-to-read of the two activities and
+#   benefits from being the fixed point everything else is measured from.
+# POL lobe (DNA fill-in) = offset from EXO by pol1_lobe_gap (local +y,
+#   visually below), not a symmetric split around a shared center — EXO's
+#   own position never moves regardless of how pol1_lobe_gap is tuned.
 #
 # POSITIONING is driven entirely EXTERNALLY, same division of labor
 # ligase.gd/primase_blip.gd already use — replication_manager.gd tweens this
@@ -47,6 +46,10 @@ class_name Pol1Enzyme
 # to occupy before it has work. Once instantiated it persists for the rest
 # of the run; see replication_manager.gd's POL1 section for the
 # leave-the-strand motion it plays between jobs instead of parking in place.
+#
+# _octagon()/_round_corners() extracted to procedural_shape_utils.gd
+# (ProceduralShapeUtils) — this was the fifth and last duplicated copy
+# project-wide; see that file's own header for the full list.
 # ==========================================
 
 const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn")
@@ -89,8 +92,13 @@ func _apply() -> void:
 	var tm := _tm
 	var t := _pulse_t
 
-	var lobe_size: float = tm.pol1_lobe_size
+	# Sized relative to Pol III's own clamp width — derived, not an
+	# independently-tuned flat constant, per this project's "never let two
+	# numbers coincidentally agree" rule. Ligase stays small on purpose;
+	# Pol I reads better closer to Pol III's own footprint.
+	var lobe_size: float = tm.clamp_back_width * tm.pol1_lobe_size_ratio
 	var lobe_gap: float = tm.pol1_lobe_gap
+	var pol_height_ratio: float = tm.pol1_pol_lobe_height_ratio
 	var pulse_scale_ratio: float = tm.pol1_pulse_scale_ratio
 	var chamfer: float = tm.pol1_chamfer_ratio
 	var corner_ratio: float = tm.pol1_corner_radius_ratio
@@ -102,16 +110,17 @@ func _apply() -> void:
 	var z: int = tm.pol1_z
 
 	var grown: float = lobe_size * lerpf(1.0, pulse_scale_ratio, t)
-	var half_gap: float = lobe_gap * 0.5
-	var shape: PackedVector2Array = _round_corners(_octagon(grown, grown, chamfer), corner_ratio, corner_segs)
-
-	_exo_lobe.polygon = shape
-	_exo_lobe.position = Vector2(-half_gap, 0.0)
+	# EXO is the reference point, sitting exactly at the node's own position
+	# (the base row, per replication_manager.gd's _pol1_kick()) — not a
+	# symmetric split around it. POL is offset from EXO by pol1_lobe_gap,
+	# tunable independently of EXO's own size or position.
+	_exo_lobe.polygon = ProceduralShapeUtils.round_corners(ProceduralShapeUtils.octagon(grown, grown, chamfer), corner_ratio, corner_segs)
+	_exo_lobe.position = Vector2.ZERO
 	_exo_lobe.color = exo_color.lerp(exo_pulse_color, t)
 	_exo_lobe.z_index = z
 
-	_pol_lobe.polygon = shape
-	_pol_lobe.position = Vector2(half_gap, 0.0)
+	_pol_lobe.polygon = ProceduralShapeUtils.round_corners(ProceduralShapeUtils.octagon(grown, grown * pol_height_ratio, chamfer), corner_ratio, corner_segs)
+	_pol_lobe.position = _exo_lobe.position + Vector2(0.0, lobe_gap)
 	_pol_lobe.color = pol_color.lerp(pol_pulse_color, t)
 	_pol_lobe.z_index = z
 
@@ -122,50 +131,3 @@ func _apply() -> void:
 			_label.set_style(null, tm.label_font_size, tm.label_color, tm.label_panel_color)
 			_label.z_index = tm.label_z
 			_label.set_anchor_pos(Vector2(0.0, -(lobe_size * 0.5 + tm.pol1_label_margin)))
-
-# ---------- octagon building block ----------
-# NOTE: duplicated from helicase_ring.gd / polymerase_clamp.gd / ligase.gd /
-# primase_blip.gd — same deferred shared-utility extraction all four already
-# flag; a fifth copy here rather than resolving that now.
-
-func _octagon(w: float, h: float, chamfer: float) -> PackedVector2Array:
-	var hw = w * 0.5
-	var hh = h * 0.5
-	var cx = hw * chamfer
-	var cy = hh * chamfer
-	return PackedVector2Array([
-		Vector2(-hw + cx, -hh),
-		Vector2( hw - cx, -hh),
-		Vector2( hw, -hh + cy),
-		Vector2( hw,  hh - cy),
-		Vector2( hw - cx,  hh),
-		Vector2(-hw + cx,  hh),
-		Vector2(-hw,  hh - cy),
-		Vector2(-hw, -hh + cy),
-	])
-
-func _round_corners(pts: PackedVector2Array, radius_ratio: float, segments: int) -> PackedVector2Array:
-	var n = pts.size()
-	if n < 3 or radius_ratio <= 0.0:
-		return pts
-	var out = PackedVector2Array()
-	for i in range(n):
-		var prev = pts[(i - 1 + n) % n]
-		var cur = pts[i]
-		var next = pts[(i + 1) % n]
-		var to_prev = prev - cur
-		var to_next = next - cur
-		var len_prev = to_prev.length()
-		var len_next = to_next.length()
-		if len_prev < 0.0001 or len_next < 0.0001:
-			out.append(cur)
-			continue
-		var r = radius_ratio * minf(len_prev, len_next) * 0.5
-		var p1 = cur + to_prev.normalized() * r
-		var p2 = cur + to_next.normalized() * r
-		for s in range(segments + 1):
-			var t = float(s) / float(segments)
-			var a = p1.lerp(cur, t)
-			var b = cur.lerp(p2, t)
-			out.append(a.lerp(b, t))
-	return out

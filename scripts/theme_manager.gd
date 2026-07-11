@@ -155,7 +155,8 @@ extends Node
 @export var primase_capture_duration: float = 0.15
 
 @export_group("Pol I")
-@export var pol1_lobe_size: float = 30.0
+## Shape/color, read by pol1.gd's _apply().
+@export_range(0.1, 2.0) var pol1_lobe_size_ratio: float = 0.5   # relative to clamp_back_width — see polymerase_clamp.gd's "Polymerase Clamp" group
 @export var pol1_lobe_gap: float = 24.0
 @export_range(1.0, 2.0) var pol1_pulse_scale_ratio: float = 1.3
 @export_range(0.0, 1.0) var pol1_chamfer_ratio: float = 0.35
@@ -167,9 +168,11 @@ extends Node
 @export var pol1_pol_pulse_color: Color = Color(0.45, 0.75, 0.95, 1.0)
 @export var pol1_z: int = 5
 @export var pol1_label_margin: float = 12.0
+@export_range(0.1, 1.0) var pol1_pol_lobe_height_ratio: float = 0.5   # relative to the exo lobe's own height
+
+## Motion timing, read by replication_manager.gd's POL I section.
 @export var pol1_offstage_drop: float = 40.0
 @export var pol1_travel_duration: float = 0.35
-@export var pol1_step_duration: float = 0.2
 @export var pol1_leave_duration: float = 0.35
 
 @export_group("RNA Primer")
@@ -198,6 +201,7 @@ extends Node
 @export var rna_backbone_line_width: float = 5.0
 @export var rna_bond_mark_width: float = 22.0
 @export var rna_bond_mark_line_width: float = 3.0
+@export var rna_backbone_color: Color = Color(0.6, 0.25, 0.75, 1.0)  # matches primase_blip_color by default — tune independently
 
 @export_group("Markers")
 @export var marker_color: Color = Color(0.0, 0.0, 0.0, 0.0)

@@ -44,6 +44,10 @@ extends Node2D
 # helicase_node.modulate for free — modulate propagates down the tree
 # regardless of z_index, and z_as_relative=false on the blobs keeps front/back
 # absolute rather than inheriting the container's z.
+#
+# _octagon()/_round_corners() extracted to procedural_shape_utils.gd
+# (ProceduralShapeUtils) — this was the first of what became five duplicated
+# copies project-wide; see that file's own header for the full list.
 # ==========================================
 
 # ---------- GEOMETRY ----------
@@ -190,60 +194,10 @@ func _apply() -> void:
 		var h = max_blob_height * abs_c
 		var w = max_blob_width * (min_width_ratio + (1.0 - min_width_ratio) * abs_c)
 		var blob = _blobs[i]
-		blob.polygon = _round_corners(_octagon(w, h, chamfer_ratio), corner_radius_ratio, corner_segments)
+		blob.polygon = ProceduralShapeUtils.round_corners(ProceduralShapeUtils.octagon(w, h, chamfer_ratio), corner_radius_ratio, corner_segments)
 		blob.position = Vector2(0.0, ring_radius * sin(theta))
 		var is_front = c >= 0.0
 		blob.z_index = front_z if is_front else back_z
 		blob.color = front_color if is_front else back_color
 		blob.visible = h > 1.0   # drop the degenerate ~zero-height sliver right at the flip point
 	_update_label()
-
-func _octagon(w: float, h: float, chamfer: float) -> PackedVector2Array:
-	# Vertically-stretchable octagon: flat vertical sides, chamfered top/bottom
-	# caps. Flat sides collapse cleanly to a sliver as w -> min; this is the
-	# shape, before corner rounding is applied.
-	var hw = w * 0.5
-	var hh = h * 0.5
-	var cx = hw * chamfer
-	var cy = hh * chamfer
-	return PackedVector2Array([
-		Vector2(-hw + cx, -hh),   # top edge, left
-		Vector2( hw - cx, -hh),   # top edge, right
-		Vector2( hw, -hh + cy),   # upper-right shoulder
-		Vector2( hw,  hh - cy),   # lower-right shoulder
-		Vector2( hw - cx,  hh),   # bottom edge, right
-		Vector2(-hw + cx,  hh),   # bottom edge, left
-		Vector2(-hw,  hh - cy),   # lower-left shoulder
-		Vector2(-hw, -hh + cy),   # upper-left shoulder
-	])
-
-func _round_corners(pts: PackedVector2Array, radius_ratio: float, segments: int) -> PackedVector2Array:
-	# Generic rounding for any convex polygon: at each vertex, pull back along
-	# both adjacent edges by a radius relative to that edge's own length, then
-	# bridge the gap with a sampled quadratic bezier instead of a sharp point.
-	# Edge-relative radius is what keeps this collapse-safe — as the blob
-	# squashes and edges shrink, the rounding shrinks with them.
-	var n = pts.size()
-	if n < 3 or radius_ratio <= 0.0:
-		return pts
-	var out = PackedVector2Array()
-	for i in range(n):
-		var prev = pts[(i - 1 + n) % n]
-		var cur = pts[i]
-		var next = pts[(i + 1) % n]
-		var to_prev = prev - cur
-		var to_next = next - cur
-		var len_prev = to_prev.length()
-		var len_next = to_next.length()
-		if len_prev < 0.0001 or len_next < 0.0001:
-			out.append(cur)
-			continue
-		var r = radius_ratio * min(len_prev, len_next) * 0.5
-		var p1 = cur + to_prev.normalized() * r
-		var p2 = cur + to_next.normalized() * r
-		for s in range(segments + 1):
-			var t = float(s) / float(segments)
-			var a = p1.lerp(cur, t)
-			var b = cur.lerp(p2, t)
-			out.append(a.lerp(b, t))
-	return out

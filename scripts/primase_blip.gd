@@ -30,6 +30,10 @@ class_name PrimaseBlip
 # (bases get recolored directly, without replaying any enzyme animation),
 # so this needs no scrub-awareness of its own beyond the in-flight-tween-
 # kill every other transient animation in this project already gets.
+#
+# _octagon()/_round_corners() extracted to procedural_shape_utils.gd
+# (ProceduralShapeUtils) — this was the fourth of five duplicated copies
+# project-wide; see that file's own header for the full list.
 # ==========================================
 
 const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn")
@@ -70,7 +74,7 @@ func _apply() -> void:
 
 	var base_size: float = tm.primase_blip_size
 	var grown_size: float = base_size * lerpf(1.0, tm.primase_pulse_scale_ratio, t)
-	_blob.polygon = _round_corners(_octagon(grown_size, grown_size, tm.primase_blip_chamfer_ratio), tm.primase_blip_corner_radius_ratio, tm.primase_blip_corner_segments)
+	_blob.polygon = ProceduralShapeUtils.round_corners(ProceduralShapeUtils.octagon(grown_size, grown_size, tm.primase_blip_chamfer_ratio), tm.primase_blip_corner_radius_ratio, tm.primase_blip_corner_segments)
 	_blob.color = tm.primase_blip_color.lerp(tm.primase_pulse_color, t)
 	_blob.z_index = tm.primase_blip_z
 
@@ -81,49 +85,3 @@ func _apply() -> void:
 			_label.set_style(null, tm.label_font_size, tm.label_color, tm.label_panel_color)
 			_label.z_index = tm.label_z
 			_label.set_anchor_pos(Vector2(0.0, -(base_size * 0.5 + tm.primase_blip_label_margin)))
-
-# ---------- octagon building block ----------
-# NOTE: duplicated from helicase_ring.gd / polymerase_clamp.gd / ligase.gd —
-# same deferred shared-utility extraction all three already flag.
-
-func _octagon(w: float, h: float, chamfer: float) -> PackedVector2Array:
-	var hw = w * 0.5
-	var hh = h * 0.5
-	var cx = hw * chamfer
-	var cy = hh * chamfer
-	return PackedVector2Array([
-		Vector2(-hw + cx, -hh),
-		Vector2( hw - cx, -hh),
-		Vector2( hw, -hh + cy),
-		Vector2( hw,  hh - cy),
-		Vector2( hw - cx,  hh),
-		Vector2(-hw + cx,  hh),
-		Vector2(-hw,  hh - cy),
-		Vector2(-hw, -hh + cy),
-	])
-
-func _round_corners(pts: PackedVector2Array, radius_ratio: float, segments: int) -> PackedVector2Array:
-	var n = pts.size()
-	if n < 3 or radius_ratio <= 0.0:
-		return pts
-	var out = PackedVector2Array()
-	for i in range(n):
-		var prev = pts[(i - 1 + n) % n]
-		var cur = pts[i]
-		var next = pts[(i + 1) % n]
-		var to_prev = prev - cur
-		var to_next = next - cur
-		var len_prev = to_prev.length()
-		var len_next = to_next.length()
-		if len_prev < 0.0001 or len_next < 0.0001:
-			out.append(cur)
-			continue
-		var r = radius_ratio * min(len_prev, len_next) * 0.5
-		var p1 = cur + to_prev.normalized() * r
-		var p2 = cur + to_next.normalized() * r
-		for s in range(segments + 1):
-			var t = float(s) / float(segments)
-			var a = p1.lerp(cur, t)
-			var b = cur.lerp(p2, t)
-			out.append(a.lerp(b, t))
-	return out
