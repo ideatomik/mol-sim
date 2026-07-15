@@ -29,8 +29,22 @@ extends Node
 ## so UI (ComplexitySetupPopup) can stay in sync without polling.
 signal toggle_changed(feature: String, enabled: bool)
 
+## Emitted whenever topology_mode changes. Separate from toggle_changed
+## since this is a mode, not a bool feature — COMPLEXITY_MODEL.md's "topology
+## is the spine" principle gets its own signal rather than being shoehorned
+## into the String-keyed toggle channel.
+signal topology_changed(mode: int)
+
+## COMPLEXITY_MODEL.md's topology spine: a molecule can't be simultaneously
+## circular (forks meet, no ends) and linear (has ends requiring telomere
+## maintenance). CIRCULAR is the default — matches the E. coli model the sim
+## already runs today, so nothing changes for existing scenes until someone
+## actively switches modes.
+enum Topology { CIRCULAR, LINEAR }
+
+@export var topology_mode: Topology = Topology.CIRCULAR
 @export var primase_enabled: bool = false
-@export var pol1_enabled: bool = false  # Complex tier — no implementation exists yet (see OkazakiMaturationDesign.md). Toggle-seam placeholder, shown disabled in the UI ahead of the feature.
+@export var pol1_enabled: bool = false  # Complex tier — implemented (pol1.gd, wired into replication_manager.gd's bridge-toggle cascade). Comment was stale; correcting per ground-truth read during the topology_mode pass.
 
 var _sim: Node = null  # simulation.gd instance — see ligase_enabled migration note above
 
@@ -45,6 +59,16 @@ func is_enabled(feature: String) -> bool:
 			return _sim.ligase_enabled if _sim != null else false
 		"pol1":
 			return pol1_enabled
+		"lagging_gap":
+			# Mode-gate, not a plain proxy: lagging_gap_enabled is only ever
+			# meaningful in Linear mode (COMPLEXITY_MODEL.md's topology
+			# spine — a circular chromosome has no ends for the
+			# end-replication problem to apply to). Folding the mode check
+			# in here means every caller (replication_manager.gd's discard
+			# trigger, primase's gap-avoidance check, scrub_rebuild) only
+			# ever needs is_enabled("lagging_gap") and never has to know
+			# topology_mode exists at all.
+			return topology_mode == Topology.LINEAR and (_sim.lagging_gap_enabled if _sim != null else false)
 		_:
 			push_warning("ComplexityManager.is_enabled(): unknown feature '%s'" % feature)
 			return false
@@ -92,3 +116,35 @@ func set_pol1_enabled(value: bool) -> void:
 		if _sim != null and not _sim.ligase_enabled:
 			set_ligase_enabled(true)
 	toggle_changed.emit("pol1", value)
+
+## Mode-gate cascade — COMPLEXITY_MODEL.md's topology spine, applied as a
+## THIRD gating pattern distinct from the parent/child and bridge-toggle
+## cascades above. Switching to Circular force-disables lagging_gap_enabled,
+## same "parent going away disables the dependent" direction used
+## everywhere else in this file, just applied to a mode instead of a bool.
+## Switching to Linear deliberately does NOT auto-enable lagging_gap_enabled
+## in return — mirrors the equally-deliberate restraint in set_pol1_enabled()
+## style cascades where a child never auto-enables its own parent, applied
+## here as "the dependent doesn't get to ride along with the mode." Linear
+## only unlocks the checkbox; turning telomerase on stays a separate,
+## conscious choice.
+func set_topology_mode(value: Topology) -> void:
+	if topology_mode == value:
+		return
+	topology_mode = value
+	print("[COMPLEXITY] topology_mode = %s" % Topology.keys()[value])
+	topology_changed.emit(value)
+	if value == Topology.CIRCULAR and _sim != null and _sim.lagging_gap_enabled:
+		set_lagging_gap_enabled(false)
+
+## Proxy setter mirroring set_ligase_enabled()'s pattern exactly —
+## lagging_gap_enabled lives on simulation.gd (same "avoid two
+## independently-tuned numbers" reasoning as the ligase_enabled migration
+## note at the top of this file), not duplicated here as a second source
+## of truth.
+func set_lagging_gap_enabled(value: bool) -> void:
+	if _sim == null or _sim.lagging_gap_enabled == value:
+		return
+	_sim.lagging_gap_enabled = value
+	print("[COMPLEXITY] lagging_gap_enabled = %s" % value)
+	toggle_changed.emit("lagging_gap", value)

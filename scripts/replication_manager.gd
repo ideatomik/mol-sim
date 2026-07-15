@@ -112,6 +112,14 @@ var lagging_polymerase_faded: bool = false  # renamed from synthesis_circle_fade
 # fade had already hidden everything — functionally correct, invisibly so.
 # See _lagging_enzymes_settled()/_lagging_try_deferred_fade().
 var _lagging_fade_pending: bool = false
+## Gap mode only — set once when the terminal primer removal is kicked off at
+## strand completion, so the removal (and gap recording) fires exactly once
+## even though catch-up completion can be re-entered via the deferred-fade path.
+var _terminal_removal_started: bool = false
+## Set once when both polymerases start their end-of-run slide to the shared
+## rest spot, so the move fires exactly once per run (catch-up completion can
+## be reached more than once via the settle/deferred-fade paths).
+var _polymerases_at_rest: bool = false
 const LEADING_POLYMERASE_RADIUS: float = 24.0  # renamed from TOP_POLYMERASE_RADIUS
 # ---------- MARKERS ----------
 var marker_leading_5p: Node2D = null
@@ -255,6 +263,7 @@ func initialize(p_sim: Node) -> void:
 	sim.add_child(ligase)
 	ligase.setup(sim)
 	ligase.visible = false
+	_ligase_park_offstage()  # start at the offstage rest spot, not local origin (up-left of the strand)
 
 	# Primase (Light tier) — same "created once, persists across sequence
 	# loads" lifecycle. Alpha-driven rather than visible-driven (matches
@@ -283,6 +292,7 @@ func initialize(p_sim: Node) -> void:
 		"C": tm.rna_base_color_c,
 		"G": tm.rna_base_color_g,
 	}
+	primase_halo.is_rna = true
 	primase_halo.setup(sim, false)
 
 	# Fed by ComplexityManager.toggle_changed rather than polled — covers the
@@ -1142,6 +1152,9 @@ func _lagging_reset(num_slots: int) -> void:
 	lagging_total_consumed = 0
 	lagging_batch_cursor = 0
 	lagging_polymerase_x = 0.0
+	_lagging_fade_pending = false
+	_terminal_removal_started = false
+	_polymerases_at_rest = false
 	if lagging_catchup_timer != null:
 		lagging_catchup_timer.stop()
 	if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
@@ -1412,6 +1425,12 @@ func _pol3_convert_primer_if_needed(index: int) -> void:
 		return
 	if not _is_primer_slot(index):
 		return
+	# Gap mode: the terminal primer footprint is the telomere gap. Pol III
+	# must NOT absorb it into DNA (as it does at Light tier), or there'd be
+	# nothing left to remove and no gap. Left as RNA, it's faded out by the
+	# terminal-removal step at strand completion instead.
+	if complexity_mgr.is_enabled("lagging_gap") and index >= sim.num_nucleotide_slots - _primase_primer_length():
+		return
 	_convert_primer_base_to_dna(index)
 
 ## Supersedes pure-geometry _is_primer_slot() for RENDERING purposes (backbone
@@ -1450,10 +1469,12 @@ func _primase_check_slot(index: int) -> void:
 	# opposite directions within what's meant to read as one fragment).
 	if index != tile_end - 1:
 		return
+
 	var span = _primase_primer_length()
 	var seq: Array = []
 	for slot_index in range(tile_end - 1, tile_end - span - 1, -1):
 		seq.append(slot_index)
+	print("[PRIMASE] placing primer — tile anchor=%d span=%s" % [index, str(seq)])
 	_primase_place_sequence(seq, 0)
 
 ## Chains through `seq` (already ordered high-to-low) one slot at a time —
@@ -1603,14 +1624,14 @@ func _pol1_enabled() -> bool:
 ## Builds this fragment's own primer slot sequence (its own top `span`
 ## slots, high-to-low — same chained order primase itself placed them in)
 ## and queues it for Pol I.
-func _pol1_enqueue_job(frag: Dictionary) -> void:
+func _pol1_enqueue_job(frag: Dictionary, remove_only: bool = false) -> void:
 	var tile_end = _primase_tile_end(frag.slots[-1])
 	var span = _primase_primer_length()
 	var seq: Array = []
 	for slot_index in range(tile_end - 1, tile_end - span - 1, -1):
 		seq.append(slot_index)
-	_pol1_queue.append({frag = frag, seq = seq})
-	print("[POL1] job queued — primer span=%s (queue depth now %d)" % [str(seq), _pol1_queue.size()])
+	_pol1_queue.append({frag = frag, seq = seq, remove_only = remove_only})
+	print("[POL1] job queued — primer span=%s remove_only=%s (queue depth now %d)" % [str(seq), remove_only, _pol1_queue.size()])
 	_pol1_kick()
 
 ## Idempotent: no-ops if pol1 is off, already busy, or nothing queued.
@@ -1660,11 +1681,16 @@ func _pol1_work(job: Dictionary, seq_pos: int) -> void:
 	var index: int = seq[seq_pos]
 	var target_x = sim.nucleotide_original_x[index]
 	var step_duration: float = sim.helicase_mgr.step_duration
+	var remove_only: bool = job.get("remove_only", false)
 	_pol1_tween = sim.create_tween()
 	_pol1_tween.tween_property(pol1, "position:x", target_x, step_duration)
 	_pol1_tween.tween_callback(func():
-		_convert_primer_base_to_dna(index)
-		print("[POL1] converting slot %d (%d/%d)" % [index, seq_pos + 1, seq.size()])
+		if remove_only:
+			_remove_terminal_primer_base(index)
+			print("[POL1] removing terminal primer slot %d (%d/%d) — no refill, this is the gap" % [index, seq_pos + 1, seq.size()])
+		else:
+			_convert_primer_base_to_dna(index)
+			print("[POL1] converting slot %d (%d/%d)" % [index, seq_pos + 1, seq.size()])
 	)
 	# tween_method, not tween_callback — a callback is an instant snap with
 	# no visible duration; two of them back-to-back (the original bug here)
@@ -1681,8 +1707,12 @@ func _pol1_work(job: Dictionary, seq_pos: int) -> void:
 ## both ligase (its real Complex-tier trigger now) and its own queue for
 ## the next pending job.
 func _pol1_finish_job(job: Dictionary) -> void:
-	job.frag.primer_removed = true
-	print("[POL1] job complete — primer removed, frag now sealable, leaving strand")
+	if job.get("remove_only", false):
+		print("[POL1] terminal removal complete — recording gap, primer will not be refilled")
+		_lagging_finalize_terminal_gap(job.frag, job.seq)
+	else:
+		job.frag.primer_removed = true
+		print("[POL1] job complete — primer removed, frag now sealable, leaving strand")
 	_pol1_state = Pol1Phase.LEAVING
 	_pol1_tween = sim.create_tween()
 	_pol1_tween.tween_property(pol1, "position:y", pol1.position.y + tm.pol1_offstage_drop, tm.pol1_leave_duration)
@@ -1693,6 +1723,22 @@ func _pol1_finish_job(job: Dictionary) -> void:
 		_pol1_kick()
 		_lagging_try_deferred_fade()
 	)
+
+## The remove-only counterpart to _convert_primer_base_to_dna(): fades one
+## terminal primer base + its bond out over a single sweep step, matching the
+## bite cadence of a normal conversion. Bases are only alpha-faded here (not
+## freed) so the primer backbone keeps drawing through the sweep; the actual
+## free + null + gap recording happens once in _lagging_finalize_terminal_gap()
+## when the job finishes.
+func _remove_terminal_primer_base(index: int) -> void:
+	var step_duration: float = sim.helicase_mgr.step_duration
+	var base = lagging_synthesized_bases[index]
+	var bond = lagging_hydrogen_bonds[index]
+	var t = sim.create_tween()
+	if base != null and is_instance_valid(base):
+		t.parallel().tween_property(base, "modulate:a", 0.0, step_duration)
+	if bond != null and is_instance_valid(bond):
+		t.parallel().tween_property(bond, "modulate:a", 0.0, step_duration)
 
 ## Kills any in-flight travel/sweep/leave tween and drops back to fully
 ## offstage (faded, idle). Does NOT touch already-converted primer bases —
@@ -1723,7 +1769,21 @@ func _ligase_kick() -> void:
 		if frag.sealed:
 			continue
 		if _pol1_enabled() and not frag.get("primer_removed", false):
-			break  # earliest unsealed fragment isn't primer-clean yet — nothing later can be either
+			# The last fragment's OWN primer is never removed (no fragment
+			# closes after it to trigger removal) — but its 5' nick to the
+			# previous fragment IS sealable, since that junction is all DNA.
+			# So once the strand is complete, seal it anyway: its DNA joins the
+			# strand and only the un-removed 3' primer stays distinct. Every
+			# OTHER unsealed fragment still waits for its own primer. Gap mode
+			# is excluded — it removes the terminal primer outright, so
+			# primer_removed goes true there and this branch never applies.
+			var is_last = frag == lagging_fragments[-1]
+			var strand_complete = lagging_current_fragment == null and lagging_total_consumed >= sim.num_nucleotide_slots
+			var gap_mode = complexity_mgr != null and complexity_mgr.is_enabled("lagging_gap")
+			if not (is_last and strand_complete and not gap_mode):
+				print("[LIGASE] kick — earliest unsealed fragment (slot %d) isn't primer-clean yet, waiting" % frag.slots[0])
+				break  # earliest unsealed fragment isn't primer-clean yet — nothing later can be either
+			print("[LIGASE] sealing final fragment (slot %d) — 5' nick joins strand, 3' primer stays (never removed)" % frag.slots[0])
 		next_frag = frag
 		break
 	if next_frag == null:
@@ -1731,6 +1791,7 @@ func _ligase_kick() -> void:
 
 	_ligase_state = LigaseState.TRAVELING
 	ligase.visible = true
+	print("[LIGASE] traveling to seal fragment starting at slot %d" % next_frag.slots[0])
 	var target_x = sim.nucleotide_original_x[next_frag.slots[0]] - sim.nucleotide_slot_spacing / 2.0
 	var target_y = sim.new_bottom_template_y + sim.dna_ribbons_gap + tm.backbone_offset_distance
 	if _ligase_tween != null and _ligase_tween.is_valid():
@@ -1743,6 +1804,7 @@ func _ligase_kick() -> void:
 
 func _ligase_seal(frag: Dictionary) -> void:
 	_ligase_state = LigaseState.SEALING
+	print("[LIGASE] sealing — pinch starting")
 	_ligase_tween = sim.create_tween()
 	_ligase_tween.tween_method(ligase.set_pulse, 0.0, 1.0, tm.ligase_seal_duration * 0.5)
 	_ligase_tween.tween_method(ligase.set_pulse, 1.0, 0.0, tm.ligase_seal_duration * 0.5)
@@ -1750,6 +1812,7 @@ func _ligase_seal(frag: Dictionary) -> void:
 
 func _ligase_finish_seal(frag: Dictionary) -> void:
 	frag.sealed = true
+	print("[LIGASE] seal complete — frag.sealed=true, merging into continuous line")
 	_ligase_state = LigaseState.IDLE
 	_ligase_kick()  # pick up the next pending fragment, if any
 	_lagging_try_deferred_fade()
@@ -1766,6 +1829,20 @@ func _ligase_reset_visual() -> void:
 		ligase.visible = false
 		ligase.modulate.a = 1.0  # undoes _lagging_fade_enzyme_scene()'s end-of-run fade — otherwise the NEXT run's first seal sets visible=true while alpha is still 0 from the last one
 		ligase.set_pulse(0.0)
+		_ligase_park_offstage()  # snap back to the offstage rest spot — otherwise it stays at wherever its last seal ended, so the next run's first seal tween starts mid-strand and slides in from there (create-once-hide lifecycle seam, same as primase/Pol I)
+
+## Parks ligase at its offstage rest position: below the strand, near the
+## start (where its first seal always lands), so the first seal rises up into
+## place instead of dropping in from the node's local origin up-and-left of the
+## strand. Below-the-strand matches Pol I's own downward-offstage convention.
+func _ligase_park_offstage() -> void:
+	if ligase == null:
+		return
+	var park_y = sim.new_bottom_template_y + sim.dna_ribbons_gap + tm.backbone_offset_distance + tm.ligase_offstage_drop
+	var park_x = 0.0
+	if sim.nucleotide_original_x.size() > 0:
+		park_x = sim.nucleotide_original_x[0]
+	ligase.position = Vector2(park_x, park_y)
 
 func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 	var is_done_phase: bool = ctx.is_done_phase
@@ -1782,9 +1859,14 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 			attempted_consumed = exposed_count - threshold + 1
 		attempted_consumed = clamp(attempted_consumed, 0, num_slots)
 
+	var lagging_gap_on = complexity_mgr != null and complexity_mgr.is_enabled("lagging_gap")
 	var total_consumed = attempted_consumed
-	if is_done_phase and sim.lagging_gap_enabled:
-		total_consumed = (attempted_consumed / sim.okazaki_fragment_size) * sim.okazaki_fragment_size  # reserved — telomerase tier
+	if is_done_phase and lagging_gap_on:
+		# Corrected gap model: Pol III finishes the WHOLE strand — nothing is
+		# discarded. The telomere gap is only the terminal primer footprint,
+		# removed after the strand is otherwise complete, and reconstructed as
+		# empty further down. So the built length is the full strand.
+		total_consumed = num_slots
 	elif is_done_phase:
 		# DONE alone doesn't finish lagging — it reaches the natural tiling
 		# point, same as live play. Further completion comes from explicit
@@ -1794,13 +1876,10 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 		# exact boundary arrow-key step.
 		var catchup_step = ctx.get("lagging_catchup_step", 0)
 		total_consumed = clamp(attempted_consumed + catchup_step, attempted_consumed, num_slots)
-	if is_done_phase and sim.lagging_gap_enabled:
+	if is_done_phase and lagging_gap_on:
 		var last_slot = num_slots - 1
-		var gap_start = (total_consumed / sim.okazaki_fragment_size) * sim.okazaki_fragment_size
-		if last_slot >= gap_start:
-			lagging_telomere_gap = { start = gap_start, end = last_slot, length = last_slot - gap_start + 1 }
-		else:
-			lagging_telomere_gap = null
+		var gap_start = num_slots - _primase_primer_length()
+		lagging_telomere_gap = { start = gap_start, end = last_slot, length = last_slot - gap_start + 1 }
 	else:
 		lagging_telomere_gap = null
 
@@ -1900,6 +1979,11 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 		if remainder > 0:
 			ahead_tile_start += sim.okazaki_fragment_size  # the open tile is already covered above
 		var span = _primase_primer_length()
+		# Mirrors _primase_check_slot()'s live-play gap-avoidance boundary —
+		# scrubbing into this range must show exactly what a live run would
+		# have shown, i.e. nothing, since these tiles are structurally
+		# unreachable by the polymerase before the strand ends (see the
+		# comment at _primase_check_slot() for the derivation).
 		var k = ahead_tile_start
 		while k < num_slots:
 			var this_tile_end = min(k + sim.okazaki_fragment_size, num_slots)
@@ -1917,9 +2001,44 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 			_primase_ensure_pending_backbone(this_tile_end)
 			k = this_tile_end
 
+	# ---- Terminal telomere gap reconstruction (gap mode, DONE only) ----
+	# The finished state has the terminal primer already removed — an empty
+	# gap, never RNA and never DNA. Everything above rebuilt the strand as if
+	# complete (terminal primer spawned RNA-styled via the last fragment); now
+	# clear that footprint back out so scrub shows exactly the post-removal
+	# end state live play lands on. Purely structural — no tween, no replay.
+	if is_done_phase and lagging_gap_on and lagging_fragments.size() > 0:
+		var span_t = _primase_primer_length()
+		var terminal_frag = lagging_fragments[-1]
+		for i in range(num_slots - span_t, num_slots):
+			if i >= 0 and lagging_synthesized_bases[i] != null and is_instance_valid(lagging_synthesized_bases[i]):
+				lagging_synthesized_bases[i].queue_free()
+			lagging_synthesized_bases[i] = null
+			if i >= 0 and lagging_hydrogen_bonds[i] != null and is_instance_valid(lagging_hydrogen_bonds[i]):
+				lagging_hydrogen_bonds[i].queue_free()
+			lagging_hydrogen_bonds[i] = null
+		if terminal_frag.get("primer_backbone", null) != null and is_instance_valid(terminal_frag.primer_backbone):
+			terminal_frag.primer_backbone.queue_free()
+			terminal_frag.primer_backbone = null
+		# Primer gone → fragment is primer-clean and sealed in the end state.
+		terminal_frag.primer_removed = true
+		terminal_frag.sealed = true
+
 	# ---- Polymerase position + visibility ----
 	lagging_total_consumed = total_consumed
 	lagging_firing_started = total_consumed > 0
+	# Keep the once-only terminal-removal guard consistent with what THIS scrub
+	# reconstructed. At the DONE gap state the removal is already baked in
+	# (footprint cleared above), so mark it done; anywhere earlier it hasn't
+	# happened yet, so clear it — otherwise a stale `true` from a prior full
+	# play would make a subsequent play-forward skip the removal and leave the
+	# terminal primer standing.
+	_terminal_removal_started = is_done_phase and lagging_gap_on
+	# Same reasoning for the polymerase rest-slide guard: at DONE the slide has
+	# conceptually already happened (and both polymerases are alpha-0 here
+	# anyway); anywhere earlier it hasn't, so clear it or a play-forward from a
+	# mid-run scrub would skip the slide.
+	_polymerases_at_rest = is_done_phase
 	if total_consumed > 0:
 		if lagging_current_fragment != null:
 			lagging_polymerase_x = sim.nucleotide_original_x[lagging_current_fragment.slots[0]]
@@ -1952,20 +2071,18 @@ func _lagging_scrub_spawn_fragment(frag: Dictionary) -> void:
 
 func _on_helicase_phase_changed(new_phase: int) -> void:
 	if new_phase == connected_helicase_mgr.Phase.DONE and not sim.manual_override:
-		if sim.lagging_gap_enabled:
-			_lagging_discard_incomplete_at_end()  # reserved — telomerase tier
-		else:
-			_lagging_start_catchup()
+		# Both modes run the same catch-up now — Pol III finishes the strand.
+		# In gap mode the difference is deferred to catch-up completion, where
+		# the terminal primer is removed (leaving its footprint as the gap)
+		# instead of the strand simply ending. Synthesized DNA is never
+		# discarded — the old discard-the-open-fragment model is gone.
+		_lagging_start_catchup()
 
 func _lagging_start_catchup() -> void:
 	if lagging_polymerase_faded:
 		return
 	if lagging_total_consumed >= sim.num_nucleotide_slots:
-		if not _lagging_enzymes_settled():
-			_lagging_fade_pending = true
-			return
-		lagging_polymerase_faded = true
-		_lagging_fade_enzyme_scene()
+		_lagging_finish_or_remove_terminal()
 		return
 	if lagging_catchup_timer == null:
 		lagging_catchup_timer = Timer.new()
@@ -1981,11 +2098,7 @@ func _lagging_catchup_tick() -> void:
 	_lagging_fire_step(sim.lagging_catchup_step_duration)
 	if lagging_total_consumed >= sim.num_nucleotide_slots:
 		lagging_catchup_timer.stop()
-		if not _lagging_enzymes_settled():
-			_lagging_fade_pending = true
-			return
-		lagging_polymerase_faded = true
-		_lagging_fade_enzyme_scene()
+		_lagging_finish_or_remove_terminal()
 
 ## True once ligase and (if pol1_enabled) Pol I have both fully drained their
 ## queues and returned to idle — the gate the scene-wide fade waits on so it
@@ -2012,49 +2125,146 @@ func _lagging_try_deferred_fade() -> void:
 	lagging_polymerase_faded = true
 	_lagging_fade_enzyme_scene()
 
-func _lagging_discard_incomplete_at_end() -> void:
-	var settle_tween: Tween = null
+## Catch-up has reached the strand's end. In gap mode, remove the terminal
+## primer (leaving its footprint as the telomere gap) BEFORE the scene fades;
+## otherwise fall straight through to the normal settle-gated fade. Guarded to
+## fire the removal exactly once — the deferred-fade path can re-enter here.
+func _lagging_finish_or_remove_terminal() -> void:
+	# The lagging polymerase has finished its last fragment. Slide both
+	# polymerases to their shared rest spot NOW (not at fade time) — this is
+	# exactly when Pol I / ligase are still working the tail of their queues,
+	# and a stationary lagging polymerase would sit on top of them.
+	_polymerases_move_to_rest()
+	if complexity_mgr != null and complexity_mgr.is_enabled("lagging_gap") and not _terminal_removal_started:
+		_terminal_removal_started = true
+		_lagging_start_terminal_removal()
+		return
+	if not _lagging_enzymes_settled():
+		_lagging_fade_pending = true
+		return
+	lagging_polymerase_faded = true
+	_lagging_fade_enzyme_scene()
 
-	if lagging_current_fragment != null:
-		var discarded_slots = lagging_current_fragment.slots.duplicate()
-		print("[FADE] t=%d discard sequence starting — fade_duration=%.3f slots=%s" % [Time.get_ticks_msec(), sim.fade_duration, str(discarded_slots)])
-		settle_tween = sim.create_tween()
-		for slot_index in discarded_slots:
-			if lagging_synthesized_bases[slot_index] != null:
-				settle_tween.parallel().tween_property(lagging_synthesized_bases[slot_index], "modulate:a", 0.0, sim.fade_duration)
-			if lagging_hydrogen_bonds[slot_index] != null:
-				settle_tween.parallel().tween_property(lagging_hydrogen_bonds[slot_index], "modulate:a", 0.0, sim.fade_duration)
-		settle_tween.chain().tween_callback(func():
-			print("[FADE] t=%d discard-fade finished, freeing bases" % Time.get_ticks_msec())
-			for slot_index in discarded_slots:
-				if lagging_synthesized_bases[slot_index] != null and is_instance_valid(lagging_synthesized_bases[slot_index]):
-					lagging_synthesized_bases[slot_index].queue_free()
-					lagging_synthesized_bases[slot_index] = null
-				if lagging_hydrogen_bonds[slot_index] != null and is_instance_valid(lagging_hydrogen_bonds[slot_index]):
-					lagging_hydrogen_bonds[slot_index].queue_free()
-					lagging_hydrogen_bonds[slot_index] = null
-		)
-		print("[LAGGING] incomplete trailing fragment fading out — slots=%s" % [str(discarded_slots)])
-		lagging_current_fragment = null
+## Slides both polymerases to a shared end-of-run rest spot: the lagging one
+## travels up to meet the leading one, and both nudge a couple slot-spacings
+## past the strand's end so they clear the DNA (and Pol I / ligase's catch-up
+## work). Live-only polish — at DONE both are alpha-0 in scrub, and scrub
+## recomputes their positions anyway, so this never needs reconstructing and
+## can't desync scrub. Fires once per run.
+func _polymerases_move_to_rest() -> void:
+	if _polymerases_at_rest or leading_polymerase == null or lagging_polymerase == null:
+		return
+	_polymerases_at_rest = true
+	var nudge = tm.polymerase_rest_nudge_slots * sim.nucleotide_slot_spacing
+	var rest_x = leading_polymerase.position.x + nudge
+	var dur = tm.polymerase_rest_move_duration
+	var lt = sim.create_tween()
+	lt.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	lt.tween_property(leading_polymerase, "position:x", rest_x, dur)
+	# Reuses lagging_polymerase_tween so a scrub mid-slide kills it cleanly
+	# (scrub_rebuild already kills this tween and snaps to the scrub position).
+	if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
+		lagging_polymerase_tween.kill()
+	lagging_polymerase_tween = sim.create_tween()
+	lagging_polymerase_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	lagging_polymerase_tween.tween_property(lagging_polymerase, "position:x", rest_x, dur)
+	lagging_polymerase_x = rest_x  # keep the tracking var in sync so no later read snaps it back mid-slide
+	print("[LAGGING] polymerases sliding to rest x=%.1f (leading end + %d slots)" % [rest_x, int(tm.polymerase_rest_nudge_slots)])
+
+## The top `primer_length` slots of the strand — the terminal primer's
+## footprint, i.e. the telomere gap. This is the ONE primer that, once removed,
+## can never be refilled (no upstream 3'-OH beyond the chromosome end), so its
+## span is the shortening. Sized by primer length, deliberately NOT by the
+## helicase↔Pol III pacing lag.
+func _lagging_terminal_gap_span() -> int:
+	return _primase_primer_length()
+
+## Kicks off the terminal-primer removal at strand completion (gap mode).
+## The footprint is only ever removed if it's actually RNA primer — i.e.
+## primase placed it. If there's no terminal primer present (e.g. primase off),
+## there's nothing to remove and no gap forms; we fall through to the fade.
+## Whether the removal is shown by Pol I (Complex tier) or done as a quiet fade
+## (Pol I not on-screen) is the only tier-dependent branch — the end state is
+## identical either way.
+func _lagging_start_terminal_removal() -> void:
+	var span = _lagging_terminal_gap_span()
+	var terminal_frag = lagging_fragments[-1] if lagging_fragments.size() > 0 else null
+
+	# Collect terminal slots that are actually RNA primer right now. DNA slots
+	# are never touched — synthesized DNA does not dissolve. So if primase is
+	# off (terminal footprint is DNA or empty), rna_slots is empty and no gap
+	# forms — the gap is exactly, and only, a removed RNA primer.
+	var rna_slots: Array = []
+	for i in range(sim.num_nucleotide_slots - span, sim.num_nucleotide_slots):
+		if i >= 0 and lagging_synthesized_bases[i] != null and is_instance_valid(lagging_synthesized_bases[i]) and lagging_synthesized_bases[i].shape == "rounded_square":
+			rna_slots.append(i)
+
+	if rna_slots.is_empty():
+		print("[LAGGING] terminal removal — no RNA primer present, no gap (primase off?)")
+		_lagging_fade_pending = true
+		_lagging_try_deferred_fade()
+		return
+
+	rna_slots.sort()
+	rna_slots.reverse()  # high-to-low, Pol I's own sweep order
+
+	if _pol1_enabled():
+		print("[LAGGING] terminal primer removal via Pol I — slots=%s" % [str(rna_slots)])
+		_lagging_fade_pending = true
+		_pol1_enqueue_job(terminal_frag, true)
 	else:
-		print("[FADE] t=%d discard sequence skipped — no open fragment" % Time.get_ticks_msec())
+		print("[LAGGING] terminal primer removal via quiet fade — slots=%s" % [str(rna_slots)])
+		_lagging_quiet_terminal_fade(terminal_frag, rna_slots)
 
+## No-Pol-I tiers: fade the terminal RNA primer out with no enzyme on screen,
+## then record the gap and let the strand seal + scene fade proceed. Same end
+## state as the Pol I path.
+func _lagging_quiet_terminal_fade(terminal_frag, rna_slots: Array) -> void:
+	var t = sim.create_tween()
+	for i in rna_slots:
+		if lagging_synthesized_bases[i] != null and is_instance_valid(lagging_synthesized_bases[i]):
+			t.parallel().tween_property(lagging_synthesized_bases[i], "modulate:a", 0.0, sim.fade_duration)
+		if lagging_hydrogen_bonds[i] != null and is_instance_valid(lagging_hydrogen_bonds[i]):
+			t.parallel().tween_property(lagging_hydrogen_bonds[i], "modulate:a", 0.0, sim.fade_duration)
+	t.chain().tween_callback(func():
+		_lagging_finalize_terminal_gap(terminal_frag, rna_slots)
+	)
+
+## Frees the removed terminal primer nodes, records the gap, marks the terminal
+## fragment primer-removed (so ligase will seal its 5' nick to the previous
+## fragment — the nick that otherwise stayed open), and lets the deferred fade
+## fire. Shared by both the Pol I and quiet-fade paths.
+func _lagging_finalize_terminal_gap(terminal_frag, rna_slots: Array) -> void:
+	for i in rna_slots:
+		if lagging_synthesized_bases[i] != null and is_instance_valid(lagging_synthesized_bases[i]):
+			lagging_synthesized_bases[i].queue_free()
+		lagging_synthesized_bases[i] = null
+		if lagging_hydrogen_bonds[i] != null and is_instance_valid(lagging_hydrogen_bonds[i]):
+			lagging_hydrogen_bonds[i].queue_free()
+		lagging_hydrogen_bonds[i] = null
+
+	# The removed primer's own RNA backbone/bond-marks go too — otherwise they
+	# leak the same way the old discard path leaked (QCA would surface them).
+	if terminal_frag != null:
+		if terminal_frag.get("primer_backbone", null) != null and is_instance_valid(terminal_frag.primer_backbone):
+			terminal_frag.primer_backbone.queue_free()
+			terminal_frag.primer_backbone = null
+		for mark in terminal_frag.get("primer_bond_marks", []):
+			if mark != null and is_instance_valid(mark): mark.queue_free()
+		terminal_frag.primer_bond_marks = []
+		# Primer is gone → the fragment IS primer-clean now, so ligase can seal
+		# its 5' nick to the previous fragment on the normal path.
+		terminal_frag.primer_removed = true
+
+	var span = _lagging_terminal_gap_span()
+	var gap_start = sim.num_nucleotide_slots - span
 	var last_slot = sim.num_nucleotide_slots - 1
-	var gap_start = lagging_fragments.size() * sim.okazaki_fragment_size
-	if last_slot >= gap_start:
-		lagging_telomere_gap = { start = gap_start, end = last_slot, length = last_slot - gap_start + 1 }
-		print("[LAGGING] telomere gap recorded: slots %d-%d (length %d)" % [gap_start, last_slot, lagging_telomere_gap.length])
-	else:
-		lagging_telomere_gap = null
-		print("[LAGGING] no telomere gap — every completable fragment finished exactly at the strand's end")
+	lagging_telomere_gap = { start = gap_start, end = last_slot, length = last_slot - gap_start + 1 }
+	print("[LAGGING] telomere gap recorded: slots %d-%d (length %d)" % [gap_start, last_slot, lagging_telomere_gap.length])
 
-	if not lagging_polymerase_faded:
-		lagging_polymerase_faded = true
-		print("[FADE] t=%d scene fade gate reached — settle_tween=%s" % [Time.get_ticks_msec(), "chained" if settle_tween != null else "immediate"])
-		if settle_tween != null:
-			settle_tween.chain().tween_callback(func(): _lagging_fade_enzyme_scene())
-		else:
-			_lagging_fade_enzyme_scene()
+	_ligase_kick()  # seal the now-clean terminal fragment's 5' nick
+	_lagging_fade_pending = true
+	_lagging_try_deferred_fade()
 
 func _lagging_fade_enzyme_scene() -> void:
 	var fade_tween = sim.create_tween()
@@ -2079,7 +2289,15 @@ func _spawn_lagging_base(index: int, base_type: String, start_pos = null, color_
 	base.set_base_type(base_type)
 	base.set_radius(tm.base_radius)
 	var fill_color = color_override if color_override != null else sim._get_base_fill(base_type)
-	base.set_colors(fill_color, tm.base_label_color)
+	# RNA (rounded_square) gets its own font color — bug fix: this used to
+	# pass tm.base_label_color unconditionally, so rna_base_label_color had
+	# no effect on the three call sites that route through here (live
+	# placement in _primase_place_primer_base(), and both scrub-rebuild
+	# paths in _lagging_scrub_rebuild()/_lagging_scrub_spawn_fragment()).
+	# _convert_primer_base_to_dna() is unaffected — it calls set_colors()
+	# directly with base_label_color, correctly, since it's converting TO DNA.
+	var label_color = tm.rna_base_label_color if shape_override == "rounded_square" else tm.base_label_color
+	base.set_colors(fill_color, label_color)
 	base.set_font(tm.base_label_font_size, tm.base_label_font)
 	if shape_override != null:
 		base.set_shape(shape_override)
@@ -2106,6 +2324,69 @@ func _spawn_lagging_hydrogen_bonds(index: int) -> Node2D:
 		container.add_child(line)
 	sim.hydrogen_bonds_container.add_child(container)
 	return container
+
+## True if `index` falls inside the recorded telomere gap — i.e. it's an
+## intentionally-empty slot (removed terminal primer), not a base that simply
+## hasn't landed yet. The backbone render uses this to distinguish "gap, stop
+## the line here" from "mid-flight, wait before merging".
+func _is_telomere_gap_slot(index: int) -> bool:
+	return lagging_telomere_gap != null and index >= lagging_telomere_gap.start and index <= lagging_telomere_gap.end
+
+## The fragment's own 3' end for MARKER purposes — frag.slots[-1] is the
+## fragment's highest slot index, which for the terminal fragment after
+## telomerase removal is inside the now-empty gap (that slot was fired by
+## Pol III during catch-up, so it's still in .slots, but its base no longer
+## exists). The growing strand's actual 3'-most synthesized nucleotide is the
+## last DNA base BEFORE the gap — walks backward from frag.slots[-1] to find
+## it. Ordinary fragments (not the terminal one, or gap mode off) hit the
+## first slot checked and return immediately, so this is a no-op cost-wise
+## for the overwhelming majority of fragments.
+func _lagging_fragment_last_rendered_slot(frag: Dictionary) -> int:
+	for i in range(frag.slots.size() - 1, -1, -1):
+		var slot_index = frag.slots[i]
+		if lagging_synthesized_bases[slot_index] != null:
+			return slot_index
+	return frag.slots[-1]  # defensive fallback — shouldn't be reachable for a fragment with want_3p
+
+## True if this fragment still carries an un-removed RNA primer. Only ever the
+## case for the LAST fragment in a non-gap Pol I run — every other fragment's
+## primer is removed (by Pol I) before it merges, and gap mode removes the
+## terminal one outright. Used by the merge path to keep that primer as its own
+## RNA segment instead of freeing it / drawing DNA straight through it.
+func _lagging_fragment_retains_primer(frag: Dictionary) -> bool:
+	for slot_index in frag.slots:
+		if _is_still_primer(slot_index):
+			return true
+	return false
+
+## Renders a merged fragment's retained RNA primer as its own segment (created
+## if needed) and returns its points, so the caller can bridge its merged DNA
+## line to the primer's first point (a PackedVector2Array is copy-on-write, so
+## the bridge append has to happen on the caller's own local array, not here).
+func _lagging_render_retained_primer(frag: Dictionary, wobble_t: float, dna_ribbons_gap: float, new_bottom_template_y: float, nucleotide_original_x: Array) -> PackedVector2Array:
+	if frag.get("primer_backbone", null) == null:
+		var pline = Line2D.new()
+		pline.default_color = tm.rna_backbone_color
+		pline.width = tm.rna_backbone_line_width
+		pline.z_index = -2
+		pline.joint_mode = Line2D.LINE_JOINT_ROUND
+		pline.begin_cap_mode = Line2D.LINE_CAP_ROUND
+		pline.end_cap_mode = Line2D.LINE_CAP_ROUND
+		sim.add_child(pline)
+		frag.primer_backbone = pline
+	var tile_end = _primase_tile_end(frag.slots[-1])
+	var span = _primase_primer_length()
+	var primer_points = PackedVector2Array()
+	for slot_index in range(max(0, tile_end - span), tile_end):
+		if _is_still_primer(slot_index):
+			var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
+			var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
+			primer_points.append(Vector2(nucleotide_original_x[slot_index], lagging_y + tm.backbone_offset_distance))
+	frag.primer_backbone.points = primer_points
+	frag.primer_backbone.width = tm.rna_backbone_line_width
+	frag.primer_backbone.z_index = -2
+	frag.primer_bond_marks = _update_bond_marks_generic(frag.get("primer_bond_marks", []), primer_points, sim._create_bond_mark_sprite_rna_reversed)
+	return primer_points
 
 func _lagging_render(ctx: Dictionary) -> void:
 	var wobble_t: float = ctx.wobble_t
@@ -2179,7 +2460,7 @@ func _lagging_render(ctx: Dictionary) -> void:
 			# the guard costs nothing and keeps the same safety margin.
 			var frag_ready = true
 			for slot_index in frag.slots:
-				if lagging_synthesized_bases[slot_index] == null:
+				if lagging_synthesized_bases[slot_index] == null and not _is_telomere_gap_slot(slot_index):
 					frag_ready = false
 					break
 			if not frag_ready:
@@ -2190,10 +2471,15 @@ func _lagging_render(ctx: Dictionary) -> void:
 		for idx in range(lagging_fragments.size()):
 			var frag = lagging_fragments[idx]
 			if idx <= last_sealed_idx:
+				# Only ever true for the last fragment in a non-gap Pol I run:
+				# its own primer is never removed, so keep it as its own RNA
+				# segment rather than freeing it or drawing the DNA line
+				# straight through the RNA.
+				var retains_primer = _lagging_fragment_retains_primer(frag)
 				if frag.backbone != null and is_instance_valid(frag.backbone):
 					frag.backbone.queue_free()
 					frag.backbone = null
-				if frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone):
+				if not retains_primer and frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone):
 					frag.primer_backbone.queue_free()
 					frag.primer_backbone = null
 				# Pre-existing gap, fixed alongside the primer_bond_marks
@@ -2205,13 +2491,22 @@ func _lagging_render(ctx: Dictionary) -> void:
 				for mark in frag.bond_marks:
 					if mark != null and is_instance_valid(mark): mark.queue_free()
 				frag.bond_marks = []
-				for mark in frag.get("primer_bond_marks", []):
-					if mark != null and is_instance_valid(mark): mark.queue_free()
-				frag.primer_bond_marks = []
+				if not retains_primer:
+					for mark in frag.get("primer_bond_marks", []):
+						if mark != null and is_instance_valid(mark): mark.queue_free()
+					frag.primer_bond_marks = []
 				for slot_index in frag.slots:
+					if lagging_synthesized_bases[slot_index] == null or _is_still_primer(slot_index):
+						continue  # telomere gap slot (null) or retained RNA primer — merged DNA line stops here
 					var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
 					var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
 					sealed_points.append(Vector2(nucleotide_original_x[slot_index], lagging_y + tm.backbone_offset_distance))
+				# Retained primer renders as its own RNA segment, bridged to the
+				# merged DNA line so the join has no visible gap.
+				if retains_primer:
+					var pp = _lagging_render_retained_primer(frag, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
+					if sealed_points.size() > 0 and pp.size() > 0:
+						sealed_points.append(pp[0])
 				# Merged fragments never keep their own internal 5'/3' —
 				# same reasoning DESIGN.md already gives for the no-ligase
 				# continuous mode: an internal boundary inside a joined
@@ -2249,28 +2544,36 @@ func _lagging_render(ctx: Dictionary) -> void:
 	for frag in lagging_fragments:
 		var frag_ready = true
 		for slot_index in frag.slots:
-			if lagging_synthesized_bases[slot_index] == null:
+			if lagging_synthesized_bases[slot_index] == null and not _is_telomere_gap_slot(slot_index):
 				frag_ready = false
 				break
 		if not frag_ready:
 			_lagging_render_fragment_backbone(frag, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
 			continue
+		var retains_primer = _lagging_fragment_retains_primer(frag)
 		if frag.backbone != null and is_instance_valid(frag.backbone):
 			frag.backbone.queue_free()
 			frag.backbone = null
-		if frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone):
+		if not retains_primer and frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone):
 			frag.primer_backbone.queue_free()
 			frag.primer_backbone = null
 		for mark in frag.bond_marks:
 			if mark != null and is_instance_valid(mark): mark.queue_free()
 		frag.bond_marks = []
-		for mark in frag.get("primer_bond_marks", []):
-			if mark != null and is_instance_valid(mark): mark.queue_free()
-		frag.primer_bond_marks = []
+		if not retains_primer:
+			for mark in frag.get("primer_bond_marks", []):
+				if mark != null and is_instance_valid(mark): mark.queue_free()
+			frag.primer_bond_marks = []
 		for slot_index in frag.slots:
+			if lagging_synthesized_bases[slot_index] == null or _is_still_primer(slot_index):
+				continue  # telomere gap slot (null) or retained RNA primer — continuous DNA line stops here
 			var wobble_y = sim.get_wobble_y(slot_index, wobble_t)
 			var lagging_y = new_bottom_template_y + dna_ribbons_gap + wobble_y
 			continuous_points.append(Vector2(nucleotide_original_x[slot_index], lagging_y + tm.backbone_offset_distance))
+		if retains_primer:
+			var pp = _lagging_render_retained_primer(frag, wobble_t, dna_ribbons_gap, new_bottom_template_y, nucleotide_original_x)
+			if continuous_points.size() > 0 and pp.size() > 0:
+				continuous_points.append(pp[0])
 
 	lagging_backbone_line.points = continuous_points
 	lagging_backbone_line.width = tm.backbone_line_width
@@ -2281,11 +2584,13 @@ func _lagging_render(ctx: Dictionary) -> void:
 
 	# Only the very first fragment's 5' and the current last-complete
 	# fragment's 3' survive — an internal boundary stops being meaningful
-	# once the backbone actually connects through it. Marker positions use
-	# frag.slots[0]/frag.slots[-1] (lowest/highest index), and the highest
-	# index of any fragment is always its FIRST-fired, long-settled slot, so
-	# these are unaffected by the same-frame race above and need no readiness
-	# check of their own.
+	# once the backbone actually connects through it. The highest index of
+	# any fragment is always its FIRST-fired, long-settled slot, so there's
+	# no same-frame race to worry about here — BUT it can still be a
+	# telomere-gap slot with no base at all (terminal fragment after
+	# telomerase removal), which is why _lagging_set_fragment_markers() uses
+	# _lagging_fragment_last_rendered_slot() rather than frag.slots[-1]
+	# directly for the 3' position.
 	for idx in range(lagging_fragments.size()):
 		var frag = lagging_fragments[idx]
 		var want_5p = (idx == 0)
@@ -2296,7 +2601,7 @@ func _lagging_set_fragment_markers(frag: Dictionary, want_5p: bool, want_3p: boo
 	if frag.slots.size() == 0:
 		return
 	var first_slot = frag.slots[0]
-	var last_slot = frag.slots[-1]
+	var last_slot = _lagging_fragment_last_rendered_slot(frag)
 	var first_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(first_slot, wobble_t) + tm.backbone_offset_distance
 	var last_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(last_slot, wobble_t) + tm.backbone_offset_distance
 
@@ -2495,7 +2800,7 @@ func _lagging_render_fragment_markers(frag: Dictionary, wobble_t: float, dna_rib
 		return
 
 	var first_slot = frag.slots[0]
-	var last_slot = frag.slots[-1]
+	var last_slot = _lagging_fragment_last_rendered_slot(frag)
 	var first_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(first_slot, wobble_t) + tm.backbone_offset_distance
 	var last_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(last_slot, wobble_t) + tm.backbone_offset_distance
 

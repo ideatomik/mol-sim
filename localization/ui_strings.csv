@@ -7,9 +7,14 @@ UI_CANCEL_BUTTON,CANCEL,CANCELAR,CANCELAR
 UI_LOAD_BUTTON,LOAD,CARREGAR,CARGAR
 UI_ENZYME_DROPDOWN_PLACEHOLDER,Enzymes,Enzimas,Enzimas
 UI_COMPLEXITY_SETUP_TITLE,COMPLEXITY SETTINGS,CONFIGURAÇÕES DE COMPLEXIDADE,CONFIGURACIÓN DE COMPLEJIDAD
+UI_TOPOLOGY_MODE_LABEL,Topology (chromosome shape),Topologia (formato do cromossomo),Topología (forma del cromosoma)
+UI_TOPOLOGY_CIRCULAR,Circular (bacterial),Circular (bacteriano),Circular (bacteriano)
+UI_TOPOLOGY_LINEAR,Linear (eukaryotic),Linear (eucarioto),Lineal (eucariota)
 UI_PRIMASE_TOGGLE_LABEL,Primase (RNA primers),Primase (primers de RNA),Primasa (cebadores de ARN)
 UI_LIGASE_TOGGLE_LABEL,Ligase (seal fragments),Ligase (selar fragmentos),Ligasa (sellar fragmentos)
 UI_POL1_TOGGLE_LABEL,Pol I (primer removal),Pol I (remoção do primer),Pol I (eliminación del cebador)
+UI_TELOMERASE_TOGGLE_LABEL,Telomerase (chromosome ends),Telomerase (extremidades do cromossomo),Telomerasa (extremos del cromosoma)
+UI_TELOMERASE_REQUIRES_LINEAR_TOOLTIP,Requires Linear topology,Requer topologia Linear,Requiere topología Lineal
 UI_CONTINUE_BUTTON,CONTINUE,CONTINUAR,CONTINUAR
 UI_QUIT_BUTTON,QUIT,SAIR,SALIR
 UI_POL1_COMING_SOON,Coming soon — requires Primase and Ligase,Em breve — requer Primase e Ligase,Próximamente — requiere Primasa y Ligasa

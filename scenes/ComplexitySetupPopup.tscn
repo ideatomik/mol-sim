@@ -73,6 +73,25 @@ vertical_alignment = 1
 layout_mode = 2
 theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
 
+[node name="TopologyRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936139]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/TopologyRow" unique_id=545144891]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_font_sizes/font_size = 15
+text = "UI_TOPOLOGY_MODE_LABEL"
+
+[node name="TopologyOption" type="OptionButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/TopologyRow" unique_id=1473359049]
+layout_mode = 2
+
+[node name="TopologySeparator" type="HSeparator" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936140]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
+
 [node name="PrimaseRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=410113442]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -116,6 +135,21 @@ theme_override_font_sizes/font_size = 15
 text = "UI_POL1_TOGGLE_LABEL"
 
 [node name="Pol1Toggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/Pol1Row" unique_id=371483688]
+layout_mode = 2
+
+[node name="TelomeraseRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1240096146]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/TelomeraseRow" unique_id=1031963648]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_font_sizes/font_size = 15
+text = "UI_TELOMERASE_TOGGLE_LABEL"
+
+[node name="TelomeraseToggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/TelomeraseRow" unique_id=371483689]
 layout_mode = 2
 
 [node name="ActionsRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=134919167]

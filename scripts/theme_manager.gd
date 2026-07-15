@@ -97,6 +97,16 @@ extends Node
 @export var clamp_leading_front_color: Color = Color(0.45, 0.60, 1.0, 1.0)
 @export var clamp_lagging_back_color: Color = Color(0.80, 0.32, 0.32, 1.0)
 @export var clamp_lagging_front_color: Color = Color(0.95, 0.52, 0.52, 1.0)
+## End-of-run resting position. Once the lagging polymerase finishes its last
+## fragment it would otherwise sit frozen on top of Pol I / ligase as they
+## finish their catch-up queue — so both polymerases slide to a shared rest
+## spot: the lagging one travels up to meet the leading one, and both nudge
+## `rest_nudge_slots` slot-spacings past the strand's end so they clear the DNA
+## rather than resting over it. Duration is the slide; nudge is how far past
+## the end. Tunable independently — this is pure end-state framing, unrelated
+## to any mid-run pacing number.
+@export var polymerase_rest_nudge_slots: float = 2.0
+@export var polymerase_rest_move_duration: float = 0.5
 
 @export_group("Ligase")
 ## Single procedural blob (ligase.gd) — Complex-tier trailing enzyme, see
@@ -123,6 +133,13 @@ extends Node
 ## too fast to actually see the nick before it closed).
 @export var ligase_hold_duration: float = 0.5
 @export var ligase_seal_duration: float = 0.3
+## Vertical distance ligase parks BELOW the strand at its offstage rest spot,
+## so its first seal rises up into place rather than dropping in from the
+## node's local origin. Defaults to Pol I's own offstage drop (40.0) so the two
+## enzymes enter/leave at a matching depth, but split out as its own field so
+## ligase's spawn depth can be tuned independently later without disturbing
+## Pol I — per this project's "never let two numbers coincidentally agree" rule.
+@export var ligase_offstage_drop: float = 40.0
 
 @export_group("Primase")
 ## Now does REAL per-slot placement (RNA primer persistence pass) — no longer
@@ -202,6 +219,14 @@ extends Node
 @export var rna_bond_mark_width: float = 22.0
 @export var rna_bond_mark_line_width: float = 3.0
 @export var rna_backbone_color: Color = Color(0.6, 0.25, 0.75, 1.0)  # matches primase_blip_color by default — tune independently
+@export var rna_bond_mark_color: Color = Color(0.0, 0.0, 0.0, 1.0)
+## RNA nitrogen bases' own label/font color — independent from
+## base_label_color (DNA's), same reason the RNA fill colors above got their
+## own a/u/c/g set instead of reusing base_color_a/t/c/g. Applied by whoever
+## spawns/colors an RNA-shaped nitrogen_base.gd instance (rounded_square
+## shape) and by PolymeraseHalo when its is_rna flag is set.
+@export var rna_base_label_color: Color = Color(1.0, 1.0, 1.0, 1.0)
+
 
 @export_group("Markers")
 @export var marker_color: Color = Color(0.0, 0.0, 0.0, 0.0)

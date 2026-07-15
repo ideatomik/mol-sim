@@ -1358,7 +1358,7 @@ func _create_bond_mark_sprite_rna_reversed() -> Node2D:
 		Vector2(w / 2.0, 0),
 		Vector2(0, h),
 	])
-	chevron.default_color = %ThemeManager.bond_mark_color
+	chevron.default_color = %ThemeManager.rna_bond_mark_color
 	chevron.width = %ThemeManager.rna_bond_mark_line_width
 	chevron.joint_mode = Line2D.LINE_JOINT_ROUND
 	chevron.begin_cap_mode = Line2D.LINE_CAP_ROUND

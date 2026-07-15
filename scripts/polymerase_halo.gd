@@ -1,7 +1,15 @@
 extends Node2D
 class_name PolymeraseHalo
 # ==========================================
-# polymerase_halo.gd  —  idle nucleotide pool orbiting one polymerase (v71)
+# polymerase_halo.gd  —  idle nucleotide pool orbiting one polymerase (v72)
+#
+# v72: added `is_rna` — drives ambient particle SHAPE (rounded-square, via a
+# second baked soft-mask texture) and label FONT COLOR
+# (rna_base_label_color). Closes the gap OkazakiMaturationDesign.md flagged
+# as a deliberate scope boundary: primase's floating halo particles used to
+# read DNA-shaped/colored until the instant of capture. base_letters/
+# color_overrides already handled fill color; is_rna is the remaining piece,
+# same "set before setup()" contract.
 #
 # The FUNCTIONAL counterpart to nucleotide_field.gd's decorative environmental
 # field (see PolymeraseDesign.md's "two separate particle systems" split):
@@ -51,8 +59,18 @@ const Z_IDLE := 3   # in front of backbone(-1)/bonds(0)/clamp-back(-3,-2), behin
 ## ambient cloud read as RNA-tinted rather than only the captured/placed
 ## base. Set BEFORE calling setup(), same reason as base_letters above.
 var color_overrides: Dictionary = {}
+## Drives this halo's particle SHAPE (rounded-square vs. DNA's circle,
+## nitrogen_base.gd's own accessibility convention) and label FONT COLOR
+## (ThemeManager's rna_base_label_color vs. base_label_color) for every
+## particle in the pool. Same "set BEFORE calling setup()" contract as
+## base_letters/color_overrides above — _build_particles() reads it during
+## initial fill. Closes the gap OkazakiMaturationDesign.md flagged as a
+## deliberate scope boundary: "the ambient floating particles in primase's
+## halo read DNA-colored [and DNA-shaped] until the moment of capture."
+@export var is_rna: bool = false
 
-var _tex: ImageTexture = null
+var _tex_circle: ImageTexture = null
+var _tex_square: ImageTexture = null
 var _pos: Array = []
 var _vel: Array = []
 var _nodes: Array = []
@@ -175,20 +193,43 @@ func _assign_types(count: int) -> Array:
 	result.shuffle()
 	return result
 
+## Builds BOTH soft-mask textures (circle for DNA, rounded-square for RNA)
+## every time softness changes. Needed because the halo's soft look comes
+## from this baked blur texture, not the raw draw shape — a shape flag alone
+## wouldn't show under default blur settings, since every particle would
+## still render as the same soft circular blob regardless of `shape`.
 func _build_texture(softness: float) -> void:
 	const RES := 32
-	var img := Image.create(RES, RES, false, Image.FORMAT_RGBA8)
-	var c := Vector2(RES, RES) * 0.5
+	_tex_circle = _build_mask_texture(RES, softness, false)
+	_tex_square = _build_mask_texture(RES, softness, true)
+	_last_softness = softness
+
+func _build_mask_texture(res: int, softness: float, square: bool) -> ImageTexture:
+	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	var c := Vector2(res, res) * 0.5
 	var core := clamp(softness, 0.0, 1.0)
-	for y in range(RES):
-		for x in range(RES):
-			var d := Vector2(x + 0.5, y + 0.5).distance_to(c) / (RES * 0.5)
+	var half := res * 0.5
+	for y in range(res):
+		for x in range(res):
+			var p := Vector2(x + 0.5, y + 0.5)
+			var d: float
+			if square:
+				# Chebyshev-style distance so the falloff hugs a square
+				# silhouette instead of a circle — same softness semantics
+				# (core = fully-opaque fraction, then smoothstep falloff to
+				# the edge), just measured against the square's own boundary.
+				# A soft (not literal-SDF) rounded corner via max() — cheap,
+				# matches this halo's existing "good enough at this
+				# resolution" approach for the circular mask.
+				var dv := (p - c).abs() / half
+				d = max(dv.x, dv.y)
+			else:
+				d = p.distance_to(c) / half
 			var a := 1.0
 			if d > core:
 				a = 1.0 - smoothstep(core, 1.0, d)
 			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, clamp(a, 0.0, 1.0)))
-	_tex = ImageTexture.create_from_image(img)
-	_last_softness = softness
+	return ImageTexture.create_from_image(img)
 
 func _build_particles() -> void:
 	for n in _nodes:
@@ -203,7 +244,7 @@ func _refresh_cached_appearance() -> void:
 	_last_radius = _current_radius()
 	_cached_blur_on = _current_blur_enabled()
 	_cached_extent = _current_blur_extent()
-	_cached_label_color = _tm.base_label_color if _tm != null else Color.BLACK
+	_cached_label_color = (_tm.rna_base_label_color if is_rna else _tm.base_label_color) if _tm != null else Color.BLACK
 	_cached_font = (_tm.base_label_font if (_tm != null and _tm.base_label_font != null) else ThemeDB.fallback_font)
 	_cached_font_size = _tm.base_label_font_size if _tm != null else 14
 
@@ -213,7 +254,9 @@ func _refresh_cached_appearance() -> void:
 ## capture_particle() (single-particle replenish after a capture).
 func _spawn_into_pool(bt: String) -> Node:
 	var dot := _HaloDot.new()
-	dot.tex = _tex
+	dot.tex_circle = _tex_circle
+	dot.tex_square = _tex_square
+	dot.shape = "rounded_square" if is_rna else "circle"
 	dot.base_type = bt
 	dot.color = _fill_for(bt)
 	dot.font = _cached_font
@@ -243,7 +286,8 @@ func _process(delta: float) -> void:
 	if softness_changed:
 		_build_texture(softness_now)   # updates _last_softness internally
 		for n in _nodes:
-			n.tex = _tex
+			n.tex_circle = _tex_circle
+			n.tex_square = _tex_square
 
 	var r_now = _current_radius()
 	var blur_on = _current_blur_enabled()
@@ -280,24 +324,41 @@ func _process(delta: float) -> void:
 
 func set_particle_count(v: int) -> void:
 	particle_count = max(0, v)
-	if is_inside_tree() and _tex != null:
+	if is_inside_tree() and _tex_circle != null:
 		_build_particles()
 
 # --- inner draw node: soft-textured or hard circle + centered label ---
 class _HaloDot extends Node2D:
-	var tex: ImageTexture
+	var tex_circle: ImageTexture
+	var tex_square: ImageTexture
 	var color: Color = Color.WHITE
-	var radius_px: float = 10.0        # true particle radius — used for the hard-circle fallback
+	var radius_px: float = 10.0        # true particle radius — used for the hard-edge fallback (blur off)
 	var blur_enabled: bool = true
 	var blur_draw_size: float = 20.0   # radius_px * blur_extent * 2 — only used when blur_enabled
 	var base_type: String = ""
 	var font: Font = null
 	var font_size: int = 14
 	var label_color: Color = Color.BLACK
+	## "circle" (DNA, default) or "rounded_square" (RNA) — same accessibility
+	## contract as nitrogen_base.gd's shape property: RNA must be
+	## distinguishable by shape, never color alone. Set once at spawn time
+	## from the owning halo's is_rna flag; doesn't change over a particle's
+	## lifetime.
+	var shape: String = "circle"
+	const ROUNDED_SQUARE_CORNER_RATIO: float = 0.35
+	const ROUNDED_SQUARE_CORNER_SEGMENTS: int = 4
 	func _draw() -> void:
-		if blur_enabled and tex != null:
+		var t = tex_square if shape == "rounded_square" else tex_circle
+		if blur_enabled and t != null:
 			var r = blur_draw_size * 0.5
-			draw_texture_rect(tex, Rect2(-r, -r, blur_draw_size, blur_draw_size), false, color)
+			draw_texture_rect(t, Rect2(-r, -r, blur_draw_size, blur_draw_size), false, color)
+		elif shape == "rounded_square":
+			var half = radius_px
+			var square = PackedVector2Array([
+				Vector2(-half, -half), Vector2(half, -half),
+				Vector2(half, half), Vector2(-half, half),
+			])
+			draw_polygon(_round_corners(square, ROUNDED_SQUARE_CORNER_RATIO, ROUNDED_SQUARE_CORNER_SEGMENTS), PackedColorArray([color]))
 		else:
 			draw_circle(Vector2.ZERO, radius_px, color, true, -1.0, true)
 		if font != null and base_type != "":
@@ -307,3 +368,32 @@ class _HaloDot extends Node2D:
 			var baseline_y = (ascent - descent) * 0.5
 			draw_string(font, Vector2(-ssize.x / 2.0, baseline_y), base_type,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, label_color)
+
+	## NOTE: duplicated from nitrogen_base.gd (itself duplicated from
+	## helicase_ring.gd/polymerase_clamp.gd/ligase.gd/primase_blip.gd) — same
+	## deferred shared-utility extraction all of those already flag.
+	func _round_corners(pts: PackedVector2Array, radius_ratio: float, segments: int) -> PackedVector2Array:
+		var n = pts.size()
+		if n < 3 or radius_ratio <= 0.0:
+			return pts
+		var out = PackedVector2Array()
+		for i in range(n):
+			var prev = pts[(i - 1 + n) % n]
+			var cur = pts[i]
+			var next = pts[(i + 1) % n]
+			var to_prev = prev - cur
+			var to_next = next - cur
+			var len_prev = to_prev.length()
+			var len_next = to_next.length()
+			if len_prev < 0.0001 or len_next < 0.0001:
+				out.append(cur)
+				continue
+			var r = radius_ratio * min(len_prev, len_next) * 0.5
+			var p1 = cur + to_prev.normalized() * r
+			var p2 = cur + to_next.normalized() * r
+			for s in range(segments + 1):
+				var t2 = float(s) / float(segments)
+				var a = p1.lerp(cur, t2)
+				var b = cur.lerp(p2, t2)
+				out.append(a.lerp(b, t2))
+		return out
