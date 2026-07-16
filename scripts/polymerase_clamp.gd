@@ -54,11 +54,21 @@ class_name PolymeraseClamp
 # are read live each frame, so Inspector tuning works while running. Colours are
 # per-strand (leading = mirror; lagging = non-mirror). No pump clock in here —
 # set_pump(t) alone determines the pose; scrub rests at t = 0 (DOWN).
+#
+# TOPOLOGY-LABEL ADDENDUM: _is_leading (was _mirror) is now read for two
+# purposes, not one — the leading/lagging COLOR split it always drove, and
+# now which polymerase this IS in LINEAR topology (Pol epsilon vs Pol delta;
+# see EnzymeLabelsDesign.md's Topology-conditional polymerase labels
+# addendum). Renamed rather than adding a second bool: two flags that must
+# always agree is the same trap in a worse form, since then they CAN
+# disagree. Zero behavior change — both call sites already pass the value
+# this needed (leading_clamp.setup(sim, true) / lagging_clamp.setup(sim,
+# false)); only the name changed to match what it now means.
 # ==========================================
 
 const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn")
 
-var _mirror: bool = false
+var _is_leading: bool = false
 var _sim: Node = null
 var _tm: Node = null
 var _complexity_mgr: Node = null
@@ -76,11 +86,17 @@ var _anchor_local_y: float = 0.0
 # half-extents are cached from _apply()'s own already-computed geometry
 # each frame, rather than recomputing the whole pipeline in the hit-test.
 signal scrub_drag_started()
-signal scrub_drag_delta(cumulative_px: float)  # screen-space, since drag start
+## Vector2, not float: this node reports raw screen movement on BOTH axes and
+## deliberately does not decide which one is meaningful. Which axis runs along
+## the track depends on ZoomManager.vertical_mode — a simulation-level fact,
+## and per the contract above, resolving those is the owning script's job. The
+## owner picks the component at the same site where it already converts px to
+## a slot index. See VerticalModeDesign.md Part 4.
+signal scrub_drag_delta(cumulative_px: Vector2)  # screen-space, since drag start
 signal scrub_drag_ended()
 
 var _dragging: bool = false
-var _drag_start_screen_x: float = 0.0
+var _drag_start_screen: Vector2 = Vector2.ZERO
 var _click_half_width: float = 0.0
 var _click_half_height: float = 0.0
 
@@ -89,22 +105,58 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.pressed:
 			if not _dragging and _point_in_click_region(get_global_mouse_position()):
 				_dragging = true
-				_drag_start_screen_x = event.position.x
+				_drag_start_screen = event.position
 				scrub_drag_started.emit()
 				get_viewport().set_input_as_handled()
 		elif _dragging:
 			_dragging = false
 			scrub_drag_ended.emit()
 	elif event is InputEventMouseMotion and _dragging:
-		scrub_drag_delta.emit(event.position.x - _drag_start_screen_x)
+		scrub_drag_delta.emit(event.position - _drag_start_screen)
+
+## Asked of ZoomManager through _sim — the same reach this file already makes
+## for %ThemeManager and %ComplexityManager in setup(). 0.0 horizontally.
+## Topology-conditional polymerase name. See EnzymeLabelsDesign.md's
+## "Topology-conditional polymerase labels" addendum for the full matrix and
+## reasoning — summary: each topology ignores exactly one of its two inputs.
+## CIRCULAR ignores strand (E. coli: same enzyme, both strands) and honors
+## pol1_enabled (disambiguates a generic name once Pol I shares the screen).
+## LINEAR ignores pol1_enabled (Pol epsilon/delta are already unambiguous) and
+## honors strand (genuinely different enzymes: Pol epsilon leading, Pol delta
+## lagging).
+##
+## Confirmed against complexity_manager.gd: the enum is `Topology`
+## (CIRCULAR/LINEAR), not the guessed `TopologyMode`, declared with no
+## class_name. Accessed dynamically through the Node-typed _complexity_mgr
+## reference below — same mechanism that already lets is_enabled() work on
+## this same untyped reference elsewhere in this file, so no static type
+## needed on this side.
+func _polymerase_label_key() -> String:
+	var is_linear: bool = false
+	if _complexity_mgr != null:
+		is_linear = _complexity_mgr.topology_mode == _complexity_mgr.Topology.LINEAR
+	if is_linear:
+		return "ENZYME_POL_EPSILON" if _is_leading else "ENZYME_POL_DELTA"
+	# CIRCULAR (or complexity manager missing): existing tier-conditional
+	# behavior, unchanged. pol1_enabled lives on ComplexityManager itself,
+	# not on sim (unlike ligase_enabled, which predates ComplexityManager) —
+	# see complexity_manager.gd's migration note.
+	var complex_tier: bool = _complexity_mgr.is_enabled("pol1") if _complexity_mgr != null else false
+	return "ENZYME_POL3" if complex_tier else "ENZYME_POLYMERASE"
+
+func _zoom_label_rotation() -> float:
+	if _sim == null:
+		return 0.0
+	var zm = _sim.get_node_or_null("%ZoomManager")
+	return zm.get_label_counter_rotation() if zm != null else 0.0
 
 func _point_in_click_region(global_point: Vector2) -> bool:
 	var local_point = to_local(global_point)
 	return abs(local_point.x) <= _click_half_width and abs(local_point.y) <= _click_half_height
 
-func setup(sim: Node, mirror: bool) -> void:
+func setup(sim: Node, is_leading: bool) -> void:
 	_sim = sim
-	_mirror = mirror
+	_is_leading = is_leading
 	_tm = sim.get_node("%ThemeManager")
 	_complexity_mgr = sim.get_node_or_null("%ComplexityManager")
 	_build()
@@ -123,7 +175,7 @@ func _build() -> void:
 	_label = ENZYME_LABEL_SCENE.instantiate()
 	_label.z_as_relative = false
 	add_child(_label)
-	_label.set_mirror(_mirror)
+	_label.set_mirror(_is_leading)   # leading -> therefore mirrored
 	# NOTE: set_key() no longer called here — the key is tier-conditional
 	# now (see _apply()), so it has to be read live rather than fixed once
 	# at build time.
@@ -154,8 +206,8 @@ func _apply() -> void:
 	var corner_segs: int = tm.clamp_corner_segments
 	var back_z: int = tm.clamp_back_z
 	var front_z: int = tm.clamp_front_z
-	var back_col: Color = tm.clamp_leading_back_color if _mirror else tm.clamp_lagging_back_color
-	var front_col: Color = tm.clamp_leading_front_color if _mirror else tm.clamp_lagging_front_color
+	var back_col: Color = tm.clamp_leading_back_color if _is_leading else tm.clamp_lagging_back_color
+	var front_col: Color = tm.clamp_leading_front_color if _is_leading else tm.clamp_lagging_front_color
 
 	# --- registration: origin -> duplex centre, mirror flips inside/outside ---
 	# span = full vertical extent of the duplex (strands + backbones) = the DOWN
@@ -163,8 +215,8 @@ func _apply() -> void:
 	var gap: float = _sim.dna_ribbons_gap
 	var span: float = gap + 2.0 * (float(_tm.backbone_offset_distance) + float(_tm.backbone_line_width) / 2.0)
 	var center_offset: float = gap / 2.0
-	position.y = -center_offset if _mirror else center_offset
-	scale = Vector2(1.0, -1.0) if _mirror else Vector2(1.0, 1.0)
+	position.y = -center_offset if _is_leading else center_offset
+	scale = Vector2(1.0, -1.0) if _is_leading else Vector2(1.0, 1.0)
 
 	var t: float = _pump_t
 
@@ -245,20 +297,17 @@ func _apply() -> void:
 		var label_enabled: bool = tm.enzyme_labels_enabled
 		_label.visible = label_enabled
 		if label_enabled:
-			# Tier-conditional key: plain "Polymerase" except at Complex tier
-			# (pol1_enabled), where Pol I and Pol III share the screen and the
-			# generic name would be ambiguous — see file header. pol1_enabled
-			# lives on ComplexityManager itself, not on sim (unlike
-			# ligase_enabled, which predates ComplexityManager) — see
-			# complexity_manager.gd's migration note.
-			var complex_tier: bool = _complexity_mgr.is_enabled("pol1") if _complexity_mgr != null else false
-			_label.set_key("ENZYME_POL3" if complex_tier else "ENZYME_POLYMERASE")
+			_label.set_key(_polymerase_label_key())
 			var label_margin_out: float = tm.polymerase_label_margin
 			var label_font_size: int = tm.label_font_size
 			var label_text_color: Color = tm.label_color
 			var label_panel_color: Color = tm.label_panel_color
 			var label_z: int = tm.label_z
 			_label.set_style(null, label_font_size, label_text_color, label_panel_color)
+			# Read live, like every other label param in this block. EnzymeLabel
+			# negates this internally for the mirrored (leading) clamp — see
+			# _apply_rotation() there; nothing here needs to know the sign.
+			_label.set_counter_rotation(_zoom_label_rotation())
 			_label.z_index = label_z
 			_label.set_anchor_pos(Vector2(0.0, half_down + label_margin_out))
 

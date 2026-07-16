@@ -62,6 +62,15 @@ func _build() -> void:
 ## t = 0 rest, 1 = fully popped (grown + pulse-colored). No clock of its
 ## own — the caller (replication_manager.gd) drives this via a tween on the
 ## same node whose position it's also driving, same pattern ligase.gd uses.
+## Asked of ZoomManager through _sim — the same reach setup() already makes for
+## %ThemeManager. 0.0 in horizontal mode. EnzymeLabel owns the mirror sign;
+## primase is unmirrored anyway (single instance, lagging strand only).
+func _zoom_label_rotation() -> float:
+	if _sim == null:
+		return 0.0
+	var zm = _sim.get_node_or_null("%ZoomManager")
+	return zm.get_label_counter_rotation() if zm != null else 0.0
+
 func set_pulse(t: float) -> void:
 	_pulse_t = clampf(t, 0.0, 1.0)
 	_apply()
@@ -83,5 +92,6 @@ func _apply() -> void:
 		_label.visible = label_enabled
 		if label_enabled:
 			_label.set_style(null, tm.label_font_size, tm.label_color, tm.label_panel_color)
+			_label.set_counter_rotation(_zoom_label_rotation())
 			_label.z_index = tm.label_z
 			_label.set_anchor_pos(Vector2(0.0, -(base_size * 0.5 + tm.primase_blip_label_margin)))

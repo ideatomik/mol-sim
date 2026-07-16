@@ -3,7 +3,7 @@ extends Camera2D
 # ==========================================
 # ZOOM MANAGER  (v72 — renamed from camera_controller.gd)
 # Per ZoomDesign.md. Level 1's original job (frame the whole strand to 90%
-# of viewport width, centered on center_y) is UNCHANGED — see
+# of the along-axis viewport extent, centered on center_y) is UNCHANGED — see
 # _compute_strand_fit(). This file adds levels 2-3 on top of it. Level 4 was
 # removed entirely (design decision: two zoom-in steps plus level 1 is
 # enough; no target needs a fourth level).
@@ -39,14 +39,35 @@ signal targets_changed()  # fires on register_target()/unregister_target() — l
                           # (PlayerUI's dropdown today; complexity-toggle-driven
                           # re-registration later) stay in sync without polling.
 
-var pan_offset_x: float = 0.0  # left/right arrow offset, added on top of whatever the
+# ---------- ORIENTATION (VerticalModeDesign.md) ----------
+## Rotates the CAMERA -90 degrees so the track — which is ALWAYS world +x, in
+## both modes — runs top->bottom on screen for 1080x1920 recording. Nothing in
+## the simulation's own coordinate space changes; this file is the only place
+## that knows which screen axis is which.
+##
+## Explicit toggle rather than aspect-derived: predictability while recording
+## beats auto-detection.
+##
+## Set this BEFORE loading a sequence. Toggling it at runtime rotates the
+## camera immediately, but glyph counter-rotation is PUSHED into bases at
+## spawn time (nitrogen_base.gd is ThemeManager-free by contract), so text
+## stays sideways until the next sequence reload rebuilds them.
+@export var vertical_mode: bool = false:
+	set(value):
+		vertical_mode = value
+		if is_inside_tree():
+			_apply_orientation()
+
+var pan_offset_x: float = 0.0  # arrow-key offset ALONG THE TRACK (world x in both
+                                # modes — only the key binding swaps, see
+                                # _pan_action_positive()). Added on top of whatever the
                                 # current frame computes — reset on any target/level/sequence change
 
 # Set by _compute_strand_fit() as a side effect each time it runs — true
-# when level 1 is currently in fit-to-height mode (long sequence). Auto-
-# release below is scoped to this specifically, per LongSequenceDesign.md
-# Part 3: levels 2/3 keep today's "sticky until deliberate change" pan
-# behavior unchanged.
+# when level 1 is currently in windowed (cross-axis-fit) mode (long
+# sequence). Auto-release below is scoped to this specifically, per
+# LongSequenceDesign.md Part 3: levels 2/3 keep today's "sticky until
+# deliberate change" pan behavior unchanged.
 var _is_windowed_mode: bool = false
 var _pan_idle_time: float = 0.0
 var _pan_release_tween: Tween = null
@@ -85,9 +106,69 @@ var tm: Node = null  # ThemeManager reference, cached in _ready() — all
 
 func _ready():
 	tm = get_node("%ThemeManager")
+	_apply_orientation()
 	# Defer so simulation._ready() has time to call initialize_simulation()
 	# and compute track_length before we try to frame the strand.
 	_frame_strand.call_deferred()
+
+## Camera2D.ignore_rotation defaults to TRUE in Godot 4 — without clearing it,
+## `rotation` is silently ignored and vertical mode does nothing at all, with
+## no error. Same class of silent-failure trap as the CSV localization
+## registration and LocaleManager's unique-name flag. Set unconditionally
+## rather than only in vertical mode, so there's no state where it's true.
+func _apply_orientation() -> void:
+	ignore_rotation = false
+	rotation_degrees = -90.0 if vertical_mode else 0.0
+
+## The viewport extent the track runs ALONG. Public because the frame
+## providers in simulation.gd / replication_manager.gd compute their own zoom
+## and must ASK rather than read get_viewport() themselves — this file stays
+## the single source of truth for the axis mapping.
+func get_along_extent() -> float:
+	var vp: Vector2 = get_viewport_rect().size
+	return vp.y if vertical_mode else vp.x
+
+## The viewport extent ACROSS the track (strand thickness, replisome height).
+## World y in both modes — perpendicular to the strand either way.
+func get_cross_extent() -> float:
+	var vp: Vector2 = get_viewport_rect().size
+	return vp.x if vertical_mode else vp.y
+
+## The local rotation a glyph must carry to render upright on screen. Content
+## at world rotation psi appears at psi - rotation, so cancelling to zero means
+## matching the camera's own rotation exactly.
+##
+## PUSHED to nodes rather than read by them: nitrogen_base.gd is
+## ThemeManager-free by contract and cannot look this up, and helicase_ring.gd
+## holds no external references at all. Both receive it like any other injected
+## visual value (set_colors/set_font/set_style).
+##
+## NOTE for EnzymeLabel under the leading clamp: that node carries scale.y = -1,
+## and reflection conjugates rotation (S * R(t) * S = R(-t)), so a mirrored
+## parent renders a local t as world -t. Mirrored labels must therefore pass
+## -get_label_counter_rotation(). Bases are unmirrored and pass it as-is.
+func get_label_counter_rotation() -> float:
+	return rotation
+
+## Arrow keys pan ALONG the track. pan_offset_x itself needs no change between
+## modes — it's applied as a world-x offset and world x is along-track in both
+## — so only which physical key means "forward" swaps. Pleasingly, this is also
+## exactly the pair _input() must consume to keep the Scrubber from seeing them:
+## an HSlider reacts to ui_left/ui_right, a VSlider to ui_up/ui_down.
+func _pan_action_negative() -> String:
+	return "ui_up" if vertical_mode else "ui_left"
+
+func _pan_action_positive() -> String:
+	return "ui_down" if vertical_mode else "ui_right"
+
+## Screen-space pixel offset -> world-space offset. The ONLY screen->world
+## conversion in this file; every other quantity here is world-native. In
+## horizontal mode `rotation` is 0.0, so .rotated() is identity and this is
+## bit-identical to the raw division it replaces.
+func _screen_to_world_offset(screen_delta: Vector2, zoom_value: float) -> Vector2:
+	if zoom_value <= 0.0:
+		return Vector2.ZERO
+	return (screen_delta / zoom_value).rotated(rotation)
 
 ## Node._input() fires BEFORE GUI input is distributed to focused Controls
 ## (PlayerUI's Scrubber HSlider included), so consuming ui_left/ui_right here
@@ -96,7 +177,7 @@ func _ready():
 ## _process() below (polling, not per-keypress), so this is purely "claim the
 ## keys before anything else can."
 func _input(event: InputEvent) -> void:
-	if event.is_action("ui_left") or event.is_action("ui_right"):
+	if event.is_action(_pan_action_negative()) or event.is_action(_pan_action_positive()):
 		get_viewport().set_input_as_handled()
 
 ## Background click-drag (pan) and scroll-wheel (zoom) — free camera mode,
@@ -137,7 +218,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		var delta_screen: Vector2 = event.position - _free_camera_drag_last_mouse
 		_free_camera_drag_last_mouse = event.position
 		if _free_camera_zoom > 0.0:
-			_free_camera_position -= delta_screen / _free_camera_zoom
+			_free_camera_position -= _screen_to_world_offset(delta_screen, _free_camera_zoom)
 			zoom = Vector2(_free_camera_zoom, _free_camera_zoom)
 			global_position = _free_camera_position
 
@@ -153,14 +234,14 @@ func _process(delta):
 	# px/sec-on-screen rate into the right amount of world-space movement,
 	# so panning feels the same regardless of how zoomed in we are.
 	var pan_dir: float = 0.0
-	if Input.is_action_pressed("ui_left"):
+	if Input.is_action_pressed(_pan_action_negative()):
 		pan_dir -= 1.0
-	if Input.is_action_pressed("ui_right"):
+	if Input.is_action_pressed(_pan_action_positive()):
 		pan_dir += 1.0
 	if pan_dir != 0.0 and zoom.x > 0.0:
 		pan_offset_x += pan_dir * tm.zoom_pan_screen_speed * delta / zoom.x
 
-	# Auto-release: level-1 fit-to-height only (LongSequenceDesign.md Part 3
+	# Auto-release: level-1 windowed mode only (LongSequenceDesign.md Part 3
 	# — confirmed scope, levels 2/3 unchanged). Two release triggers exist:
 	# this inactivity timeout, and the explicit recenter_pan() a player can
 	# call directly (wired to a button in PlayerUI.tscn).
@@ -208,8 +289,9 @@ func _process(delta):
 ## the original enzyme-target contract) or a Dictionary {zoom, position}
 ## computed directly by the owning script (needed when framing must be
 ## driven by a single dimension rather than a bounding box — e.g. the
-## new-strand targets' height-only "80%/70% of screen height" framing, which
-## a generic width-or-height-whichever-is-smaller box fit can't express).
+## new-strand targets' cross-axis-only "80%/70% of the cross-axis extent"
+## framing, which a generic whichever-axis-is-more-constraining box fit
+## can't express).
 ## entry_level is derived as the LOWEST key in frame_fns — this is the level
 ## select_target() jumps to, and the level below which this target's framing
 ## doesn't apply at all (falls back to _compute_strand_fit()). All targets
@@ -353,7 +435,7 @@ func set_highlight_enabled(enabled: bool) -> void:
 	highlight_enabled = enabled
 	highlight_changed.emit(enabled)
 
-## Whether level 1 is currently in fit-to-height windowed mode — lets
+## Whether level 1 is currently in windowed (cross-axis-fit) mode — lets
 ## PlayerUI disable the recenter button when it isn't relevant (short
 ## sequence, normal fit-to-track view).
 func is_windowed_mode() -> bool:
@@ -361,7 +443,7 @@ func is_windowed_mode() -> bool:
 
 ## Explicit recenter action (LongSequenceDesign.md Part 3) — distinct from
 ## the full reset_zoom(), which also clears the target and returns to level
-## 1. In level-1 fit-to-height mode, this tweens pan_offset_x back to zero.
+## 1. In level-1 windowed mode, this tweens pan_offset_x back to zero.
 ## In free-camera mode, it pulls double duty (per your ask): centers the
 ## whole track horizontally (and vertically, back to center_y) WITHOUT
 ## touching zoom — same position ResetZoomButton's level-1 snap would use,
@@ -500,9 +582,9 @@ func _compute_target_frame(level: int) -> Dictionary:
 	var result = frame_fn.call()
 	if result is Dictionary:
 		# Bespoke framing computed directly by the owning script (e.g. the
-		# new-strand targets' height-only "80% of screen height" framing,
-		# which a generic bounding-box fit can't express since it always
-		# picks whichever of width/height is more constraining).
+		# new-strand targets' cross-axis-only "80% of the cross-axis extent"
+		# framing, which a generic bounding-box fit can't express since it
+		# always picks whichever axis is more constraining).
 		if result.is_empty():
 			return _compute_strand_fit()
 		return result
@@ -525,8 +607,15 @@ func _fit_points(points: Array, padding: float) -> Dictionary:
 	var size = (max_pos - min_pos) + Vector2(padding, padding) * 2.0
 	size.x = max(size.x, 1.0)
 	size.y = max(size.y, 1.0)
-	var viewport_size = get_viewport_rect().size
-	var target_zoom = min(viewport_size.x / size.x, viewport_size.y / size.y)
+	# size.x is always the world-x span and size.y always the world-y span; the
+	# extent helpers supply whichever viewport dimension each currently maps to.
+	# Because the rotation is exactly 90 degrees, a world-axis-aligned box stays
+	# axis-aligned in camera space — no point transformation is needed.
+	#
+	# NOTE: currently unreached. Every registered target returns a Dictionary
+	# {zoom, position}, so the Array/bounding-box contract has no live caller.
+	# Kept axis-correct anyway so it isn't a trap for the next provider.
+	var target_zoom := minf(get_along_extent() / size.x, get_cross_extent() / size.y)
 	return {zoom = target_zoom, position = center}
 
 func _frame_strand() -> void:
@@ -541,20 +630,20 @@ func _compute_strand_fit() -> Dictionary:
 		return {zoom = 1.0, position = global_position}
 	var track_length: float = simulation.track_length
 	var mid_y: float = simulation.center_y if "center_y" in simulation else 360.0
-	var viewport_width: float = get_viewport_rect().size.x
-	var track_zoom: float = _compute_track_fit_zoom(viewport_width, track_length)
+	var along_extent: float = get_along_extent()
+	var track_zoom: float = _compute_track_fit_zoom(along_extent, track_length)
 
 	# Threshold: would the whole track still fit legibly right now? Defined
 	# live against viewport math (per your call), tied to the shared
 	# legible_reference_length rather than an arbitrary standalone zoom
 	# float — see _compute_reference_zoom().
-	var min_readable_zoom = _compute_reference_zoom(simulation, viewport_width)
+	var min_readable_zoom = _compute_reference_zoom(simulation, along_extent)
 	if min_readable_zoom <= 0.0 or track_zoom >= min_readable_zoom:
 		_is_windowed_mode = false
 		return {zoom = track_zoom, position = Vector2(track_length / 2.0, mid_y)}
 
 	_is_windowed_mode = true
-	return _compute_height_fit(simulation, mid_y)
+	return _compute_cross_axis_fit(simulation, mid_y)
 
 ## Shared by _compute_strand_fit() above (level 1, gated by the legibility
 ## threshold) and _compute_free_camera_min_zoom() below (free-camera mode's
@@ -562,17 +651,17 @@ func _compute_strand_fit() -> Dictionary:
 ## formula needed: for short sequences it's identical to what level 1
 ## already shows, for long ones it's smaller than the windowed level-1 zoom,
 ## letting the player scroll out further to see the whole track).
-func _compute_track_fit_zoom(viewport_width: float, track_length: float) -> float:
-	return (viewport_width * tm.zoom_strand_width_percentage) / track_length
+func _compute_track_fit_zoom(along_extent: float, track_length: float) -> float:
+	return (along_extent * tm.zoom_along_axis_percentage) / track_length
 
 ## The zoom _compute_strand_fit() would produce for a
-## tm.legible_reference_length (57) base sequence at the current viewport
-## width — "the last known-good size." Used as the live fit-to-height
-## threshold instead of a hardcoded nucleotide-count cutoff, so it stays
+## tm.legible_reference_length (57) base sequence at the current along-axis
+## viewport extent — "the last known-good size." Used as the live windowed-
+## mode threshold instead of a hardcoded nucleotide-count cutoff, so it stays
 ## correct if nucleotide_slot_spacing or viewport size ever change. Returns
-## 0.0 (never triggers fit-to-height) if simulation doesn't expose the
+## 0.0 (never triggers windowed mode) if simulation doesn't expose the
 ## geometry needed to compute it.
-func _compute_reference_zoom(simulation, viewport_width: float) -> float:
+func _compute_reference_zoom(simulation, along_extent: float) -> float:
 	if not ("nucleotide_slot_spacing" in simulation and "polymerase_x_offset_slots" in simulation):
 		return 0.0
 	var spacing: float = simulation.nucleotide_slot_spacing
@@ -580,22 +669,21 @@ func _compute_reference_zoom(simulation, viewport_width: float) -> float:
 	var reference_track_length: float = float(tm.legible_reference_length - 1) * spacing + 2.0 * offset
 	if reference_track_length <= 0.0:
 		return 0.0
-	return _compute_track_fit_zoom(viewport_width, reference_track_length)
+	return _compute_track_fit_zoom(along_extent, reference_track_length)
 
-## Level 1 for sequences long enough that fitting the whole track width would
-## fall below the readable floor (LongSequenceDesign.md Part 3's "windowed"
-## mode). Zoom is derived from a FIXED vertical content span instead of the
-## (now arbitrarily long) track width, so bases/enzymes stay a legible,
-## constant size regardless of sequence length — the width simply runs past
-## the viewport, and position.x below keeps the active synthesis point in
-## view instead of centering the whole (now off-screen-wide) track.
+## Level 1 for sequences long enough that fitting the track's whole along-axis
+## extent would fall below the readable floor (LongSequenceDesign.md Part 3's
+## "windowed" mode). Zoom is derived from a FIXED CROSS-AXIS content span
+## instead of the (now arbitrarily long) track extent, so bases/enzymes stay a
+## legible, constant size regardless of sequence length — the track simply runs
+## past the viewport along-axis, and position.x below keeps the active
+## synthesis point in view instead of centering the whole track.
 ##
-## tm.zoom_vertical_content_span/tm.zoom_height_fit_percentage are NOT YET
-## TUNED — placeholder values pending real numbers in-engine, per
+## tm.zoom_cross_axis_content_span/tm.zoom_cross_axis_fit_percentage are NOT
+## YET TUNED — placeholder values pending real numbers in-engine, per
 ## LongSequenceDesign.md. Now Inspector-editable via ThemeManager.
-func _compute_height_fit(simulation, mid_y: float) -> Dictionary:
-	var viewport_size = get_viewport_rect().size
-	var target_zoom: float = (viewport_size.y * tm.zoom_height_fit_percentage) / tm.zoom_vertical_content_span
+func _compute_cross_axis_fit(simulation, mid_y: float) -> Dictionary:
+	var target_zoom: float = (get_cross_extent() * tm.zoom_cross_axis_fit_percentage) / tm.zoom_cross_axis_content_span
 
 	# Follow anchor: midpoint of helicase_x/polymerase_x (leading), per
 	# ZoomDesign.md's already-resolved decision — deliberately NOT the
@@ -653,9 +741,13 @@ func _free_camera_scroll_zoom(mouse_screen: Vector2, direction: int) -> void:
 	_free_camera_zoom = old_zoom * step if direction > 0 else old_zoom / step
 	_free_camera_zoom = clamp(_free_camera_zoom, _compute_free_camera_min_zoom(), tm.zoom_free_camera_max_zoom_in)
 
+	# viewport_size * 0.5 is the SCREEN centre — a genuinely screen-space
+	# quantity, so it is NOT axis-swapped. Only the screen->world conversion of
+	# the resulting offset is orientation-aware.
 	var viewport_size: Vector2 = get_viewport_rect().size
-	var world_before: Vector2 = _free_camera_position + (mouse_screen - viewport_size * 0.5) / old_zoom
-	var world_after: Vector2 = _free_camera_position + (mouse_screen - viewport_size * 0.5) / _free_camera_zoom
+	var screen_offset: Vector2 = mouse_screen - viewport_size * 0.5
+	var world_before: Vector2 = _free_camera_position + _screen_to_world_offset(screen_offset, old_zoom)
+	var world_after: Vector2 = _free_camera_position + _screen_to_world_offset(screen_offset, _free_camera_zoom)
 	_free_camera_position += world_before - world_after
 
 	zoom = Vector2(_free_camera_zoom, _free_camera_zoom)
@@ -676,7 +768,7 @@ func _compute_free_camera_min_zoom() -> float:
 	var simulation = get_parent()
 	if not "track_length" in simulation or simulation.track_length <= 0.0:
 		return 0.1
-	return _compute_track_fit_zoom(get_viewport_rect().size.x, simulation.track_length)
+	return _compute_track_fit_zoom(get_along_extent(), simulation.track_length)
 
 # ==========================================
 # HIGHLIGHT — queried by owning scripts, never written here (see file banner).
