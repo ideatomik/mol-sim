@@ -5,10 +5,19 @@ extends CanvasLayer
 # Transport controls for the DNA simulation.
 # ==========================================
 
+# OPTIONAL NODES (VerticalModeDesign.md step 7): the vertical layout omits
+# SequenceLabel and the whole ZoomControls row — 1080px can't hold 21 controls
+# in one line, and the video these vertical builds exist to record never shows
+# the UI at all. Those eight use get_node_or_null() and every consumer guards
+# them, so ONE script drives both layouts. Nothing is deleted: the dropdown's
+# code stays whole for the planned voice-command interface, it simply has no
+# widget in the vertical scene. ResetZoomButton is deliberately KEPT (moved
+# into the transport row) — without it, and with no pinch gesture on mobile,
+# zooming in would be a one-way trip.
 @export var simulation: Node2D  # Drag the root Simulation node here
 
 # UI Node References
-@onready var sequence_label: RichTextLabel = %SequenceLabel
+@onready var sequence_label: RichTextLabel = get_node_or_null("%SequenceLabel")
 @onready var scrubber: HSlider = %Scrubber
 @onready var transport_buttons: HBoxContainer = %TransportButtons
 
@@ -31,14 +40,14 @@ extends CanvasLayer
 @onready var wobble_toggle: Button = %WobbleToggle
 
 # Zoom Controls
-@onready var zoom_controls: HBoxContainer = %ZoomControls
-@onready var highlight_button: Button = %HighlightButton
-@onready var zoom_out_button: Button = %ZoomOutButton
-@onready var enzyme_dropdown: OptionButton = %EnzymeDropdown
-@onready var zoom_in_button: Button = %ZoomInButton
+@onready var zoom_controls: HBoxContainer = get_node_or_null("%ZoomControls")
+@onready var highlight_button: Button = get_node_or_null("%HighlightButton")
+@onready var zoom_out_button: Button = get_node_or_null("%ZoomOutButton")
+@onready var enzyme_dropdown: OptionButton = get_node_or_null("%EnzymeDropdown")
+@onready var zoom_in_button: Button = get_node_or_null("%ZoomInButton")
 @onready var reset_zoom_button: Button = %ResetZoomButton
-@onready var recenter_pan_button: Button = %RecenterPanButton
-@onready var ncloud_toggle: Button = %NCloudToggle
+@onready var recenter_pan_button: Button = get_node_or_null("%RecenterPanButton")
+@onready var ncloud_toggle: Button = get_node_or_null("%NCloudToggle")
 
 var zoom_mgr: Camera2D = null  # %ZoomManager, cached in _ready()
 
@@ -95,10 +104,11 @@ func _ready():
 	# same hover signal double as "which letter during an active drag."
 	# gui_input is the only way to observe raw mouse-button state on a
 	# RichTextLabel, since it has no built-in Range-style drag handling.
-	sequence_label.meta_clicked.connect(_on_sequence_label_meta_clicked)
-	sequence_label.meta_hover_started.connect(_on_sequence_label_meta_hover_started)
-	sequence_label.meta_hover_ended.connect(_on_sequence_label_meta_hover_ended)
-	sequence_label.gui_input.connect(_on_sequence_label_gui_input)
+	if sequence_label != null:
+		sequence_label.meta_clicked.connect(_on_sequence_label_meta_clicked)
+		sequence_label.meta_hover_started.connect(_on_sequence_label_meta_hover_started)
+		sequence_label.meta_hover_ended.connect(_on_sequence_label_meta_hover_ended)
+		sequence_label.gui_input.connect(_on_sequence_label_gui_input)
 
 	# Connect simulation signals
 	if simulation:
@@ -148,12 +158,18 @@ func _ready():
 		# Connect zoom controls
 		zoom_mgr = get_node_or_null("%ZoomManager")
 		if zoom_mgr:
-			highlight_button.toggled.connect(_on_highlight_toggled)
-			zoom_out_button.pressed.connect(_on_zoom_out_pressed)
-			zoom_in_button.pressed.connect(_on_zoom_in_pressed)
+			# reset_zoom_button is NOT optional — it exists in both layouts.
 			reset_zoom_button.pressed.connect(_on_reset_zoom_pressed)
-			recenter_pan_button.pressed.connect(_on_recenter_pan_pressed)
-			enzyme_dropdown.item_selected.connect(_on_enzyme_selected)
+			if highlight_button != null:
+				highlight_button.toggled.connect(_on_highlight_toggled)
+			if zoom_out_button != null:
+				zoom_out_button.pressed.connect(_on_zoom_out_pressed)
+			if zoom_in_button != null:
+				zoom_in_button.pressed.connect(_on_zoom_in_pressed)
+			if recenter_pan_button != null:
+				recenter_pan_button.pressed.connect(_on_recenter_pan_pressed)
+			if enzyme_dropdown != null:
+				enzyme_dropdown.item_selected.connect(_on_enzyme_selected)
 			zoom_mgr.zoom_level_changed.connect(_on_zoom_level_changed)
 			zoom_mgr.target_changed.connect(_on_zoom_target_changed)
 			# NOT populated here — PlayerUI is a child of Simulation, and
@@ -176,14 +192,16 @@ func _ready():
 				locale_mgr.locale_changed.connect(func(_new_locale): _populate_enzyme_dropdown())
 		else:
 			push_error("PlayerUI: %ZoomManager not found!")
-			zoom_controls.visible = false
+			if zoom_controls != null:
+				zoom_controls.visible = false
 
 		# NCloudToggle controls nucleotide_field.gd's own "enabled" export —
 		# a separate decorative system, unrelated to zoom_mgr's presence, so
 		# this is wired independently of the block above.
-		ncloud_toggle.toggled.connect(_on_ncloud_toggled)
-		if simulation and simulation.nucleotide_field:
-			ncloud_toggle.button_pressed = simulation.nucleotide_field.enabled
+		if ncloud_toggle != null:
+			ncloud_toggle.toggled.connect(_on_ncloud_toggled)
+			if simulation and simulation.nucleotide_field:
+				ncloud_toggle.button_pressed = simulation.nucleotide_field.enabled
 
 		# Connect the sequence loader popup (sibling under UI)
 		var popup = get_node("../SequenceLoaderPopup")
@@ -439,16 +457,23 @@ func _on_zoom_level_changed(_new_level: int):
 func _on_zoom_target_changed(new_target_id: String):
 	# Keep the dropdown in sync if the target changed via some other input
 	# method (keyboard/click/voice, later) rather than the dropdown itself.
-	if new_target_id == "":
-		enzyme_dropdown.select(0)  # placeholder
-	else:
-		for i in range(enzyme_dropdown.item_count):
-			if enzyme_dropdown.get_item_metadata(i) == new_target_id:
-				enzyme_dropdown.select(i)
-				break
+	# Driven by zoom_mgr's signal, not by the dropdown — so this still fires in
+	# the vertical layout, where there is no dropdown to sync.
+	if enzyme_dropdown != null:
+		if new_target_id == "":
+			enzyme_dropdown.select(0)  # placeholder
+		else:
+			for i in range(enzyme_dropdown.item_count):
+				if enzyme_dropdown.get_item_metadata(i) == new_target_id:
+					enzyme_dropdown.select(i)
+					break
 	_update_zoom_button_states()
 
 func _populate_enzyme_dropdown():
+	# Connected to zoom_mgr.targets_changed and LocaleManager.locale_changed —
+	# both still fire in the vertical layout, which has no dropdown.
+	if enzyme_dropdown == null:
+		return
 	var previous_id = zoom_mgr.current_target_id
 	enzyme_dropdown.clear()
 
@@ -487,6 +512,11 @@ func _populate_enzyme_dropdown():
 func _update_zoom_button_states():
 	if not zoom_mgr:
 		return
+	# Every button below is omitted from the vertical layout (ResetZoom, which
+	# both layouts keep, is stateless and isn't touched here) — so one guard
+	# covers the function.
+	if zoom_out_button == null or zoom_in_button == null or recenter_pan_button == null:
+		return
 	if zoom_mgr.free_camera_mode():
 		# Continuous zoom in this mode — always available, no discrete
 		# ladder to reach the top/bottom of.
@@ -508,6 +538,9 @@ func _update_zoom_button_states():
 ## disabled because its enzyme isn't on screen yet needs to re-enable itself
 ## the moment that enzyme fades in, without waiting for some other action.
 func _update_enzyme_dropdown_availability():
+	if enzyme_dropdown == null:
+		_update_zoom_button_states()
+		return
 	for i in range(enzyme_dropdown.item_count):
 		var id = enzyme_dropdown.get_item_metadata(i)
 		if id != null:
@@ -577,16 +610,22 @@ func _update_ui():
 	if not simulation:
 		return
 
-	# NEW: Match scrubber width to label's content width
-	# Force label to recalculate its size
-	sequence_label.queue_redraw()
-	await get_tree().process_frame
-	# Set scrubber's minimum width to label's content width
-	var label_width = sequence_label.get_content_width()
-	scrubber.custom_minimum_size.x = max(label_width, 100)  # Minimum 100px for usability
-
-	# Update sequence label with rich text
-	sequence_label.bbcode_text = simulation.get_sequence_rich_text(_hover_index)
+	# Match scrubber width to the label's content width, so a scrub position
+	# lines up with the glyph under it. The vertical layout drops SequenceLabel,
+	# so it also drops this rule — the Scrubber sizes itself by container fill
+	# there instead (size_flags_horizontal on the node), which is why that isn't
+	# just an omission but a deliberate second rule.
+	#
+	# Note the await below is inside the guard: without SequenceLabel this
+	# function no longer yields. Harmless — every caller is fire-and-forget —
+	# but it does mean _update_ui() is a coroutine in one layout and not the
+	# other.
+	if sequence_label != null:
+		sequence_label.queue_redraw()
+		await get_tree().process_frame
+		var label_width = sequence_label.get_content_width()
+		scrubber.custom_minimum_size.x = max(label_width, 100)  # Minimum 100px for usability
+		sequence_label.bbcode_text = simulation.get_sequence_rich_text(_hover_index)
 
 	_update_speed_display()
 	_update_button_states()

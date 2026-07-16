@@ -61,6 +61,7 @@ signal simulation_initialized(total_bases: int)
 signal drag_scrub_requested(index: int)
 
 # ---------- EXPORTS ----------
+const VERTICAL_PLAYER_UI_SCENE: PackedScene = preload("res://scenes/VerticalPlayerUI.tscn")
 const NewNitrogenBaseScene := preload("res://scenes/nitrogen_base.tscn")
 
 @onready var background_rect: ColorRect = $CanvasLayer/ColorRect
@@ -169,6 +170,40 @@ var lagging_last_catchup_step: int = 0
 # LIFECYCLE
 # ==========================================
 
+## Swap PlayerUI for its vertical sibling when vertical_mode is on
+## (VerticalModeDesign.md step 7). Both scenes share ONE script — player_ui.gd —
+## and satisfy the same unique-name contract; the vertical one simply omits
+## SequenceLabel and the whole ZoomControls row, which that script treats as
+## optional via get_node_or_null().
+##
+## Deliberately asymmetric: the horizontal path is left completely untouched, so
+## the working PC build carries zero risk from this. Only the vertical branch is
+## new code.
+##
+## The one thing this has to do by hand is `simulation` — PlayerUI.tscn's
+## instance in simulation.tscn has that @export wired in the editor
+## (node_paths=PackedStringArray("simulation")), which a runtime instantiation
+## can't inherit. Assign it BEFORE add_child(), since player_ui.gd's _ready()
+## reads it.
+func _swap_in_vertical_player_ui(zoom_mgr) -> void:
+	if not zoom_mgr.vertical_mode:
+		return
+	var ui_root := get_node_or_null("UI")
+	var old_ui := get_node_or_null("UI/PlayerUI")
+	if ui_root == null or old_ui == null:
+		push_error("simulation.gd: vertical_mode on, but UI/PlayerUI not found — keeping horizontal UI.")
+		return
+	# Children _ready() before parents, so the horizontal PlayerUI has already
+	# fully initialised and connected by the time we get here. Freeing it drops
+	# those connections with it (Godot disconnects on free), so the two never
+	# both respond to a signal.
+	old_ui.queue_free()
+	var vertical = VERTICAL_PLAYER_UI_SCENE.instantiate()
+	vertical.name = "PlayerUI"   # keep the node path stable
+	vertical.simulation = self   # the editor-wired @export, by hand
+	ui_root.add_child(vertical)
+	print("[VERTICAL] PlayerUI -> VerticalPlayerUI")
+
 func _ready():
 	# Register the helicase zoom target once. The frame-providers close over
 	# `self` and look up helicase_node/replication_mgr fresh each call — must
@@ -180,6 +215,7 @@ func _ready():
 	var zoom_mgr = get_node_or_null("%ZoomManager")
 	if zoom_mgr != null:
 		zoom_mgr.register_target("helicase", {2: _zoom_frame_helicase_level2, 3: _zoom_frame_helicase_level3}, "ENZYME_HELICASE", _zoom_helicase_visible)
+		_swap_in_vertical_player_ui(zoom_mgr)
 
 	# Startup gate (v76): complexity toggles first, then sequence selection —
 	# replaces the old auto-random-sequence boot. See OkazakiMaturationDesign.md

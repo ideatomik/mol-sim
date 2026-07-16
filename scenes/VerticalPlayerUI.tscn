@@ -1,0 +1,204 @@
+[gd_scene format=3 uid="uid://bocp7iybx6e2y"]
+
+[ext_resource type="Script" uid="uid://gkb4xyx0ia4h" path="res://scripts/player_ui.gd" id="1_bqch1"]
+[ext_resource type="FontFile" uid="uid://q1v5f1fmoxhk" path="res://fonts/Raleway/static/Raleway-SemiBold.ttf" id="3_p6wq6"]
+[ext_resource type="FontFile" uid="uid://db3ngjh8pre76" path="res://fonts/Font Awesome/Font Awesome 7 Free-Solid-900.otf" id="4_08kqy"]
+[ext_resource type="StyleBox" uid="uid://v2jecukg40br" path="res://button_styles/normal_dark_bkg.tres" id="4_p6wq6"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_wxbm6"]
+bg_color = Color(1, 1, 1, 0)
+
+[node name="PlayerUI" type="CanvasLayer" unique_id=1115235988]
+script = ExtResource("1_bqch1")
+
+[node name="Panel" type="Panel" parent="." unique_id=773806119]
+custom_minimum_size = Vector2(0, 200)
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -200.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_wxbm6")
+
+[node name="MarginContainer" type="MarginContainer" parent="Panel" unique_id=1135910234]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 8
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/MarginContainer" unique_id=2001884686]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 3
+
+[node name="Scrubber" type="HSlider" parent="Panel/MarginContainer/VBoxContainer" unique_id=470361899]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+max_value = 1.0
+step = 0.001
+allow_greater = true
+ticks_on_borders = true
+
+[node name="TransportButtons" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer" unique_id=1138751670]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 4
+alignment = 1
+
+[node name="PlayPauseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1558987811]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(80, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "▶"
+
+[node name="LeftSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=2071299637]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+
+[node name="LeftSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1200750303]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+
+[node name="FastBackward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=2010278088]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "⏮
+"
+
+[node name="Backward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=22219196]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = ""
+
+[node name="StopButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=2068371549]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(32, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "⏹"
+
+[node name="Forward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1016918973]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = ""
+
+[node name="FastForward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=541614670]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "⏭"
+
+[node name="EjectSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1180211101]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+
+[node name="EjectSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=967035237]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+
+[node name="Eject" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1414868271]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = ""
+
+[node name="Menu" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1507383150]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = ""
+
+[node name="ResetZoomButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1426854269]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(28, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = ""
+
+[node name="SpeedControls" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer" unique_id=1938229207]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(346, 0)
+layout_mode = 2
+alignment = 1
+
+[node name="SpeedSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=2049134449]
+custom_minimum_size = Vector2(4, 0)
+layout_mode = 2
+
+[node name="SpeedLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=2093836908]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("3_p6wq6")
+text = "Speed:"
+horizontal_alignment = 2
+
+[node name="SpeedDecreaseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=356436354]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "-"
+
+[node name="SpeedValueLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=189868588]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("3_p6wq6")
+text = "-1.0x"
+horizontal_alignment = 2
+
+[node name="SpeedLabelSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=291630238]
+custom_minimum_size = Vector2(10, 0)
+layout_mode = 2
+
+[node name="SpeedIncreaseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=880152674]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+text = "+"
+
+[node name="WobbleToggle" type="Button" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=734664873]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(28, 24)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+toggle_mode = true
+button_pressed = true
+text = ""
+
+[node name="SpeedSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=197303419]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2

@@ -27,6 +27,7 @@ wobble_phase_offset = 1.0
 unique_name_in_owner = true
 position = Vector2(640, 360)
 script = ExtResource("2_1hwtu")
+vertical_mode = true
 
 [node name="CanvasLayer" type="CanvasLayer" parent="." unique_id=114831926]
 layer = -10
