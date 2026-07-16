@@ -8,37 +8,37 @@ extends CanvasLayer
 @export var simulation: Node2D  # Drag the root Simulation node here
 
 # UI Node References
-@onready var sequence_label: RichTextLabel = $Panel/MarginContainer/VBoxContainer/VBoxContainer/SequenceLabel
-@onready var scrubber: HSlider = $Panel/MarginContainer/VBoxContainer/VBoxContainer/Scrubber
-@onready var transport_buttons: HBoxContainer = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons
+@onready var sequence_label: RichTextLabel = %SequenceLabel
+@onready var scrubber: HSlider = %Scrubber
+@onready var transport_buttons: HBoxContainer = %TransportButtons
 
 # Transport Buttons
-@onready var menu_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/Menu
-@onready var fast_backward: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/FastBackward
-@onready var backward: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/Backward
-@onready var play_pause_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/PlayPauseButton
-@onready var stop_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/StopButton
-@onready var forward: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/Forward
-@onready var fast_forward: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/FastForward
-@onready var eject_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons/Eject
+@onready var menu_button: Button = %Menu
+@onready var fast_backward: Button = %FastBackward
+@onready var backward: Button = %Backward
+@onready var play_pause_button: Button = %PlayPauseButton
+@onready var stop_button: Button = %StopButton
+@onready var forward: Button = %Forward
+@onready var fast_forward: Button = %FastForward
+@onready var eject_button: Button = %Eject
 
 # Speed Controls
-@onready var speed_controls: HBoxContainer = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls
-@onready var speed_label: Label = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedLabel
-@onready var speed_decrease_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedDecreaseButton
-@onready var speed_value_label: Label = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedValueLabel
-@onready var speed_increase_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/SpeedIncreaseButton
-@onready var wobble_toggle: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls/WobbleToggle
+@onready var speed_controls: HBoxContainer = %SpeedControls
+@onready var speed_label: Label = %SpeedLabel
+@onready var speed_decrease_button: Button = %SpeedDecreaseButton
+@onready var speed_value_label: Label = %SpeedValueLabel
+@onready var speed_increase_button: Button = %SpeedIncreaseButton
+@onready var wobble_toggle: Button = %WobbleToggle
 
 # Zoom Controls
-@onready var zoom_controls: HBoxContainer = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls
-@onready var highlight_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/HighlightButton
-@onready var zoom_out_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/ZoomOutButton
-@onready var enzyme_dropdown: OptionButton = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/EnzymeDropdown
-@onready var zoom_in_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/ZoomInButton
-@onready var reset_zoom_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/ResetZoomButton
-@onready var recenter_pan_button: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/RecenterPanButton
-@onready var ncloud_toggle: Button = $Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls/NCloudToggle
+@onready var zoom_controls: HBoxContainer = %ZoomControls
+@onready var highlight_button: Button = %HighlightButton
+@onready var zoom_out_button: Button = %ZoomOutButton
+@onready var enzyme_dropdown: OptionButton = %EnzymeDropdown
+@onready var zoom_in_button: Button = %ZoomInButton
+@onready var reset_zoom_button: Button = %ResetZoomButton
+@onready var recenter_pan_button: Button = %RecenterPanButton
+@onready var ncloud_toggle: Button = %NCloudToggle
 
 var zoom_mgr: Camera2D = null  # %ZoomManager, cached in _ready()
 
