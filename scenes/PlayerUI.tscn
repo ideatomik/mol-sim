@@ -12,19 +12,6 @@ bg_color = Color(1, 1, 1, 0)
 [sub_resource type="StyleBoxLine" id="StyleBoxLine_08kqy"]
 color = Color(0, 0, 0, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_08kqy"]
-bg_color = Color(1, 1, 1, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.2123048, 0.21230483, 0.21230477, 1)
-corner_radius_top_left = 4
-corner_radius_top_right = 4
-corner_radius_bottom_right = 4
-corner_radius_bottom_left = 4
-corner_detail = 16
-
 [node name="PlayerUI" type="CanvasLayer" unique_id=1005777864]
 script = ExtResource("1_bqch1")
 
@@ -243,19 +230,6 @@ custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
-text = ""
-
-[node name="Button" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=415854509]
-visible = false
-custom_minimum_size = Vector2(30, 0)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.2123048, 0.21230483, 0.21230477, 1)
-theme_override_colors/font_focus_color = Color(0, 0, 0, 1)
-theme_override_colors/font_pressed_color = Color(0.23392546, 0.23392546, 0.23392543, 1)
-theme_override_colors/font_hover_color = Color(0.14406246, 0.14406252, 0.14406297, 1)
-theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
-theme_override_fonts/font = ExtResource("4_08kqy")
-theme_override_styles/normal = SubResource("StyleBoxFlat_08kqy")
 text = ""
 
 [node name="ZoomControls" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer" unique_id=1503029031]
