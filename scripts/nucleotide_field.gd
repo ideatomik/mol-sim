@@ -99,13 +99,6 @@ extends Node2D
 # ---------- REFERENCES ----------
 var sim: Node = null
 var tm: Node = null
-## ZoomManager — glyph counter-rotation only. The REFERENCE is cached in
-## _ready(), but the VALUE is read live in _draw(), exactly like tm's
-## base_label_color already is. That sidesteps a real _ready()-order hazard:
-## ZoomManager is a SIBLING, and sibling _ready() order follows scene-tree
-## order, so caching its rotation here could capture a pre-orientation zero.
-## Reading live cannot.
-var zoom_mgr: Node = null
 var _font: Font = null
 var _font_size: int = 14
 var particle_count: int = 0  # computed from particles_per_slot * num_slots — not exported, see on_sequence_changed()
@@ -131,7 +124,6 @@ func _ready() -> void:
 	# call reaches out to this node.
 	sim = get_parent()
 	tm = get_node("%ThemeManager")
-	zoom_mgr = get_node_or_null("%ZoomManager")
 	z_index = field_z_index
 	modulate.a = tm.nucleotide_field_alpha
 	visible = enabled
@@ -258,7 +250,6 @@ func _draw() -> void:
 	if not enabled:
 		return
 	var label_color: Color = tm.base_label_color if tm != null else Color.BLACK
-	var label_rotation: float = zoom_mgr.get_label_counter_rotation() if zoom_mgr != null else 0.0
 	var ascent = _font.get_ascent(_font_size) if _font != null else 0.0
 	var descent = _font.get_descent(_font_size) if _font != null else 0.0
 	for i in range(_pos.size()):
@@ -274,25 +265,10 @@ func _draw() -> void:
 			var ssize = _font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, _font_size)
 			# draw_string's y is the baseline; centre the text on the circle by
 			# putting the ascent/descent midline on c.y.
-			# Both coords are now LOCAL TO c, not absolute — the transform
-			# below makes c the origin.
-			var baseline_y = (ascent - descent) * 0.5
-			var draw_pos = Vector2(-ssize.x / 2.0, baseline_y) + label_offset
-			# Rotate each glyph around ITS OWN centre. Unlike polymerase_halo.gd
-			# — which has a real Node2D per particle and so can rotate about
-			# Vector2.ZERO — this file draws EVERY particle in ONE _draw() on a
-			# single node. Rotating about the origin would swing the whole cloud
-			# around the field's origin instead of spinning letters in place.
-			# Passing c as the transform origin is what makes it a per-glyph spin.
-			draw_set_transform(c, label_rotation, Vector2.ONE)
+			var baseline_y = c.y + (ascent - descent) * 0.5
+			var draw_pos = Vector2(c.x - ssize.x / 2.0, baseline_y) + label_offset
 			draw_string(_font, draw_pos, txt,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, _font_size, label_color)
-			# MANDATORY reset — the loop continues and the NEXT particle's
-			# draw_circle()/draw_texture_rect() use ABSOLUTE c. Leaving this set
-			# would draw every subsequent body in this glyph's rotated frame.
-			# (polymerase_halo.gd needs no reset: draw_string is the last call
-			# in its _draw().)
-			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 # ==========================================
 # VISIBLE-RECT HELPER

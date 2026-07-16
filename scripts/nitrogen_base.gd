@@ -39,7 +39,6 @@ const ROUNDED_SQUARE_CORNER_SEGMENTS: int = 4
 
 var label: Label
 var body_fill_color: Color = Color.WHITE
-var _label_rotation: float = 0.0
 
 func _ready():
 	freeze = stay_frozen
@@ -92,20 +91,9 @@ func _round_corners(pts: PackedVector2Array, radius_ratio: float, segments: int)
 			out.append(a.lerp(b, t))
 	return out
 
-## pivot_offset is the load-bearing line here, not the rotation. Godot rotates
-## a Control around its pivot, which defaults to (0,0) — the TOP-LEFT corner.
-## Without this, every glyph would swing off-centre by roughly half its own
-## diagonal the moment a non-zero rotation was applied, which on a 300-base
-## sequence reads as "the letters fell over and scattered" rather than as its
-## one-line cause. Scale/rotation both apply around the pivot, so pinning the
-## pivot to the glyph's own centre keeps `position` meaning exactly what it
-## meant before. In horizontal mode _label_rotation is 0.0 and this whole
-## function is a strict no-op versus its previous behaviour.
 func _center_label():
 	if label:
-		label.pivot_offset = label.size / 2.0
 		label.position = -label.size / 2.0
-		label.rotation = _label_rotation
 
 ## Set the base type and update the label text.
 ## Call set_colors() after this to apply the correct fill and font colors.
@@ -142,22 +130,6 @@ func set_font(font_size: int, font: Font = null) -> void:
 		if font:
 			label.add_theme_font_override("font", font)
 		_center_label.call_deferred()
-
-## Counter-rotation for this base's glyph, cancelling the camera's rotation in
-## vertical mode so letters stay upright. Injected by the spawner exactly like
-## set_colors()/set_font()/set_radius() — this node is deliberately
-## ThemeManager-free (see the header) and cannot look the value up itself.
-##
-## Covers 5'/3' markers too: they're the same scene, spawned with base_type
-## "5'"/"3'", so one call site per spawner reaches every glyph in the project.
-##
-## Safe as a LOCAL rotation because this RigidBody2D never rotates — freeze is
-## always true (stay_frozen defaults true, nothing sets it false) and wobble
-## only writes position.y. Control exposes no global_rotation setter, so that
-## mattered.
-func set_label_rotation(radians: float) -> void:
-	_label_rotation = radians
-	_center_label.call_deferred()
 
 ## Override the fill color only (used for synthesis debug highlighting).
 ## Does not affect base_type or label color.

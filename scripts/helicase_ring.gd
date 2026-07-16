@@ -103,43 +103,26 @@ const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn"
 # enabled project-wide, which is exactly the class of silent-failure trap
 # this project has hit before (CSV registration, LocaleManager unique-name).
 # A local-space point-in-rect check has no such hidden dependency.
-## Glyph counter-rotation for vertical mode, PUSHED in by simulation.gd (which
-## owns this node) rather than looked up. This file deliberately holds no
-## reference to sim/ThemeManager/ZoomManager — see the label params above,
-## which are local @exports for the same reason. Pass ZoomManager's
-## get_label_counter_rotation() verbatim; EnzymeLabel owns the mirror sign.
-var label_counter_rotation: float = 0.0:
-	set(value):
-		label_counter_rotation = value
-		if _label != null:
-			_label.set_counter_rotation(value)
-
 signal scrub_drag_started()
-## Vector2, not float: this node reports raw screen movement on BOTH axes and
-## deliberately does not decide which one is meaningful. Which axis runs along
-## the track depends on ZoomManager.vertical_mode — a simulation-level fact,
-## and per the contract above, resolving those is the owning script's job. The
-## owner picks the component at the same site where it already converts px to
-## a slot index. See VerticalModeDesign.md Part 4.
-signal scrub_drag_delta(cumulative_px: Vector2)  # screen-space, since drag start
+signal scrub_drag_delta(cumulative_px: float)  # screen-space, since drag start
 signal scrub_drag_ended()
 
 var _dragging: bool = false
-var _drag_start_screen: Vector2 = Vector2.ZERO
+var _drag_start_screen_x: float = 0.0
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			if not _dragging and _point_in_click_region(get_global_mouse_position()):
 				_dragging = true
-				_drag_start_screen = event.position
+				_drag_start_screen_x = event.position.x
 				scrub_drag_started.emit()
 				get_viewport().set_input_as_handled()
 		elif _dragging:
 			_dragging = false
 			scrub_drag_ended.emit()
 	elif event is InputEventMouseMotion and _dragging:
-		scrub_drag_delta.emit(event.position - _drag_start_screen)
+		scrub_drag_delta.emit(event.position.x - _drag_start_screen_x)
 
 ## Click region reuses the same footprint formula simulation.gd already
 ## computes for this ring's label positioning (ring_radius + max_blob_height
@@ -189,7 +172,6 @@ func _setup_label() -> void:
 	add_child(_label)
 	_label.set_key(label_key)
 	_label.set_style(null, label_font_size, label_text_color, label_panel_color)
-	_label.set_counter_rotation(label_counter_rotation)
 	_update_label()
 
 func _update_label() -> void:

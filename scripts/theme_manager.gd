@@ -274,25 +274,21 @@ extends Node
 @export_range(0.0, 1.0) var polymerase_halo_alpha: float = 0.35
 
 @export_group("Zoom & Long-Sequence Display")
-## Shared by zoom_manager.gd's level-1 windowed-mode threshold AND
+## Shared by zoom_manager.gd's level-1 fit-to-height threshold AND
 ## replication_manager.gd's SequenceLabel window width (LongSequenceDesign.md
 ## Part 3/4) — one number instead of two independently-tuned constants that
 ## used to just happen to agree (57), the same class of drift Part 1 fixed
 ## for the sequence-length ceiling.
 @export var legible_reference_length: int = 57
 
-## Level 1, short sequences: % of the ALONG-AXIS viewport extent the whole
-## track fills. The track always runs along world x; along-axis is viewport
-## WIDTH in horizontal mode and viewport HEIGHT in vertical mode — only which
-## screen axis world x maps to changes. See VerticalModeDesign.md Part 1a.
-@export_range(0.0, 1.0) var zoom_along_axis_percentage: float = 0.90
-## Level 1, long sequences (windowed mode): % of the CROSS-AXIS viewport
-## extent the fixed cross-axis content span below fills. NOT YET TUNED.
-@export_range(0.0, 1.0) var zoom_cross_axis_fit_percentage: float = 0.70
-## World-space extent ACROSS the track (both template strands + enzyme
-## geometry — i.e. the world-y span) that windowed mode frames against.
-## Perpendicular to the strand in both orientations. NOT YET TUNED.
-@export var zoom_cross_axis_content_span: float = 400.0
+## Level 1, short sequences: % of viewport width the whole track fills.
+@export_range(0.0, 1.0) var zoom_strand_width_percentage: float = 0.90
+## Level 1, long sequences (fit-to-height mode): % of viewport height the
+## fixed vertical content span fills. NOT YET TUNED.
+@export_range(0.0, 1.0) var zoom_height_fit_percentage: float = 0.70
+## World-space vertical extent (both template strands + enzyme geometry)
+## fit-to-height frames against. NOT YET TUNED.
+@export var zoom_vertical_content_span: float = 400.0
 ## World-space padding around framed points at levels 2/3.
 @export var zoom_level34_padding: float = 160.0
 ## Seconds for an animated level/target transition tween.

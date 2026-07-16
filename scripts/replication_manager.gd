@@ -532,18 +532,6 @@ func render(delta: float, ctx: Dictionary) -> void:
 ## (half_down = back_base_height * 0.5, doubled here for full height), so
 ## this tracks any ThemeManager "Polymerase Clamp" tuning automatically
 ## rather than duplicating a guessed constant.
-## See the matching pair in simulation.gd. zoom_mgr is already cached in
-## initialize(), so no lookup needed here.
-## See the matching helper in simulation.gd.
-func _zoom_label_rotation() -> float:
-	return zoom_mgr.get_label_counter_rotation() if zoom_mgr != null else 0.0
-
-func _zoom_along_extent() -> float:
-	return zoom_mgr.get_along_extent() if zoom_mgr != null else 1152.0
-
-func _zoom_cross_extent() -> float:
-	return zoom_mgr.get_cross_extent() if zoom_mgr != null else 648.0
-
 func _polymerase_footprint_height() -> float:
 	var span: float = sim.dna_ribbons_gap + 2.0 * (float(tm.backbone_offset_distance) + float(tm.backbone_line_width) * 0.5)
 	return span + 2.0 * tm.clamp_margin
@@ -598,10 +586,8 @@ func _anchor_centered_frame(anchor: Vector2, context: Array, fit_pct: float) -> 
 		max_dx = max(max_dx, abs(p.x - anchor.x))
 		max_dy = max(max_dy, abs(p.y - anchor.y))
 	var size: Vector2 = Vector2(max(max_dx * 2.0, 1.0), max(max_dy * 2.0, 1.0))
-	# size.x is a world-x span, size.y a world-y span. The extent helpers supply
-	# whichever viewport dimension each currently maps to — the rotation is
-	# exactly 90 degrees, so the box stays axis-aligned and needs no transform.
-	var target_zoom: float = minf((_zoom_along_extent() * fit_pct) / size.x, (_zoom_cross_extent() * fit_pct) / size.y)
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1152, 648)
+	var target_zoom: float = min((viewport_size.x * fit_pct) / size.x, (viewport_size.y * fit_pct) / size.y)
 	return {zoom = target_zoom, position = anchor}
 
 func _polymerase_footprint_frame(clamp_node: Node2D, fit_pct: float) -> Dictionary:
@@ -610,9 +596,8 @@ func _polymerase_footprint_frame(clamp_node: Node2D, fit_pct: float) -> Dictiona
 	var footprint_height: float = _polymerase_footprint_height()
 	if footprint_height <= 0.0:
 		return {}
-	# footprint_height is a world-y span — ACROSS the track — so it fits against
-	# the cross-axis viewport extent in both orientations.
-	var target_zoom: float = (_zoom_cross_extent() * fit_pct) / footprint_height
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * fit_pct) / footprint_height
 	return {zoom = target_zoom, position = clamp_node.global_position}
 
 ## Reuses leading_polymerase/lagging_polymerase's own modulate.a — the exact
@@ -625,21 +610,20 @@ func _zoom_leading_visible() -> bool:
 func _zoom_lagging_visible() -> bool:
 	return lagging_polymerase != null and is_instance_valid(lagging_polymerase) and lagging_polymerase.modulate.a > 0.01
 
-## Cross-axis fit percentages for the new-strand targets. "Cross-axis" is the
-## world-y span (ACROSS the track) — viewport HEIGHT in horizontal mode,
-## viewport WIDTH in vertical mode. See VerticalModeDesign.md.
-##  - Level 2 shows all four rows around the fork's cross-axis spread (new
+## Vertical-fit percentages for the new-strand targets:
+##  - Level 2 shows all four rows around the fork's vertical spread (new
 ##    strand, template's unzipped row, template's bonded/pre-fork row, other
-##    template's row) at 80% of the cross-axis extent.
+##    template's row) at 80% screen height.
 ##  - Level 3 shows just the new strand + its paired template's unzipped
-##    row, tighter, at 70% of the cross-axis extent (15% padding —
-##    deliberately more than level 2's 10%, so it reads as visibly different
-##    from level 2 rather than landing on the same effective zoom).
-## Both are cross-axis-ONLY fits (return a Dictionary, not points) — the
-## along-axis isn't a constraint here; along-track position stays centered on
-## the track (same as level 1) at both levels.
-const NEW_STRAND_LEVEL2_CROSS_AXIS_FIT: float = 0.6
-const NEW_STRAND_LEVEL3_CROSS_AXIS_FIT: float = 0.2
+##    row, tighter, at 70% screen height (15% padding — deliberately more
+##    than level 2's 10%, so it reads as visibly different from level 2
+##    rather than landing on the same effective zoom).
+## Both are height-ONLY fits (return a Dictionary, not points) — width isn't
+## a constraint here, per this session's direction to treat vertical space
+## as the primary reference for these targets; horizontal position stays
+## centered on the track (same as level 1) at both levels.
+const NEW_STRAND_LEVEL2_VERTICAL_FIT: float = 0.6
+const NEW_STRAND_LEVEL3_VERTICAL_FIT: float = 0.2
 
 # --- New Leading Strand (pairs with the ORIGINAL TOP template) ---
 #
@@ -669,7 +653,8 @@ func _zoom_frame_new_leading_level2() -> Dictionary:
 	var content_span: float = (bottom_template_y - new_strand_y)# + 2.0 * tm.base_radius
 	if content_span <= 0.0:
 		return {}
-	var target_zoom: float = (_zoom_cross_extent() * NEW_STRAND_LEVEL2_CROSS_AXIS_FIT) / content_span
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * NEW_STRAND_LEVEL2_VERTICAL_FIT) / content_span
 	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
 
 func _zoom_frame_new_leading_level3() -> Dictionary:
@@ -681,15 +666,16 @@ func _zoom_frame_new_leading_level3() -> Dictionary:
 	var content_span: float = abs(unzipped_template_y - new_strand_y)# + 2.0 * tm.base_radius
 	if content_span <= 0.0:
 		return {}
-	var target_zoom: float = (_zoom_cross_extent() * NEW_STRAND_LEVEL3_CROSS_AXIS_FIT) / content_span
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * NEW_STRAND_LEVEL3_VERTICAL_FIT) / content_span
 	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
 
 func _zoom_new_leading_visible() -> bool:
 	# LongSequenceDesign.md follow-up: doesn't make sense to zoom into a
-	# whole-strand bounding box while level 1 itself is in windowed
-	# (cross-axis-fit) mode (long sequence) — the strand sprawls far past
-	# what's on screen at once. Best highlighted once it's fully visible at
-	# the normal fit-to-track zoom.
+	# whole-strand bounding box while level 1 itself is in fit-to-height
+	# windowed mode (long sequence) — the strand sprawls far past what's
+	# on screen at once. Best highlighted once it's fully visible at the
+	# normal fit-to-track zoom.
 	if zoom_mgr != null and zoom_mgr.is_windowed_mode():
 		return false
 	return leading_backbone_line != null and is_instance_valid(leading_backbone_line) and leading_backbone_line.points.size() > 0
@@ -719,7 +705,8 @@ func _zoom_frame_new_lagging_level2() -> Dictionary:
 	var content_span: float = (new_strand_y - top_boundary_y)# + 2.0 * tm.base_radius
 	if content_span <= 0.0:
 		return {}
-	var target_zoom: float = (_zoom_cross_extent() * NEW_STRAND_LEVEL2_CROSS_AXIS_FIT) / content_span
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * NEW_STRAND_LEVEL2_VERTICAL_FIT) / content_span
 	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
 
 func _zoom_frame_new_lagging_level3() -> Dictionary:
@@ -731,7 +718,8 @@ func _zoom_frame_new_lagging_level3() -> Dictionary:
 	var content_span: float = abs(new_strand_y - unzipped_template_y)# + 2.0 * tm.base_radius
 	if content_span <= 0.0:
 		return {}
-	var target_zoom: float = (_zoom_cross_extent() * NEW_STRAND_LEVEL3_CROSS_AXIS_FIT) / content_span
+	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
+	var target_zoom: float = (viewport_height * NEW_STRAND_LEVEL3_VERTICAL_FIT) / content_span
 	return {zoom = target_zoom, position = Vector2(sim.track_length * 0.5, mid_y)}
 
 func _zoom_new_lagging_visible() -> bool:
@@ -815,27 +803,23 @@ func _apply_highlight() -> void:
 func _on_leading_clamp_drag_started() -> void:
 	_leading_drag_start_index = sim.get_synthesized_count()
 
-func _on_leading_clamp_drag_delta(cumulative_px: Vector2) -> void:
+func _on_leading_clamp_drag_delta(cumulative_px: float) -> void:
 	_request_clamp_drag_scrub(_leading_drag_start_index, cumulative_px)
 
 func _on_lagging_clamp_drag_started() -> void:
 	_lagging_drag_start_index = sim.get_synthesized_count()
 
-func _on_lagging_clamp_drag_delta(cumulative_px: Vector2) -> void:
+func _on_lagging_clamp_drag_delta(cumulative_px: float) -> void:
 	_request_clamp_drag_scrub(_lagging_drag_start_index, cumulative_px)
 
-func _request_clamp_drag_scrub(start_index: int, cumulative_px: Vector2) -> void:
+func _request_clamp_drag_scrub(start_index: int, cumulative_px: float) -> void:
 	if zoom_mgr == null or sim.nucleotide_slot_spacing <= 0.0:
 		return
 	var zoom_x: float = zoom_mgr.zoom.x
 	if zoom_x <= 0.0:
 		return
-	# See the matching comment in simulation.gd's _on_helicase_ring_drag_delta()
-	# for why no sign flip is needed. Both clamps funnel through here, so the
-	# axis choice is made once for the pair.
-	var along_px: float = cumulative_px.y if zoom_mgr.vertical_mode else cumulative_px.x
 	var px_per_slot: float = sim.nucleotide_slot_spacing * zoom_x
-	var slot_delta: int = int(round(along_px / px_per_slot))
+	var slot_delta: int = int(round(cumulative_px / px_per_slot))
 	sim.request_drag_scrub(start_index + slot_delta)
 
 ## Windowed slice, NOT the whole sequence — tm.legible_reference_length (57)
@@ -1092,7 +1076,6 @@ func _spawn_leading_base(index: int, base_type: String, start_pos = null) -> Nod
 	base.set_radius(tm.base_radius)
 	base.set_colors(sim._get_base_fill(base_type), tm.base_label_color)
 	base.set_font(tm.base_label_font_size, tm.base_label_font)
-	base.set_label_rotation(_zoom_label_rotation())
 	return base
 
 func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
@@ -2316,7 +2299,6 @@ func _spawn_lagging_base(index: int, base_type: String, start_pos = null, color_
 	var label_color = tm.rna_base_label_color if shape_override == "rounded_square" else tm.base_label_color
 	base.set_colors(fill_color, label_color)
 	base.set_font(tm.base_label_font_size, tm.base_label_font)
-	base.set_label_rotation(_zoom_label_rotation())
 	if shape_override != null:
 		base.set_shape(shape_override)
 	return base
@@ -3053,7 +3035,6 @@ func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
 	marker.set_radius(tm.base_radius)
 	marker.set_colors(tm.marker_color, tm.marker_font_color)
 	marker.set_font(tm.marker_font_size, tm.marker_font)
-	marker.set_label_rotation(_zoom_label_rotation())
 	return marker
 
 func _create_bond_mark_sprite() -> Node2D:

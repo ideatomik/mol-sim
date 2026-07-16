@@ -44,15 +44,6 @@ var _blob: Polygon2D = null
 var _label: EnzymeLabel = null
 var _pulse_t: float = 0.0
 
-## Asked of ZoomManager through _sim — the same reach setup() already makes for
-## %ThemeManager. 0.0 in horizontal mode. EnzymeLabel owns the mirror sign;
-## ligase is unmirrored anyway (single instance, lagging strand only).
-func _zoom_label_rotation() -> float:
-	if _sim == null:
-		return 0.0
-	var zm = _sim.get_node_or_null("%ZoomManager")
-	return zm.get_label_counter_rotation() if zm != null else 0.0
-
 func setup(sim: Node) -> void:
 	_sim = sim
 	_tm = sim.get_node("%ThemeManager")
@@ -101,6 +92,5 @@ func _apply() -> void:
 		_label.visible = label_enabled
 		if label_enabled:
 			_label.set_style(null, tm.label_font_size, tm.label_color, tm.label_panel_color)
-			_label.set_counter_rotation(_zoom_label_rotation())
 			_label.z_index = tm.label_z
 			_label.set_anchor_pos(Vector2(0.0, base_size * 0.5 + tm.ligase_label_margin))
