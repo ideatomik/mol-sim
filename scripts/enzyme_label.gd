@@ -30,11 +30,18 @@ class_name EnzymeLabel
 # parent's own scale.y = -1 (the leading polymerase clamp) so glyphs stay
 # upright. Because scale is applied around pivot_offset (== the anchor point),
 # the anchor itself never moves when mirroring toggles.
+#
+# VERTICAL MODE: set_counter_rotation() cancels the camera's -90 rotation so
+# the tag stays readable. It composes with MIRROR — see _apply_rotation() for
+# why the sign flips there, and why that sign lives in this file rather than
+# in the five enzyme scripts that spawn these.
 # ==========================================
 
 var _rich_text: RichTextLabel = null
 var _anchor: Vector2 = Vector2.ZERO
 var _key: String = ""
+var _mirror: bool = false
+var _counter_rotation: float = 0.0
 
 func _ready() -> void:
 	_ensure_rich_text()
@@ -75,7 +82,31 @@ func set_anchor_pos(anchor_pos: Vector2) -> void:
 ## true for the leading-strand clamp (whose parent already has scale.y = -1),
 ## so the label counter-flips and reads upright. No-op for anything unmirrored.
 func set_mirror(mirror: bool) -> void:
+	_mirror = mirror
 	scale.y = -1.0 if mirror else 1.0
+	_apply_rotation()
+
+## Cancels the camera's rotation in vertical mode so the name tag stays
+## upright. Pass ZoomManager.get_label_counter_rotation() verbatim — callers
+## never need to know about the mirror interaction below.
+func set_counter_rotation(radians: float) -> void:
+	_counter_rotation = radians
+	_apply_rotation()
+
+## The mirror INVERTS the sense of rotation, so the sign is owned here rather
+## than by the five enzyme scripts that spawn these. A mirrored parent applies
+## S = scale.y(-1); this node's own transform is R(t) * S; composed, the total
+## is S * R(t) * S = R(-t), because reflection conjugates rotation. So a local
+## t under the leading clamp renders as world -t, and cancelling the camera's
+## rotation there needs the negation.
+##
+## Keeping this here means every caller passes the same unmodified value and
+## the sign can't be got wrong at one of five call sites. Order-independent:
+## set_mirror() and set_counter_rotation() may be called in either order.
+## Rotation applies around pivot_offset (== the anchor), so the anchor never
+## moves — the same property that already made set_mirror() safe.
+func _apply_rotation() -> void:
+	rotation = -_counter_rotation if _mirror else _counter_rotation
 
 func set_style(font: Font, font_size: int, text_color: Color, panel_bg_color: Color) -> void:
 	_ensure_rich_text()

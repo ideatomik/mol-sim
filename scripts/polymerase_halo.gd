@@ -77,6 +77,10 @@ var _nodes: Array = []
 var _sim: Node = null
 var _field: Node = null    # nucleotide_field.gd instance — live source for size/physics/alpha
 var _tm: Node = null       # ThemeManager — font/label + fallback source if _field is missing
+var _zoom_mgr: Node = null # ZoomManager — glyph counter-rotation only (VerticalModeDesign.md).
+                           # Reached through _sim exactly like _tm/_field above, so no call site
+                           # has to push orientation in: the halo asks, like it already does for
+                           # every other appearance value.
 var _last_radius: float = -1.0
 var _last_softness: float = -1.0
 # Cached appearance state, refreshed in _build_particles()/_process() — lets
@@ -85,12 +89,14 @@ var _last_softness: float = -1.0
 var _cached_font: Font = null
 var _cached_font_size: int = 14
 var _cached_label_color: Color = Color.BLACK
+var _cached_label_rotation: float = 0.0
 var _cached_blur_on: bool = true
 var _cached_extent: float = 1.4
 
 func setup(sim: Node, mirror: bool) -> void:
 	_sim = sim
 	_tm = sim.get_node("%ThemeManager")
+	_zoom_mgr = sim.get_node_or_null("%ZoomManager")
 	_field = sim.nucleotide_field
 	var center_offset: float = sim.dna_ribbons_gap / 2.0
 	position.y = -center_offset if mirror else center_offset
@@ -247,6 +253,7 @@ func _refresh_cached_appearance() -> void:
 	_cached_label_color = (_tm.rna_base_label_color if is_rna else _tm.base_label_color) if _tm != null else Color.BLACK
 	_cached_font = (_tm.base_label_font if (_tm != null and _tm.base_label_font != null) else ThemeDB.fallback_font)
 	_cached_font_size = _tm.base_label_font_size if _tm != null else 14
+	_cached_label_rotation = _zoom_mgr.get_label_counter_rotation() if _zoom_mgr != null else 0.0
 
 ## Builds one particle of the given type using the current cached appearance
 ## state, places it at a random spot within halo_radius, and appends it to
@@ -262,6 +269,7 @@ func _spawn_into_pool(bt: String) -> Node:
 	dot.font = _cached_font
 	dot.font_size = _cached_font_size
 	dot.label_color = _cached_label_color
+	dot.label_rotation = _cached_label_rotation
 	dot.radius_px = _last_radius
 	dot.blur_enabled = _cached_blur_on
 	dot.blur_draw_size = _last_radius * 2.0 * _cached_extent
@@ -339,6 +347,9 @@ class _HaloDot extends Node2D:
 	var font: Font = null
 	var font_size: int = 14
 	var label_color: Color = Color.BLACK
+	## Counter-rotation so the glyph stays upright in vertical mode. Applies to
+	## the TEXT ONLY, not the particle body — see _draw().
+	var label_rotation: float = 0.0
 	## "circle" (DNA, default) or "rounded_square" (RNA) — same accessibility
 	## contract as nitrogen_base.gd's shape property: RNA must be
 	## distinguishable by shape, never color alone. Set once at spawn time
@@ -366,6 +377,20 @@ class _HaloDot extends Node2D:
 			var descent = font.get_descent(font_size)
 			var ssize = font.get_string_size(base_type, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 			var baseline_y = (ascent - descent) * 0.5
+			# Rotate the GLYPH ONLY, not the whole _HaloDot node. Rotating the
+			# node would work today purely because a circle is rotation-invariant
+			# and a rounded square is invariant under exactly 90 degrees — i.e. it
+			# would rely on two independent choices (the camera angle, the particle
+			# shape) coincidentally agreeing, which is exactly the class of thing
+			# this project doesn't do. A non-90 angle or a non-symmetric particle
+			# would break it silently. This is robust to both.
+			#
+			# The glyph is already positioned symmetrically about the dot's origin
+			# (x spans +/- ssize.x/2, baseline_y centres the cap height), so
+			# rotating about Vector2.ZERO spins it around the particle's own centre.
+			# No reset needed: draw_string is the last call in _draw(), and the
+			# transform is identity when label_rotation is 0.0.
+			draw_set_transform(Vector2.ZERO, label_rotation, Vector2.ONE)
 			draw_string(font, Vector2(-ssize.x / 2.0, baseline_y), base_type,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, label_color)
 

@@ -234,6 +234,26 @@ func _boot_with_random_sequence() -> void:
 ## as it does its own thing — its disappearing/reappearing is itself part
 ## of the "leading is steady, lagging chases" contrast this view exists to
 ## teach, not something to compensate for.
+## Frame providers compute their own zoom, so they need the viewport extent
+## that currently corresponds to a given WORLD axis. ZoomManager owns that
+## mapping (VerticalModeDesign.md) — ask it rather than reading get_viewport()
+## here, so exactly one file knows which way is up. Fallbacks match the
+## previous inline defaults for the no-viewport case.
+## The glyph counter-rotation, asked of ZoomManager rather than derived here —
+## same single-source-of-truth reason as _zoom_along_extent() above. 0.0 in
+## horizontal mode, so every set_label_rotation() call below is a no-op there.
+func _zoom_label_rotation() -> float:
+	var zm = get_node_or_null("%ZoomManager")
+	return zm.get_label_counter_rotation() if zm != null else 0.0
+
+func _zoom_along_extent() -> float:
+	var zm = get_node_or_null("%ZoomManager")
+	return zm.get_along_extent() if zm != null else 1152.0
+
+func _zoom_cross_extent() -> float:
+	var zm = get_node_or_null("%ZoomManager")
+	return zm.get_cross_extent() if zm != null else 648.0
+
 func _zoom_frame_helicase_level2() -> Dictionary:
 	if helicase_node == null or not is_instance_valid(helicase_node):
 		return {}
@@ -260,8 +280,10 @@ func _anchor_centered_frame(anchor: Vector2, context: Array, fit_pct: float) -> 
 		max_dx = max(max_dx, abs(p.x - anchor.x))
 		max_dy = max(max_dy, abs(p.y - anchor.y))
 	var size: Vector2 = Vector2(max(max_dx * 2.0, 1.0), max(max_dy * 2.0, 1.0))
-	var viewport_size: Vector2 = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1152, 648)
-	var target_zoom: float = min((viewport_size.x * fit_pct) / size.x, (viewport_size.y * fit_pct) / size.y)
+	# size.x is a world-x span, size.y a world-y span. The extent helpers supply
+	# whichever viewport dimension each currently maps to — the rotation is
+	# exactly 90 degrees, so the box stays axis-aligned and needs no transform.
+	var target_zoom: float = minf((_zoom_along_extent() * fit_pct) / size.x, (_zoom_cross_extent() * fit_pct) / size.y)
 	return {zoom = target_zoom, position = anchor}
 
 func _zoom_frame_helicase_level3() -> Dictionary:
@@ -279,8 +301,9 @@ func _helicase_footprint_frame(fit_pct: float) -> Dictionary:
 	var footprint_height: float = 2.0 * helicase_ring.ring_radius + helicase_ring.max_blob_height
 	if footprint_height <= 0.0:
 		return {}
-	var viewport_height: float = get_viewport().get_visible_rect().size.y if get_viewport() else 648.0
-	var target_zoom: float = (viewport_height * fit_pct) / footprint_height
+	# footprint_height is a world-y span — i.e. ACROSS the track — so it fits
+	# against the cross-axis viewport extent in both orientations.
+	var target_zoom: float = (_zoom_cross_extent() * fit_pct) / footprint_height
 	return {zoom = target_zoom, position = helicase_node.global_position}
 
 ## Reuses helicase_node's own modulate.a — the exact signal it already sets
@@ -949,15 +972,21 @@ func _on_helicase_ring_drag_started() -> void:
 ## conversion replication_manager.gd uses for both polymerase clamps, so
 ## drag feel is identical across all three enzymes regardless of which one
 ## was grabbed.
-func _on_helicase_ring_drag_delta(cumulative_px: float) -> void:
+func _on_helicase_ring_drag_delta(cumulative_px: Vector2) -> void:
 	var zoom_mgr = get_node_or_null("%ZoomManager")
 	if zoom_mgr == null or nucleotide_slot_spacing <= 0.0:
 		return
 	var zoom_x: float = zoom_mgr.zoom.x
 	if zoom_x <= 0.0:
 		return
+	# The enzyme reports both axes; picking the along-track one is decided here,
+	# where zoom_mgr is already in hand. Needs no sign flip: horizontally, drag
+	# right (+screen x) is world +x is forward; vertically, world +x maps to
+	# screen +y, which is DOWN — so drag down is forward. Positive is forward in
+	# both. zoom is uniform (Vector2(z, z)), so px_per_slot is axis-independent.
+	var along_px: float = cumulative_px.y if zoom_mgr.vertical_mode else cumulative_px.x
 	var px_per_slot: float = nucleotide_slot_spacing * zoom_x
-	var slot_delta: int = int(round(cumulative_px / px_per_slot))
+	var slot_delta: int = int(round(along_px / px_per_slot))
 	request_drag_scrub(_ring_drag_start_index + slot_delta)
 
 # ==========================================
@@ -1011,6 +1040,7 @@ func _spawn_nucleotide_slots():
 			%ThemeManager.base_label_color
 		)
 		nitrogen_base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
+		nitrogen_base.set_label_rotation(_zoom_label_rotation())
 
 		var x = row_start_x + i * nucleotide_slot_spacing
 		nucleotide_original_x.append(x)
@@ -1032,6 +1062,7 @@ func _spawn_top_strand():
 		base.set_radius(%ThemeManager.base_radius)
 		base.set_colors(_get_base_fill(base_char), %ThemeManager.base_label_color)
 		base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
+		base.set_label_rotation(_zoom_label_rotation())
 
 		top_strand_slots.append(slot)
 		top_strand_bases.append(base)
@@ -1068,6 +1099,7 @@ func _spawn_marker(marker_type: String, world_pos: Vector2) -> Node2D:
 	marker.set_radius(%ThemeManager.base_radius)
 	marker.set_colors(%ThemeManager.marker_color, %ThemeManager.marker_font_color)
 	marker.set_font(%ThemeManager.marker_font_size, %ThemeManager.marker_font)
+	marker.set_label_rotation(_zoom_label_rotation())
 	return marker
 
 func _get_base_fill(base_type: String) -> Color:
@@ -1230,6 +1262,9 @@ func _setup_helicase():
 	helicase_ring.front_z = %ThemeManager.helicase_ring_front_z
 	helicase_ring.back_z = %ThemeManager.helicase_ring_back_z
 	helicase_ring.ring_skew_deg = %ThemeManager.helicase_ring_skew_deg
+	# helicase_ring.gd holds no external references by design, so this is
+	# pushed like every other param above rather than looked up there.
+	helicase_ring.label_counter_rotation = _zoom_label_rotation()
 	helicase_node.add_child(helicase_ring)
 	helicase_ring.scrub_drag_started.connect(_on_helicase_ring_drag_started)
 	helicase_ring.scrub_drag_delta.connect(_on_helicase_ring_drag_delta)
