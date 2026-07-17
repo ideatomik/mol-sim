@@ -1,8 +1,0 @@
-[gd_scene format=3 uid="uid://cq63uvytfx2ti"]
-
-[ext_resource type="Script" uid="uid://q10cn3cv3cq5" path="res://scripts/loop_test.gd" id="1_looptest"]
-
-[node name="LoopTest" type="Node2D" unique_id=1180545743]
-script = ExtResource("1_looptest")
-num_slots = 40
-auto_play = true

@@ -94,6 +94,50 @@ var _free_camera_dragging: bool = false
 var _free_camera_drag_last_mouse: Vector2 = Vector2.ZERO
 var _free_camera_recenter_tween: Tween = null  # separate from _pan_release_tween — tweens a Vector2, not pan_offset_x
 
+# ---------- Follow mode (double-click an enzyme) ----------
+# A FOURTH mutually-exclusive camera state, alongside free camera and the
+# level-based target system above — not a variant of either. Like target
+# mode, position is auto-derived every frame from the target's own
+# frame-provider (see _compute_follow_position()); like free camera, zoom is
+# held independently in a local var and only ever changed by scroll, never
+# by _process(). The frame provider's own zoom half is deliberately ignored —
+# see FollowModeDesign's "manual zoom + auto position" framing.
+#
+# Entered/switched via request_follow(id) — double-click on an enzyme's own
+# click region (helicase_ring.gd / polymerase_clamp.gd, same region
+# drag-to-scrub already uses). A second double-click on the ALREADY-followed
+# enzyme instead toggles highlight (request_follow()'s own branch) rather
+# than re-entering. Exited via: double-click on empty background
+# (routes through reset_zoom(), same as ResetZoomButton), or a quick
+# press-release tap on empty background (see _follow_paused below).
+var _follow_mode: bool = false
+var _follow_target_id: String = ""
+var _follow_zoom: float = 1.0
+
+# A background press while following doesn't immediately decide what it is —
+# it could resolve as a tap (drop follow, enter free camera), a hold (pause
+# in place), or a hold-then-drag (pan), and the difference is only knowable
+# at release (or once motion happens). So a press always freezes the camera
+# in place first (_follow_paused = true, position/zoom held constant by
+# _process() skipping its follow branch), then release/motion resolve which
+# of the three outcomes actually happened.
+var _follow_paused: bool = false
+var _follow_pause_moved: bool = false
+var _follow_pause_press_ticks: int = 0
+var _follow_pause_position: Vector2 = Vector2.ZERO
+var _follow_pause_drag_last_mouse: Vector2 = Vector2.ZERO
+const FOLLOW_PAUSE_TAP_THRESHOLD_MSEC: int = 250  # below this + no movement = a tap, not a hold. NOT YET TUNED.
+
+# Per ZoomDesign.md's own anticipated "critically-damped-spring clamp" note
+# on follow speed: resuming from a pause/drag eases back toward the LIVE
+# target position (recomputed every frame, not a frozen snapshot — the
+# followed enzyme keeps moving during the ease) rather than snapping
+# instantly. Bounded by a fixed duration rather than a distance epsilon,
+# since a constant-velocity target never lets a pure distance check settle.
+var _follow_resuming: bool = false
+var _follow_resume_elapsed: float = 0.0
+var _follow_resume_start_position: Vector2 = Vector2.ZERO
+
 # id -> {frame_fns: Dictionary[int, Callable], entry_level: int, display_name: String, is_visible_fn: Callable}
 var _targets: Dictionary = {}
 var _target_order: Array[String] = []  # registration order, used for the dropdown + cycling
@@ -192,11 +236,25 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.pressed:
 				if get_viewport().is_input_handled():
 					return  # an enzyme already claimed this click
+				if event.double_click:
+					# The other half of "double-click an enzyme to follow
+					# it": double-click on empty background exits follow (or
+					# free camera, or a selected target) back to level 1.
+					reset_zoom()
+					get_viewport().set_input_as_handled()
+					return
+				if _follow_mode:
+					_enter_follow_pause(event.position)
+					get_viewport().set_input_as_handled()
+					return
 				_enter_free_camera_mode()
 				if _free_camera_recenter_tween != null and _free_camera_recenter_tween.is_valid():
 					_free_camera_recenter_tween.kill()
 				_free_camera_dragging = true
 				_free_camera_drag_last_mouse = event.position
+				get_viewport().set_input_as_handled()
+			elif _follow_paused:
+				_exit_follow_pause()
 				get_viewport().set_input_as_handled()
 			elif _free_camera_dragging:
 				_free_camera_dragging = false
@@ -204,27 +262,59 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			if get_viewport().is_input_handled():
 				return
-			_free_camera_scroll_zoom(event.position, 1)
+			if _follow_mode:
+				_follow_nudge_zoom(1)
+			else:
+				_free_camera_scroll_zoom(event.position, 1)
 			get_viewport().set_input_as_handled()
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			if get_viewport().is_input_handled():
 				return
-			_free_camera_scroll_zoom(event.position, -1)
+			if _follow_mode:
+				_follow_nudge_zoom(-1)
+			else:
+				_free_camera_scroll_zoom(event.position, -1)
 			get_viewport().set_input_as_handled()
-	elif event is InputEventMouseMotion and _free_camera_dragging:
-		# Standard "grab canvas" convention: content follows the mouse, so
-		# the camera moves OPPOSITE the drag, converted from screen pixels
-		# to world units via the current zoom.
-		var delta_screen: Vector2 = event.position - _free_camera_drag_last_mouse
-		_free_camera_drag_last_mouse = event.position
-		if _free_camera_zoom > 0.0:
-			_free_camera_position -= _screen_to_world_offset(delta_screen, _free_camera_zoom)
-			zoom = Vector2(_free_camera_zoom, _free_camera_zoom)
-			global_position = _free_camera_position
+	elif event is InputEventMouseMotion:
+		if _follow_paused:
+			_follow_pause_drag(event.position)
+		elif _free_camera_dragging:
+			# Standard "grab canvas" convention: content follows the mouse, so
+			# the camera moves OPPOSITE the drag, converted from screen pixels
+			# to world units via the current zoom.
+			var delta_screen: Vector2 = event.position - _free_camera_drag_last_mouse
+			_free_camera_drag_last_mouse = event.position
+			if _free_camera_zoom > 0.0:
+				_free_camera_position -= _screen_to_world_offset(delta_screen, _free_camera_zoom)
+				zoom = Vector2(_free_camera_zoom, _free_camera_zoom)
+				global_position = _free_camera_position
 
 func _process(delta):
 	if _free_camera_mode:
 		return  # camera fully owned by _unhandled_input() while this is active
+
+	if _follow_mode:
+		# Same fade-out safety net as the level-based target branch below —
+		# if the followed enzyme fades out mid-session, drop back to level 1
+		# rather than leaving the camera pointed at nothing.
+		if not is_target_visible(_follow_target_id):
+			exit_follow_mode()
+			_transition_to_level(1)
+			return
+		if not _follow_paused:
+			if _follow_resuming:
+				_follow_resume_elapsed += delta
+				var t: float = clamp(_follow_resume_elapsed / tm.zoom_follow_resume_duration, 0.0, 1.0)
+				var eased_t: float = 1.0 - pow(1.0 - t, 3.0)  # cubic ease-out, matching this file's tween curves elsewhere
+				global_position = _follow_resume_start_position.lerp(_compute_follow_position(), eased_t)
+				if t >= 1.0:
+					_follow_resuming = false
+			else:
+				global_position = _compute_follow_position()
+			zoom = Vector2(_follow_zoom, _follow_zoom)
+		return  # position/zoom fully owned by follow mode while this is active —
+		        # same "one writer" shape as free camera above; arrow-key pan and
+		        # the level-based tracking below don't apply here.
 
 	# Live tracking (_apply_live_frame / _frame_strand, in the branch below)
 	# already recomputes from the current viewport size every frame, so no
@@ -275,6 +365,11 @@ func _process(delta):
 	# frame from whatever the frame-provider returns right now. Never
 	# tweened, so this is scrub-safe by construction (same principle as
 	# helicase_x being derived fresh each frame rather than cached).
+	# Let an in-flight level/target transition tween finish uninterrupted —
+	# live-tracking resumes once it completes, rather than racing it every
+	# frame with a direct snap to the same properties it's animating.
+	if _transition_tween != null and _transition_tween.is_valid():
+		return
 	if current_target_id != "" and zoom_level >= _target_entry_level(current_target_id) and _targets.has(current_target_id):
 		_apply_live_frame()
 	else:
@@ -373,6 +468,7 @@ func select_target(id: String) -> void:
 		push_warning("ZoomManager: target '%s' isn't visible on screen yet, refusing to zoom in" % id)
 		return
 	_free_camera_mode = false  # exits free camera — picking a target is one of its two explicit exits
+	exit_follow_mode()  # a different input method (dropdown, cycle) picking a target should override follow too
 	current_target_id = id
 	_transition_to_level(_target_entry_level(id))
 	target_changed.emit(id)
@@ -482,10 +578,12 @@ func _tween_pan_to_zero() -> void:
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 ## Full reset: clears the selected target AND returns to level 1, animated.
-## Also the second (and only other) explicit exit from free-camera mode —
-## per your call, a clean snap back to level 1 via ResetZoomButton.
+## Also the explicit exit from free-camera mode AND follow mode — per your
+## call, a clean snap back to level 1 via ResetZoomButton or a double-click
+## on empty background.
 func reset_zoom() -> void:
 	_free_camera_mode = false
+	exit_follow_mode()
 	current_target_id = ""
 	_transition_to_level(1)
 
@@ -493,6 +591,7 @@ func reset_zoom() -> void:
 ## animated pan across the old track would look wrong.
 func reset_zoom_instant() -> void:
 	_free_camera_mode = false
+	exit_follow_mode()
 	current_target_id = ""
 	zoom_level = 1
 	pan_offset_x = 0.0
@@ -550,6 +649,17 @@ func scrub_snap() -> void:
 	if _free_camera_mode:
 		return  # scrubbing changes which base is synthesized, not where the
 		        # player is looking — free camera stays exactly where it is
+	if _follow_mode:
+		# Bypass the resume-smoothing clamp entirely on scrub — jump straight
+		# to the live target. Same "clamps are live-play-only, scrub always
+		# snaps instantly" split every other scrub-driven value in this file
+		# already follows (see the class of bug this exact omission caused
+		# for lagging_polymerase_tween, noted below).
+		_follow_resuming = false
+		if not _follow_paused:
+			global_position = _compute_follow_position()
+			zoom = Vector2(_follow_zoom, _follow_zoom)
+		return
 	if _transition_tween != null and _transition_tween.is_valid():
 		_transition_tween.kill()
 	if _pan_release_tween != null and _pan_release_tween.is_valid():
@@ -769,6 +879,129 @@ func _compute_free_camera_min_zoom() -> float:
 	if not "track_length" in simulation or simulation.track_length <= 0.0:
 		return 0.1
 	return _compute_track_fit_zoom(get_along_extent(), simulation.track_length)
+
+# ==========================================
+# FOLLOW MODE (double-click an enzyme)
+# ==========================================
+
+## Single entry point for "double-click an enzyme" input — mirrors
+## select_target()'s role as the convergence point input methods funnel
+## through (helicase_ring.gd / polymerase_clamp.gd's own follow_requested
+## signal, connected by their owning scripts). Two behaviors, matching your
+## spec:
+## - Not already following `id` -> enter/switch onto it. Same call covers
+##   both "first double-click" and "double-click a DIFFERENT enzyme while
+##   already following one" (switches directly, no need to route through
+##   reset_zoom() first).
+## - Already following `id` -> a second double-click on the SAME enzyme
+##   toggles highlight instead — the second trigger for what HighlightButton
+##   does, per your call.
+func request_follow(id: String) -> void:
+	if not _targets.has(id) or not is_target_visible(id):
+		return
+	if _follow_mode and _follow_target_id == id:
+		set_highlight_enabled(not highlight_enabled)
+		return
+	_free_camera_mode = false
+	_follow_paused = false
+	_follow_resuming = false
+	_follow_mode = true
+	_follow_target_id = id
+	current_target_id = id  # keeps get_enzyme_highlight_dim()/get_strand_highlight_dim() working unchanged
+	# Seed from whatever zoom is already showing — "keep the wheel-set zoom
+	# while following" — then clamp into the follow-specific (tighter) range,
+	# same seed-then-clamp shape _enter_free_camera_mode()/_free_camera_scroll_zoom()
+	# already use for their own zoom var.
+	_follow_zoom = clamp(zoom.x, tm.zoom_follow_min_zoom, tm.zoom_free_camera_max_zoom_in)
+	if _transition_tween != null and _transition_tween.is_valid():
+		_transition_tween.kill()
+	target_changed.emit(id)
+
+## The only way follow mode ends without going through reset_zoom() (target
+## fade-out in _process(), or select_target() picking something via a
+## different input method). Doesn't touch current_target_id or zoom_level —
+## callers that need those cleared too (reset_zoom(), the fade-out branch in
+## _process()) do that themselves right after, same division of labor
+## _free_camera_mode's own clearing already has.
+func exit_follow_mode() -> void:
+	_follow_mode = false
+	_follow_target_id = ""
+	_follow_paused = false
+	_follow_resuming = false
+
+func follow_mode() -> bool:
+	return _follow_mode
+
+## Position only — the followed target's own frame provider's zoom half is
+## deliberately ignored (follow mode's zoom is independently held in
+## _follow_zoom, never derived). Uses the target's entry_level framing
+## ("regional context") rather than level 3 ("exclusively focused"): a
+## continuously-moving follow shot wants the steadier, wider framing, not
+## the tightest one. World-y is always pinned to center_y regardless of what
+## the provider computed — "the strand stays centred and only scrolls
+## vertically" (in vertical mode; the world-x/y meaning of "vertical" is
+## still ZoomManager's own rotation, unchanged by follow mode).
+func _compute_follow_position() -> Vector2:
+	var frame = _compute_target_frame(_target_entry_level(_follow_target_id))
+	var simulation = get_parent()
+	var mid_y: float = simulation.center_y if "center_y" in simulation else global_position.y
+	return Vector2(frame.position.x, mid_y)
+
+## Scroll wheel while following — same cursor-independent nudge shape as
+## _free_camera_nudge_zoom() (no cursor anchor point needed since position
+## isn't player-controlled here), clamped into the follow-specific range.
+func _follow_nudge_zoom(direction: int) -> void:
+	var step: float = tm.zoom_free_camera_scroll_step
+	_follow_zoom = _follow_zoom * step if direction > 0 else _follow_zoom / step
+	_follow_zoom = clamp(_follow_zoom, tm.zoom_follow_min_zoom, tm.zoom_free_camera_max_zoom_in)
+
+## A background press while following freezes the camera in place
+## immediately — "click and hold: hold camera in current place" — rather
+## than waiting to see whether it resolves into a tap, a hold, or a drag.
+## _process()'s follow branch skips live-tracking whenever _follow_paused is
+## true, so simply not writing position/zoom here IS the freeze.
+func _enter_follow_pause(press_screen_position: Vector2) -> void:
+	_follow_paused = true
+	_follow_pause_moved = false
+	_follow_pause_press_ticks = Time.get_ticks_msec()
+	_follow_pause_position = global_position
+	_follow_pause_drag_last_mouse = press_screen_position
+
+## Any motion during a follow-pause is a drag — pan the camera exactly like
+## free camera's own drag math, but writing _follow_pause_position (not
+## _free_camera_position) and using the held _follow_zoom (not
+## _free_camera_zoom) for the screen->world conversion, since we're not
+## actually in free-camera mode.
+func _follow_pause_drag(mouse_screen: Vector2) -> void:
+	_follow_pause_moved = true
+	var delta_screen: Vector2 = mouse_screen - _follow_pause_drag_last_mouse
+	_follow_pause_drag_last_mouse = mouse_screen
+	if _follow_zoom > 0.0:
+		_follow_pause_position -= _screen_to_world_offset(delta_screen, _follow_zoom)
+		global_position = _follow_pause_position
+		zoom = Vector2(_follow_zoom, _follow_zoom)
+
+## Release resolves the pause into one of two outcomes:
+## - A quick tap (no movement, released inside the threshold) -> a genuine
+##   "full click," per your spec: drop follow, enter free camera from
+##   wherever the camera already is (unchanged, since a non-moved pause
+##   never wrote position/zoom).
+## - Anything else (held past the threshold, and/or dragged) -> resume
+##   follow. _process() picks live-tracking back up next frame; if the
+##   target moved during the pause, position.x will jump to catch up rather
+##   than ease back — matches "return to follow state" as specified, easing
+##   can be layered on later if the jump reads as jarring in practice.
+func _exit_follow_pause() -> void:
+	var held_msec: int = Time.get_ticks_msec() - _follow_pause_press_ticks
+	var was_tap: bool = not _follow_pause_moved and held_msec < FOLLOW_PAUSE_TAP_THRESHOLD_MSEC
+	_follow_paused = false
+	if was_tap:
+		exit_follow_mode()
+		_enter_free_camera_mode()
+	else:
+		_follow_resuming = true
+		_follow_resume_elapsed = 0.0
+		_follow_resume_start_position = global_position
 
 # ==========================================
 # HIGHLIGHT — queried by owning scripts, never written here (see file banner).

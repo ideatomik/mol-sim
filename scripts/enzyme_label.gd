@@ -18,9 +18,13 @@ class_name EnzymeLabel
 #
 # CENTERING: pivot_offset is kept at size * 0.5, and position is derived from
 # set_anchor_pos()'s point minus that pivot — so the label's own CENTER, not
-# its top-left, stays pinned to the anchor regardless of text length. This
-# means a locale change that changes text length re-centers automatically via
-# the resized signal, with no caller involvement.
+# its top-left, stays pinned to the anchor regardless of text length. A text
+# change that GROWS the label re-centers automatically via the resized
+# signal; SHRINKING needs an explicit reset_size() first (see set_key()) —
+# Godot's own Control/Container sizing reliably grows to fit a child's
+# minimum size but doesn't reliably shrink back down on its own. Found via a
+# real repro: switching topology mid-simulation left "Pol III"'s label at
+# "Pol epsilon"'s width, with dead space in front of the shorter text.
 #
 # NOTE: named set_anchor_pos(), not set_anchor() — Control already defines a
 # built-in set_anchor(side, anchor, keep_offset, push_opposite_anchor) with an
@@ -67,11 +71,20 @@ func set_key(key: String) -> void:
 	_ensure_rich_text()
 	_key = key
 	_rich_text.text = key
+	# Forces an immediate recompute of this panel's size from RichTextLabel's
+	# (now-updated) minimum size — see the CENTERING doc comment above for
+	# why this can't be left to the resized signal alone when the new text
+	# is SHORTER than the old.
+	reset_size()
+	_recenter()
 
 ## Manual re-translate, in case a future locale-change path needs it.
 func refresh_translation() -> void:
 	_ensure_rich_text()
 	_rich_text.text = _key
+	reset_size()  # same shrink case as set_key() — a locale switch can go
+	              # to a shorter word just as easily as a topology switch can.
+	_recenter()
 
 ## anchor_pos is in the PARENT's local space — the point the label's own
 ## center should stay pinned to, regardless of text length or mirroring.

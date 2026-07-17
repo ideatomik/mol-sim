@@ -49,7 +49,12 @@ extends CanvasLayer
 @onready var recenter_pan_button: Button = get_node_or_null("%RecenterPanButton")
 @onready var ncloud_toggle: Button = get_node_or_null("%NCloudToggle")
 
-var zoom_mgr: Camera2D = null  # %ZoomManager, cached in _ready()
+var zoom_mgr: Camera2D = null  # %ZoomManager — self-resolved in _ready() for the
+                                # horizontal layout; injected by simulation.gd's
+                                # _swap_in_vertical_player_ui() for the vertical
+                                # layout, whose runtime-instantiated scene can't
+                                # reach a sibling's unique name across the
+                                # ownership boundary.
 
 var _is_dragging: bool = false
 
@@ -156,7 +161,9 @@ func _ready():
 			wobble_toggle.button_pressed = tm.wobble_enabled
 
 		# Connect zoom controls
-		zoom_mgr = get_node_or_null("%ZoomManager")
+		# Connect zoom controls
+		if zoom_mgr == null:  # already injected for vertical — see var declaration above
+			zoom_mgr = get_node_or_null("%ZoomManager")		
 		if zoom_mgr:
 			# reset_zoom_button is NOT optional — it exists in both layouts.
 			reset_zoom_button.pressed.connect(_on_reset_zoom_pressed)
@@ -437,6 +444,7 @@ func _on_zoom_in_pressed():
 	zoom_mgr.set_zoom_level(zoom_mgr.zoom_level + 1)
 
 func _on_reset_zoom_pressed():
+	print("[RESETZOOM] button pressed")
 	zoom_mgr.reset_zoom()
 
 ## LongSequenceDesign.md Part 3 — explicit recenter action, distinct from
@@ -640,3 +648,4 @@ func _update_button_states():
 	fast_forward.disabled = (count >= total)
 
 	stop_button.text = "" if _is_simulation_done() else _stop_icon_default
+

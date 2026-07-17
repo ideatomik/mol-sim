@@ -338,6 +338,20 @@ extends Node
 ## step out). NOT YET TUNED.
 @export var zoom_free_camera_scroll_step: float = 1.15
 
+@export_subgroup("Follow Mode")
+## Zoom-out floor while following (double-click an enzyme). Deliberately its
+## own raw tunable rather than reusing free camera's whole-track-fit floor —
+## a follow shot should stay reasonably tight even at its most zoomed-out,
+## not fall back to seeing the entire track. NOT YET TUNED — placeholder
+## pending real numbers in-engine.
+@export var zoom_follow_min_zoom: float = 1.5
+## Seconds for the cubic-ease-out catch-up after a background pause/drag
+## releases back into follow mode — see ZoomDesign.md's "critically-damped-
+## spring clamp" note on follow speed. Deliberately short; this is closing a
+## small hand-off gap, not a deliberate camera move like
+## zoom_level_transition_duration. NOT YET TUNED.
+@export var zoom_follow_resume_duration: float = 0.35
+
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:
 	match base_type:

@@ -250,6 +250,7 @@ func initialize(p_sim: Node) -> void:
 	lagging_clamp.setup(sim, false)
 	lagging_clamp.scrub_drag_started.connect(_on_lagging_clamp_drag_started)
 	lagging_clamp.scrub_drag_delta.connect(_on_lagging_clamp_drag_delta)
+	lagging_clamp.follow_requested.connect(_on_lagging_clamp_follow_requested)
 	lagging_halo = PolymeraseHalo.new()
 	lagging_polymerase.add_child(lagging_halo)
 	lagging_halo.setup(sim, false)
@@ -824,12 +825,17 @@ func _on_lagging_clamp_drag_started() -> void:
 func _on_lagging_clamp_drag_delta(cumulative_px: Vector2) -> void:
 	_request_clamp_drag_scrub(_lagging_drag_start_index, cumulative_px)
 
+func _on_lagging_clamp_follow_requested() -> void:
+	if zoom_mgr != null:
+		zoom_mgr.request_follow("lagging_polymerase")
+
 func _request_clamp_drag_scrub(start_index: int, cumulative_px: Vector2) -> void:
 	if zoom_mgr == null or sim.nucleotide_slot_spacing <= 0.0:
 		return
 	var zoom_x: float = zoom_mgr.zoom.x
 	if zoom_x <= 0.0:
 		return
+	print("[FOLLOWCLICK] LP request_clamp_drag_scrub, cumulative_px=", cumulative_px)
 	# See the matching comment in simulation.gd's _on_helicase_ring_drag_delta()
 	# for why no sign flip is needed. Both clamps funnel through here, so the
 	# axis choice is made once for the pair.

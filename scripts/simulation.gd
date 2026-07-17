@@ -1,6 +1,43 @@
 extends Node2D
 
 # ==========================================
+# v 77 — Vertical mode
+# - New _swap_in_vertical_player_ui(zoom_mgr), called from _ready(): when
+#   ZoomManager.vertical_mode is on, replaces the editor-wired PlayerUI
+#   instance with a runtime-instantiated VerticalPlayerUI.tscn (same script,
+#   player_ui.gd, renamed "PlayerUI" to keep the node path stable). Falls
+#   back to the horizontal UI with a push_error() if the swap can't find what
+#   it needs, rather than soft-locking — same degrade-gracefully shape as
+#   v76's popup fallback above.
+# - _zoom_label_rotation() pushes ZoomManager.get_label_counter_rotation()
+#   into helicase_ring/polymerase clamps' labels — this file stays the single
+#   place that asks, rather than five enzyme scripts each reading
+#   get_viewport() and pre-judging an axis. See VerticalModeDesign.md.
+# - request_drag_scrub()'s axis pick (zoom_mgr.vertical_mode) is the only
+#   place drag-to-scrub itself needed to change — screen-space delta in,
+#   world-x-equivalent slot delta out, same either way.
+# ==========================================
+
+# ==========================================
+# v 77 continued — Follow mode & camera fixes
+# - New _on_helicase_ring_follow_requested(), connected alongside the
+#   existing scrub_drag_started/scrub_drag_delta wiring: routes
+#   helicase_ring.gd's new follow_requested signal (double-click) into
+#   zoom_mgr.request_follow("helicase"). Lagging polymerase's own connection
+#   lives in replication_manager.gd, which owns that clamp directly — leading
+#   polymerase gets the same signal for free (shared polymerase_clamp.gd) but
+#   nothing connects it, by product decision.
+# - _swap_in_vertical_player_ui() now also injects vertical.zoom_mgr = zoom_mgr
+#   by hand, same treatment as the pre-existing vertical.simulation = self one
+#   line above it — %ZoomManager's own lookup in player_ui.gd's _ready()
+#   can't cross the scene-ownership boundary a runtime-instantiated child
+#   scene sits behind, which is what silently broke ResetZoomButton in
+#   vertical mode until this pass. See STATUS.md's "Follow Mode, Click-Drag
+#   Dead Zone & Related Camera Fixes" for the full writeup, and
+#   ZoomDesign.md's As-Built addendum for Follow Mode's own design.
+# ==========================================
+
+# ==========================================
 # v 76 — Complexity setup startup gate
 # - _ready() no longer auto-generates a random default sequence and calls
 #   initialize_simulation() directly. Instead it shows ComplexitySetupPopup
@@ -1025,6 +1062,11 @@ func _on_helicase_ring_drag_delta(cumulative_px: Vector2) -> void:
 	var slot_delta: int = int(round(along_px / px_per_slot))
 	request_drag_scrub(_ring_drag_start_index + slot_delta)
 
+func _on_helicase_ring_follow_requested() -> void:
+	var zoom_mgr = get_node_or_null("%ZoomManager")
+	if zoom_mgr != null:
+		zoom_mgr.request_follow("helicase")
+
 # ==========================================
 # HELICASE SIGNAL HANDLERS
 # ==========================================
@@ -1304,6 +1346,7 @@ func _setup_helicase():
 	helicase_node.add_child(helicase_ring)
 	helicase_ring.scrub_drag_started.connect(_on_helicase_ring_drag_started)
 	helicase_ring.scrub_drag_delta.connect(_on_helicase_ring_drag_delta)
+	helicase_ring.follow_requested.connect(_on_helicase_ring_follow_requested)
 
 	helicase_node.position = Vector2(helicase_x, center_y)
 	add_child(helicase_node)

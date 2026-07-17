@@ -94,24 +94,46 @@ signal scrub_drag_started()
 ## a slot index. See VerticalModeDesign.md Part 4.
 signal scrub_drag_delta(cumulative_px: Vector2)  # screen-space, since drag start
 signal scrub_drag_ended()
+## FollowModeDesign — double-click within the same click region drag-to-scrub
+## already uses. Emitted for BOTH leading and lagging (this file is shared,
+## _is_leading-agnostic like the rest of its click handling) — follow mode is
+## currently lagging-only by product decision, scoped at the connection site
+## in replication_manager.gd, not here.
+signal follow_requested()
 
 var _dragging: bool = false
+## Same dead-zone fix as helicase_ring.gd — see its var block for the full
+## rationale (found via [FOLLOWCLICK] prints: LP's smaller click region made
+## the spurious-pause bug near-guaranteed, vs. intermittent on helicase).
+var _pending: bool = false
 var _drag_start_screen: Vector2 = Vector2.ZERO
+const DRAG_DEADZONE_PX: float = 6.0  # NOT YET TUNED
 var _click_half_width: float = 0.0
 var _click_half_height: float = 0.0
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			if not _dragging and _point_in_click_region(get_global_mouse_position()):
-				_dragging = true
+			if not _dragging and not _pending and _point_in_click_region(get_global_mouse_position()):
+				if event.double_click:
+					follow_requested.emit()
+					get_viewport().set_input_as_handled()
+					return
+				_pending = true
 				_drag_start_screen = event.position
-				scrub_drag_started.emit()
 				get_viewport().set_input_as_handled()
 		elif _dragging:
 			_dragging = false
 			scrub_drag_ended.emit()
-	elif event is InputEventMouseMotion and _dragging:
+		elif _pending:
+			_pending = false
+	elif event is InputEventMouseMotion and (_dragging or _pending):
+		if _pending:
+			if (event.position - _drag_start_screen).length() < DRAG_DEADZONE_PX:
+				return
+			_pending = false
+			_dragging = true
+			scrub_drag_started.emit()
 		scrub_drag_delta.emit(event.position - _drag_start_screen)
 
 ## Asked of ZoomManager through _sim — the same reach this file already makes
