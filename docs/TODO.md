@@ -142,6 +142,53 @@ tecnológico; DNA replication engine deliberately excluded (item 8.5(a) —
 
 ---
 
+## PIPE — 29/07 deadline SKIPPED, decision made 22 July
+
+**Status changed 22 July.** Does not overturn the 17 July finding (Auxílio
+PIPE is genuinely viable as a grant track, Bolsa PE is genuinely dead) — both
+still true. What changed is the decision to *not* submit into this specific
+chamada's 29/07 pré-proposta deadline.
+
+**Why:** budget reality check surfaced a near-zero orçamento for the
+software-only Krebs spike — no support staff needed, current PC handles the
+sim fine, no paid software beyond the Claude subscription. Against a R$500k
+ceiling, that's an honest but weak Fase 1 pitch, and forcing a thin proposal
+into a deadline that was actively causing stress wasn't the right trade.
+
+**Confirmed this session: PIPE Fase 1 is not deadline-limited outside this
+specific themed chamada.** Regular PIPE Fase 1 runs in **fluxo contínuo**
+(submissions accepted anytime via SAGe, no fixed dates). A themed
+**Jornada Tecnológica — Educação** chamada is also scheduled to launch
+**13/10/2026** — a stronger thematic fit than the general-lot call this
+deadline belonged to. Missing 29/07 costs nothing structurally; none of the
+prep work (Súmula Curricular, CV, comparables research, desafio tecnológico
+framing) is lost.
+
+**New direction — physical Krebs model.** Instead of the software-only
+spike, the desafio tecnológico is being reframed around a physical/
+electromechanical tabletop translation of the gear/platform metaphor already
+in `KrebsCycleDesign.md`: a real gear train (tooth count = platform count,
+same derivation rule as the software version), ATP modeled as a powered
+3-lobed "battery" object, LEDs/small screens for signals — mechanism still
+being designed, not yet specced. The genuinely open technical question this
+raises: can a physical mechanism honor the same scrub-safety discipline the
+software enforces (jump to an arbitrary state, no passing through
+intermediate frames)? Working answer: the software instance keeps the
+jump-to-any-state property and *instructs* the physical rig into position —
+the physical model behaves like a cyclical assembly line driven by the sim,
+not an independent state machine solving scrub-safety on its own.
+
+**This week's actual focus, instead of PIPE:** Embaúba website (design
+language finished, built with Claude Design) and crowdfunding campaign
+prep — vertical social video planning started.
+
+**Still true, not lost:** the Proposta Simplificada draft, Súmula Curricular
+work, and all 17 July eligibility findings carry forward unchanged whenever
+a proposal is actually submitted — into fluxo contínuo, the Educação call,
+or a later general-lot chamada.
+
+---
+
 ## Next session — Embaúba revenue planning
 
 Requested 16 July: a dedicated session on revenue sources + agentic skills for

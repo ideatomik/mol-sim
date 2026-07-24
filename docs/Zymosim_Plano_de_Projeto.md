@@ -1,7 +1,7 @@
 # Zymosim (ex-MolSim) — Plano de Projeto e Financiamento
 
 *Documento de trabalho — Embaúba*
-*Última atualização: 10 de julho de 2026*
+*Última atualização: 22 de julho de 2026*
 
 ---
 
@@ -36,6 +36,20 @@ Ver documento de referência completo (gerado em conversa anterior) para a lista
 
 Etapas intermediárias (isocitrato desidrogenase etc.) ficam de fora do spike — arquiteturalmente seriam "mais do mesmo" uma vez provados a fusão e a transformação de trilha única.
 
+**Adendo 22/07 — pivô para modelo físico.** O desafio tecnológico agora
+central para o PIPE deixou de ser o spike só-software e passou a ser uma
+tradução física/eletromecânica em escala de mesa do metáfora de engrenagens
+já desenhada em `KrebsCycleDesign.md`: trem de engrenagens real (dentes =
+plataformas, mesma regra de derivação da versão em software), ATP como
+objeto "bateria" de 3 lóbulos energizado, LEDs/telas pequenas para sinais —
+mecanismo ainda em design, ver `PhysicalKrebsDesign.md` (a criar). A questão
+tecnológica real: um mecanismo físico consegue honrar a mesma disciplina de
+scrub-safety que o software impõe (saltar para qualquer estado, sem passar
+por quadros intermediários)? Resposta de trabalho: o software mantém a
+propriedade de salto instantâneo e *instrui* o modelo físico — o modelo
+físico funciona como uma linha de montagem cíclica comandada pela simulação,
+não como uma máquina de estados independente.
+
 ---
 
 ## 3. Nome do Produto
@@ -57,9 +71,9 @@ Etapas intermediárias (isocitrato desidrogenase etc.) ficam de fora do spike �
 
 | Iniciativa | Status / Prazo | Observações |
 |---|---|---|
-| **PIPE Jornada Tecnológica — Chamada 33/2026 (Geral)** | Pré-proposta até **29/07/2026** | Sem restrição temática; enquadramento via Proposta Simplificada, proposta completa (se enquadrada) até 28/09/2026 |
-| Esclarecimento com FAPESP sobre elegibilidade de graduando como Pesquisador Principal | E-mail a enviar para pipe-jornada@fapesp.br | O texto da chamada só exclui explicitamente mestrandos/doutorandos do papel de Pesquisador Principal — graduação não é mencionada como impeditivo |
-| **PIPE Jornada Tecnológica — 7ª Chamada, Educação** | Lançamento previsto: 13/10/2026 | Alinhamento temático direto com o produto; acompanhar publicação |
+| **PIPE Jornada Tecnológica — Chamada 33/2026 (Geral)** | **Prazo de 29/07/2026 deliberadamente não utilizado — decisão de 22/07** | Bolsa PE confirmada inelegível (matrícula em graduação quebra a dedicação exigida — resposta escrita da FAPESP, não revisitar). Auxílio PIPE (financiamento ao projeto, sem bolsa pessoal) confirmado viável em 17/07, mas o orçamento real do spike só-software ficou próximo de zero (sem equipe, sem equipamento, sem licença além da assinatura Claude) — pitch fraco para um teto de R$500 mil. Decisão: não submeter nesta chamada específica; nenhum trabalho prévio se perde |
+| **PIPE Fase 1 — fluxo contínuo** | Sempre aberto, sem prazo fixo | Confirmado em 22/07: submissões ao PIPE Fase 1 são recebidas o ano todo via SAGe, fora do calendário de chamadas temáticas. Caminho padrão se a proposta amadurecer fora da janela de uma chamada temática |
+| **PIPE Jornada Tecnológica — 7ª Chamada, Educação** | Lançamento previsto: 13/10/2026 | Alinhamento temático direto com o produto — hoje a via preferida, dado o tempo extra para desenvolver o modelo físico do Krebs antes da submissão |
 | **Programa DNA (USP/Ipen, via Cietec)** | Inscrições do lote atual encerradas | Acompanhar próximo lote (historicamente dez/jan) |
 | Agência UNESP de Inovação (AUIN) / NIT | Não explorado ainda | Vale contato direto dado o vínculo institucional já existente via incubadora do campus |
 
@@ -118,8 +132,9 @@ Etapas intermediárias (isocitrato desidrogenase etc.) ficam de fora do spike �
 
 ## 7. Pendências Abertas
 
-- [ ] Redação final da Proposta Simplificada (PIPE, prazo 29/07/2026), incorporando o enquadramento ampliado (Krebs + DNA) e o spike de prova de conceito
-- [ ] Envio do e-mail de esclarecimento para pipe-jornada@fapesp.br sobre elegibilidade como Pesquisador Principal
+- [x] ~~Redação final da Proposta Simplificada, prazo 29/07/2026~~ — prazo deliberadamente não utilizado (decisão 22/07); rascunho existente (`PIPE_ProstaSimplificada_Draft.md`) permanece válido para submissão futura via fluxo contínuo ou chamada Educação (13/10/2026)
+- [x] ~~Envio do e-mail de esclarecimento sobre elegibilidade como Pesquisador Principal~~ — respondido pela FAPESP em 17/07: viável sem Bolsa PE
+- [ ] Design do modelo físico do Ciclo de Krebs (`PhysicalKrebsDesign.md`, a criar) — trem de engrenagens, "bateria" ATP, sinalização por LED/tela
 - [ ] Spike técnico do Ciclo de Krebs (citrato sintase + malato desidrogenase + verificação de scrub na costura do ciclo) — após conclusão da Pol I
 - [ ] Checagem de disponibilidade de marca/domínio para "Zymosim" (INPI + WIPO/USPTO)
 - [ ] Confirmar suporte de repasse Stripe Connect para o Brasil (Buy Me a Coffee)
