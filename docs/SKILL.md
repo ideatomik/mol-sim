@@ -299,16 +299,43 @@ Do not make unrequested changes. Scope creep has caused reverts in this project.
 Leave debug prints in place until the feature they guard is explicitly confirmed
 stable by the user.
 
-### Version comments
-Update the version header at the top of `simulation.gd` when delivering a new
-version:
+### Version comments — three files, one owner each
+**Rule.** Each file owns exactly one thing. Do not duplicate between them.
+
+| File | Owns |
+| --- | --- |
+| `simulation.gd` header | The **current version only**. Nothing older. |
+| `CHANGELOG.md` | **All version history**, newest first. |
+| `STATUS.md` | **Current state and why** — architecture, scene structure, pinned issues, resolved-bug lessons. Not a version log. |
+
+**Procedure when delivering a new version.**
+1. Move the outgoing version's block from `simulation.gd`'s header into
+   `CHANGELOG.md`.
+2. Write the new version's block in the header.
+3. Do not leave two version blocks in the header.
+
 ```gdscript
 # ==========================================
 # v 70.x
 # - Change one
 # - Change two
+#
+# CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md.
 # ==========================================
 ```
+
+*Rationale:* before this rule, the header had accumulated five blocks and
+~87 lines before the first line of code — and the retention was arbitrary
+rather than deliberate. v77, v76, v71.x and v70.6 survived while v72–v75 had
+been pruned at some point with no record of the decision. Those four versions
+are now recoverable only from git history. Meanwhile STATUS.md already
+carried fuller accounts of several of the same passes, so the header was
+partly duplicating it with no rule for which owned what — the same
+divergence-by-duplication problem the extraction entry above describes,
+applied to prose instead of code.
+
+A documentation-only restructure is **not** itself a version bump. Bump the
+version when behavior changes, not when comments move.
 
 ---
 
@@ -611,6 +638,53 @@ job starts*, not how long its own animation takes once running. See
 `OkazakiMaturationDesign.md`'s Pol I Implementation Status for the full
 account, including the concrete tile-number check that caught the original
 proposal being wrong before it shipped.
+
+### Extract shared code by what divergence costs, not by copy count
+**Rule.** Classify the duplicated code first. Then extract.
+
+- **Pure utility** — geometric or mathematical code with no domain meaning
+  and no tuned value. Copies cannot disagree about behavior. Extract when
+  convenient.
+- **Behavioral constant** — any value or function the simulation's motion is
+  calibrated against. Examples: easing curves, pacing ratios, derived
+  geometry offsets. Copies that drift produce no error and no crash. They
+  produce motion that looks wrong. Extract on the second copy.
+
+**Alternative to extraction.** Remove the second consumer instead. Resolve
+the value at the boundary. Pass the result to the consumer. The consumer
+then holds no logic that can drift.
+
+*Rationale and history:* `procedural_shape_utils.gd` was extracted after
+`round_corners()` reached five identical copies — but that number is not the
+rule, and reading it as one gets the lesson backwards. All five of those
+files' headers had been individually flagging and deferring the extraction
+the whole time. It was a known debt carried four copies too long, not
+patience vindicated. `round_corners()` happened to be a pure utility, so the
+delay cost only tedium; the same delay on a behavioral constant would have
+cost a debugging session instead.
+
+This is the "never let two independently-tuned numbers coincidentally agree"
+rule in function form rather than constant form. The constant form has
+already bitten this project twice: the wobble-gating mismatch
+(`polymerase_y_lagging` vs `new_bottom_template_y`, differing by
+`dna_ribbons_gap / 2.0`), and the camera's stale `straight_y` read after the
+rename to `template_strand_y`.
+
+Do not over-apply this toward premature extraction. Two visuals that
+superficially resemble each other are not automatically one shared thing —
+ligase's pulse SHRINKS (pinch) while primase's GROWS, a deliberate
+distinction ThemeManager's own comments flag. An "enzyme pulse" extraction
+would have fought a divergence that turned out to be correct. The
+classification step is the work; the copy count is only the trigger to
+perform it.
+
+The ATP cycle took the alternative route rather than extracting
+(`ATPCycleDesign.md`). Instead of sharing `get_eased_step_t()`'s cubic with
+a second caller, `simulation.gd` resolves both values at the boundary and
+passes them pre-named — `spawn_progress_raw` and `drift_progress_eased` — so
+the consuming node holds no easing logic at all. Sharing a definition and
+eliminating the second consumer both prevent divergence; prefer whichever
+leaves fewer places able to get it wrong.
 
 ---
 

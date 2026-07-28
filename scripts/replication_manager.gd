@@ -143,6 +143,10 @@ var lagging_pump_tween: Tween = null
 # unblocking event at this tier. Ligase's own motion/render/scrub logic is
 # unchanged either way — only the gating changed, not the call site itself.
 var ligase: Ligase = null
+## ATP cofactor visual, a CHILD of the ligase node — which buys hide-on-scrub,
+## the end-of-run modulate fade, and offstage parking for free, since all three
+## already act on ligase itself. See ligase_cofactor.gd's header.
+var ligase_cofactor: LigaseCofactor = null
 var _ligase_tween: Tween = null
 enum LigaseState { IDLE, TRAVELING, HOLDING, SEALING }
 var _ligase_state: int = LigaseState.IDLE
@@ -263,6 +267,9 @@ func initialize(p_sim: Node) -> void:
 	ligase = Ligase.new()
 	sim.add_child(ligase)
 	ligase.setup(sim)
+	ligase_cofactor = LigaseCofactor.new()
+	ligase.add_child(ligase_cofactor)
+	ligase_cofactor.setup(sim)
 	ligase.visible = false
 	_ligase_park_offstage()  # start at the offstage rest spot, not local origin (up-left of the strand)
 
@@ -1814,6 +1821,7 @@ func _ligase_kick() -> void:
 
 	_ligase_state = LigaseState.TRAVELING
 	ligase.visible = true
+	_ligase_cofactor_begin()
 	print("[LIGASE] traveling to seal fragment starting at slot %d" % next_frag.slots[0])
 	var target_x = sim.nucleotide_original_x[next_frag.slots[0]] - sim.nucleotide_slot_spacing / 2.0
 	var target_y = sim.new_bottom_template_y + sim.dna_ribbons_gap + tm.backbone_offset_distance
@@ -1821,7 +1829,11 @@ func _ligase_kick() -> void:
 		_ligase_tween.kill()
 	_ligase_tween = sim.create_tween()
 	_ligase_tween.tween_property(ligase, "position", Vector2(target_x, target_y), tm.ligase_travel_duration)
-	_ligase_tween.tween_callback(func(): _ligase_state = LigaseState.HOLDING)
+	# Spark fires at TRAVELING -> HOLDING, never mid-travel: the cofactor only
+	# activates once the enzyme has actually engaged the nick. Mirrors
+	# helicase's "cleave at arrival." The PPi drift and fade then run inside
+	# the hold interval below, which exists specifically for visibility.
+	_ligase_tween.tween_callback(_ligase_enter_holding)
 	_ligase_tween.tween_interval(tm.ligase_hold_duration)
 	_ligase_tween.tween_callback(_ligase_seal.bind(next_frag))
 
@@ -1830,11 +1842,22 @@ func _ligase_seal(frag: Dictionary) -> void:
 	print("[LIGASE] sealing — pinch starting")
 	_ligase_tween = sim.create_tween()
 	_ligase_tween.tween_method(ligase.set_pulse, 0.0, 1.0, tm.ligase_seal_duration * 0.5)
+	# Adenylylation runs in parallel with the RELEASE half, not the pinch:
+	# the pinch clamps tight, THEN the enzyme visibly hands off what it was
+	# carrying as it lets go. Sequenced between the two tween_methods so it
+	# starts exactly at the halfway point without a second tween to keep in
+	# sync with this one.
+	_ligase_tween.tween_callback(_ligase_cofactor_hop)
 	_ligase_tween.tween_method(ligase.set_pulse, 1.0, 0.0, tm.ligase_seal_duration * 0.5)
 	_ligase_tween.tween_callback(_ligase_finish_seal.bind(frag))
 
 func _ligase_finish_seal(frag: Dictionary) -> void:
 	frag.sealed = true
+	# AMP was MECHANISM up to this instant and becomes WASTE at it — which is
+	# the exact moment it comes under the byproducts toggle. See
+	# ATPCycleDesign.md's mechanism-vs-waste table.
+	if ligase_cofactor != null and _ligase_cofactor_enabled():
+		ligase_cofactor.release()
 	print("[LIGASE] seal complete — frag.sealed=true, merging into continuous line")
 	_ligase_state = LigaseState.IDLE
 	_ligase_kick()  # pick up the next pending fragment, if any
@@ -1852,6 +1875,8 @@ func _ligase_reset_visual() -> void:
 		ligase.visible = false
 		ligase.modulate.a = 1.0  # undoes _lagging_fade_enzyme_scene()'s end-of-run fade — otherwise the NEXT run's first seal sets visible=true while alpha is still 0 from the last one
 		ligase.set_pulse(0.0)
+		if ligase_cofactor != null:
+			ligase_cofactor.reset()
 		_ligase_park_offstage()  # snap back to the offstage rest spot — otherwise it stays at wherever its last seal ended, so the next run's first seal tween starts mid-strand and slides in from there (create-once-hide lifecycle seam, same as primase/Pol I)
 
 ## Parks ligase at its offstage rest position: below the strand, near the
@@ -1866,6 +1891,41 @@ func _ligase_park_offstage() -> void:
 	if sim.nucleotide_original_x.size() > 0:
 		park_x = sim.nucleotide_original_x[0]
 	ligase.position = Vector2(park_x, park_y)
+
+## Eukaryotic mode only — bacterial ligase runs on NAD+, a structurally
+## different molecule that this glyph would misrepresent. The topology check
+## is folded into is_enabled("ligase_cofactor") itself, so this file never has to
+## know topology exists, exactly as is_enabled("lagging_gap") already does for
+## the gap mechanic.
+## Named methods rather than multi-line lambdas at the two new hook points.
+## GDScript's multi-line lambda parsing is fragile enough that this project
+## already avoids it — the one pre-existing lambda in this chain was a single
+## expression. A named callback also keeps the tween chain readable as a list
+## of steps rather than a wall of inline bodies.
+func _ligase_enter_holding() -> void:
+	_ligase_state = LigaseState.HOLDING
+	if ligase_cofactor != null and _ligase_cofactor_enabled():
+		ligase_cofactor.cleave()
+
+func _ligase_cofactor_hop() -> void:
+	if ligase_cofactor != null and _ligase_cofactor_enabled():
+		ligase_cofactor.hop()
+
+func _ligase_cofactor_enabled() -> bool:
+	return complexity_mgr != null and complexity_mgr.is_enabled("ligase_cofactor")
+
+## Called as the travel tween starts. The whole uncleaved ATP rides in with
+## the enzyme; nothing cleaves until arrival. Also re-reads the byproducts
+## toggle per kick rather than caching it, so flipping the checkbox mid-run
+## takes effect on the very next fragment.
+func _ligase_cofactor_begin() -> void:
+	if ligase_cofactor == null:
+		return
+	if not _ligase_cofactor_enabled():
+		ligase_cofactor.reset()
+		return
+	ligase_cofactor.byproducts_visible = complexity_mgr.is_enabled("cofactor_byproducts")
+	ligase_cofactor.begin_carry()
 
 func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 	var is_done_phase: bool = ctx.is_done_phase

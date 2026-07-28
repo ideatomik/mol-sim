@@ -7,13 +7,10 @@ repo.**_
 
 ---
 
-## Tomorrow — MolSim
-
 ### The demo
 - [ ] **PC build, as-is, off the thumb drive. Do not touch it beforehand.** It
       works, it's plug-and-play, and that's been landing well. The night before
       a demo is the worst possible time to improve it.
-- [ ] Android prototype — **secondary and optional**. If it slips, it slips.
 
 ### Bugs
 _None open — the vertical-camera bug that used to be here (ResetZoomButton)
@@ -78,59 +75,6 @@ was resolved and superseded by tonight's full camera pass; see STATUS.md's
       traps would have.
 
 ---
-
-## PIPE / Proposta Simplificada — ACTIVE (grant only, no personal stipend)
-
-**Status changed 17 July**, reconciling the 16 July "deprioritized" call with
-findings from the 17 July session. Both are true at once:
-
-- **Bolsa PE** (personal stipend) — **dead.** FAPESP's written reply confirmed
-  enrollment in a graduação course *"é considerada quebra desta dedicação."*
-  Not "may be" — *is*. The *noturno* argument wasn't engaged with; the *bolsa
-  parcial* question went unanswered. Not worth revisiting.
-- **Auxílio PIPE** (project grant to Embaúba) — **looks viable**, confirmed
-  directly against the call text on 17 July:
-  - Inova Simples explicitly eligible — item 4.2(d).
-  - You can serve as sole **Pesquisador Responsável** without a separate
-    Pesquisador Principal — dispensed given you hold all critical technical
-    competencies (simulation architecture, software engineering, pedagogical
-    design).
-  - 24h/week minimum + 40h/week total dedication cap — workable given stated
-    availability.
-  - Item 4.1 confirms the desafio tecnológico framing (interest to company/
-    market) does **not** require a proprietary deliverable.
-
-**Net effect:** PIPE is off the table as personal income, but back on as a
-project-funding track for the 29/07 pré-proposta. This resolves the first of
-the three questions pinned on 16 July (PP without Bolsa PE — yes, workable);
-the other two (bolsa parcial modality; trancamento timing) are now moot, since
-the plan no longer assumes you draw a stipend at all.
-
-### The plan doc — still needs the same fix
-`Zymosim_Plano_de_Projeto.md` §4 still frames the FAPESP email as *"a
-enviar"* and asserts *"graduação não é mencionada como impeditivo."* Both are
-now stale in a different way than the 16 July note assumed — rewrite to
-reflect the two-track reality above, not just "PIPE is off."
-
-### SAGe registration — CLOSED
-Previously flagged as urgent (2-business-day lead time before 29/07 if
-Embaúba wasn't yet cadastrada). **Resolved: registration was done last year.**
-Worth a quick login to confirm the cadastro is still active before submission,
-but no lead-time risk remains.
-
-### Proposta Simplificada draft — status
-`PIPE_ProstaSimplificada_Draft.md` has all 5 SAGe fields drafted in Portuguese,
-character-limit verified. Krebs cycle wraparound seam is the desafio
-tecnológico; DNA replication engine deliberately excluded (item 8.5(a) —
-"conceito já demonstrado" disqualifies). Still pending:
-- [ ] Fill in surname + curso placeholders (Field 5)
-- [ ] Endorsement quote from the genetics-professor demo (Field 5) — demo
-      confirmed to have gone well; capture a citable line if one exists
-- [ ] Field 4 financing-model narrative — currently assumes Model A/Hybrid;
-      needs rewrite if Model B is chosen before submission
-- [ ] Súmula Curricular (model at fapesp.br/sumula)
-- [ ] Orçamento (R$/US$ tab) — Bolsa de Treinamento Técnico from Field 5 needs
-      to reappear here with justification + plano de atividades
 
 ### Krebs spike — unchanged, still a prerequisite
 - Two enzymatic steps: citrate synthase (fusion), malate dehydrogenase

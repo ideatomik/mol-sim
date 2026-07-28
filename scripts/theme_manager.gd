@@ -69,6 +69,107 @@ extends Node
 @export var helicase_ring_back_z: int = -1
 @export_range(-45.0, 45.0, 0.1) var helicase_ring_skew_deg: float = 3.0
 
+# ---------- ATP cycle: helicase-specific timeline (ATPCycleDesign.md) ----------
+# These live in the Helicase Ring group rather than the shared "Cofactor"
+# group below because every one of them is a quantity in HELICASE step_t
+# space, and because they are genuinely ATP-SPECIFIC: helicase runs on ATP in
+# bacteria and eukaryotes alike, so the atp_ prefix stays honest here. The
+# shared group holds whatever the cofactor of the moment looks like. Two
+# prefixes coexisting is the labeled-chimera principle applied to field names
+# — shared thing shared, divergent thing labeled.
+## RAW step_t at which the whole ATP begins drifting in, measured in the
+## PRIOR step. The approach sits AHEAD of the step it fuels so the helicase's
+## own pace never changes — nothing here compresses the glide or delays the
+## barrel roll.
+@export_range(0.0, 1.0) var atp_spawn_lead_ratio: float = 0.7
+## RAW step_t WIDTH of the spark's visible band, not a duration in seconds.
+## At 1x (base_step_duration 0.5) 0.10 is roughly 0.05s — about three frames
+## at 60fps, a classic arcade-flash length. Because it is a width it scales
+## with the speed multiplier and may drop below one frame at 8x; accepted,
+## since the barrel roll and nucleotide capture are equally illegible there.
+@export_range(0.0, 1.0) var atp_spark_window: float = 0.10
+## EASED step_t at which ADP and Pi have fully faded — a position on the
+## cubic ease-out curve, NOT a number of seconds. Clears the site before the
+## next spark fires at the following boundary.
+@export_range(0.0, 1.0) var atp_byproduct_fade_end_eased: float = 0.9
+## Pi escapes forward and UP ("2 o'clock") while ADP recedes level and
+## backward — spent-to-drive-the-motion against discarded. Independent of
+## slot geometry on purpose: the angle is a thing to eyeball against the real
+## scene, and ADP already reuses nucleotide_slot_spacing for its own recede.
+@export var atp_pi_x_ratio: float = 0.6
+@export var atp_pi_rise_distance: float = 90.0
+## Where the whole ATP drifts in from, in the helicase node's local space.
+## Ahead of and above the fork, so it reads as arriving from solution rather
+## than being emitted by the DNA.
+@export var atp_approach_offset: Vector2 = Vector2(150.0, -130.0)
+
+@export_group("Cofactor")
+# The cofactor's own identity, shared so a cofactor looks like the SAME
+# molecule wherever it appears — helicase and eukaryotic ligase (both ATP)
+# today, bacterial ligase (NAD+) next, and whatever Krebs brings after that.
+#
+# Renamed from "ATP Cycle" once it was clear the group would outlive ATP:
+# NAD+, FAD, CoA and GTP are all coming, and a group named for one of its
+# members ages badly. cofactor_head_scale carries the same lesson — it was
+# atp_adenine_scale, which holds for ATP/NAD+/FAD/CoA and then breaks on GTP,
+# whose head is guanine. Named for the ROLE, not the molecule.
+#
+# The head bead deliberately reuses the DNA base's visual language: ATP's A
+# IS the same adenine as the base, and showing that is the pedagogical
+# payoff. It gets no color field of its own — simulation.gd pushes
+# base_color_a verbatim, so the two can never drift apart. A future guanine-
+# headed cofactor (GTP) will need that push to become mode-dependent. The distinction
+# between substrate incorporation and cofactor activation is carried by the
+# phosphate tail (no free nucleotide glyph has one) and by the discard
+# behavior, not by making the adenine look different.
+@export var cofactor_bead_size: float = 7.0                 # phosphate bead radius
+@export_range(0.1, 2.0) var cofactor_head_scale: float = 0.75   # multiplies base_radius
+@export var cofactor_bead_spacing: float = 20.0             # centre-to-centre along the chain
+@export var cofactor_bead_color: Color = Color(0.95, 0.80, 0.25, 1.0)
+@export var cofactor_link_color: Color = Color(0.95, 0.80, 0.25, 1.0)
+@export var cofactor_link_width: float = 4.0
+@export var cofactor_label_color: Color = Color(1.0, 1.0, 1.0, 1.0)
+@export var cofactor_label_font_size: int = 10
+## Beads carry chemical symbols only — "A" on the adenine, "P" on each
+## phosphate. Identical in every language, so this lens adds NOTHING to the
+## localization surface. Molecule-level name tags ("ATP"/"ADP"/"AMP") are
+## deliberately absent: the bead count already is the label, and the whole
+## point is that a student reads spent-ness off the tail length.
+@export var cofactor_label_font: Font = null
+@export var cofactor_spark_color: Color = Color(1.0, 0.95, 0.6, 1.0)
+@export var cofactor_spark_radius: float = 34.0
+@export var cofactor_spark_width: float = 3.0
+## Absolute z. Must clear helicase_ring_front_z (4) or the docked ATP vanishes
+## behind whichever blob is front-centre at the boundary — which is exactly
+## the moment it needs to be visible.
+@export var cofactor_z: int = 6
+
+# ---------- Ligase-pass additions (v79) ----------
+## PPi's fused connector — the one genuinely new piece of geometry in this
+## design, with no primitive in procedural_shape_utils.gd to build on. Its
+## thickness must clear cofactor_link_width by enough that "one rigid unit" is
+## unmistakable: PPi must never read as two loose phosphates that happen to
+## be adjacent, which is exactly what distinguishes it from helicase's single
+## free Pi. Shape and thickness first, never colour alone.
+@export var cofactor_fused_link_width: float = 9.0
+@export var cofactor_fused_link_color: Color = Color(0.95, 0.80, 0.25, 1.0)
+## Where a DISCARDED cluster drifts to before vanishing — PPi at cleave, and
+## the released AMP at seal completion. Deliberately one field serving both:
+## they are the same event ("this molecule is now waste, see it leave"), so a
+## single authoritative source is correct here rather than two numbers that
+## would only ever be tuned to agree. Named for the event, not for PPi, so the
+## shared use reads as intended rather than as a leftover.
+@export var cofactor_discard_drift: Vector2 = Vector2(70.0, -60.0)
+## SECONDS, unlike the helicase's atp_spark_window (a raw step_t width) and
+## atp_byproduct_fade_end_eased (a position on the eased curve). The ligase
+## cycle is genuinely tween-driven — ligase.gd is hidden entirely during
+## scrub, so it inherits no reconstruct-instantly contract — which is why
+## seconds are the honest unit HERE and were the wrong unit there. The design
+## doc listed cofactor_spark_duration in this group from the start; it only became
+## meaningful once the tween-driven half was built.
+@export var cofactor_spark_duration: float = 0.12
+@export var cofactor_fade_duration: float = 0.35
+
 @export_group("Polymerase Clamp")
 ## Two-piece procedural clamp (polymerase_clamp.gd). Geometry is in pixels;
 ## the vertical span is derived from dna_ribbons_gap + backbone margins at
@@ -140,6 +241,19 @@ extends Node
 ## ligase's spawn depth can be tuned independently later without disturbing
 ## Pol I — per this project's "never let two numbers coincidentally agree" rule.
 @export var ligase_offstage_drop: float = 40.0
+## ATP cycle, ligase half (ATPCycleDesign.md). Offsets are local to the
+## ligase node, which is legitimate because ligase is STATIONARY for the whole
+## cofactor sequence — it only moves during TRAVELING, and every step of the
+## cycle happens at or after the TRAVELING->HOLDING boundary.
+## Carry: where the cofactor rides on the blob. Nick: where the AMP lands when
+## it transfers onto the nick's 5' end (adenylylation).
+@export var ligase_cofactor_carry_offset: Vector2 = Vector2(-46.0, -34.0)
+@export var ligase_cofactor_nick_offset: Vector2 = Vector2(-6.0, 14.0)
+## The adenylylation hop, run in parallel with the seal pulse's RELEASE half
+## (0.15s at default ligase_seal_duration). Deliberately shorter than that
+## half so it lands with a beat to spare rather than racing the pulse — do not
+## let this creep up to 0.15 and coincidentally agree with it.
+@export var ligase_amp_hop_duration: float = 0.10
 
 @export_group("Primase")
 ## Now does REAL per-slot placement (RNA primer persistence pass) — no longer

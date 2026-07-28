@@ -1,91 +1,29 @@
 extends Node2D
 
 # ==========================================
-# v 77 — Vertical mode
-# - New _swap_in_vertical_player_ui(zoom_mgr), called from _ready(): when
-#   ZoomManager.vertical_mode is on, replaces the editor-wired PlayerUI
-#   instance with a runtime-instantiated VerticalPlayerUI.tscn (same script,
-#   player_ui.gd, renamed "PlayerUI" to keep the node path stable). Falls
-#   back to the horizontal UI with a push_error() if the swap can't find what
-#   it needs, rather than soft-locking — same degrade-gracefully shape as
-#   v76's popup fallback above.
-# - _zoom_label_rotation() pushes ZoomManager.get_label_counter_rotation()
-#   into helicase_ring/polymerase clamps' labels — this file stays the single
-#   place that asks, rather than five enzyme scripts each reading
-#   get_viewport() and pre-judging an axis. See VerticalModeDesign.md.
-# - request_drag_scrub()'s axis pick (zoom_mgr.vertical_mode) is the only
-#   place drag-to-scrub itself needed to change — screen-space delta in,
-#   world-x-equivalent slot delta out, same either way.
-# ==========================================
-
-# ==========================================
-# v 77 continued — Follow mode & camera fixes
-# - New _on_helicase_ring_follow_requested(), connected alongside the
-#   existing scrub_drag_started/scrub_drag_delta wiring: routes
-#   helicase_ring.gd's new follow_requested signal (double-click) into
-#   zoom_mgr.request_follow("helicase"). Lagging polymerase's own connection
-#   lives in replication_manager.gd, which owns that clamp directly — leading
-#   polymerase gets the same signal for free (shared polymerase_clamp.gd) but
-#   nothing connects it, by product decision.
-# - _swap_in_vertical_player_ui() now also injects vertical.zoom_mgr = zoom_mgr
-#   by hand, same treatment as the pre-existing vertical.simulation = self one
-#   line above it — %ZoomManager's own lookup in player_ui.gd's _ready()
-#   can't cross the scene-ownership boundary a runtime-instantiated child
-#   scene sits behind, which is what silently broke ResetZoomButton in
-#   vertical mode until this pass. See STATUS.md's "Follow Mode, Click-Drag
-#   Dead Zone & Related Camera Fixes" for the full writeup, and
-#   ZoomDesign.md's As-Built addendum for Follow Mode's own design.
-# ==========================================
-
-# ==========================================
-# v 76 — Complexity setup startup gate
-# - _ready() no longer auto-generates a random default sequence and calls
-#   initialize_simulation() directly. Instead it shows ComplexitySetupPopup
-#   (Pol I / Ligase / Primase toggles, backed by the new ComplexityManager
-#   node) first, then SequenceLoaderPopup — reusing PlayerUI's existing
-#   sequence_loaded -> initialize_simulation() wiring for the actual load
-#   rather than adding a second listener on the same signal.
-# - New _on_startup_complexity_confirmed() bridges the two popups. Falls
-#   back to the old random-sequence boot if either popup node is missing,
-#   so a broken scene reference degrades gracefully instead of soft-locking
-#   at a popup that will never show.
-# - See OkazakiMaturationDesign.md for the toggle set and cascade logic.
-# ==========================================
-
-# ==========================================
-# v 71.x — helicase ring
-# - Placeholder capsule in _setup_helicase() replaced by HelicaseRing
-#   (helicase_ring.gd): six see-through octagonal blobs in a barrel-roll,
-#   parented under helicase_node, rides its position/modulate/fade for free.
-# - _process() now feeds helicase_ring.set_roll(idx + eased) unconditionally
-#   (same block that already derives helicase_x every frame regardless of
-#   manual_override) and sets rotation_frozen = manual_override or
-#   !ThemeManager.helicase_ring_rotation_enabled — freezes to a static
-#   symmetric pose on scrub/pause, same treatment the polymerase clamp's
-#   DOWN-state-on-scrub already gets. No changes needed in scrub_to() /
-#   scrub_to_lagging_catchup() — they set step_t via scrub_to_slot(), which
-#   this block picks up on the next frame regardless.
-# - ThemeManager: new "Helicase Ring" export group. Old "Helicase" group left
-#   in place (unused fields, cheap to leave; retire in a later cleanup pass
-#   once the ring is confirmed stable).
-# - Suggested version number — adjust to match actual project versioning.
-# ==========================================
-
-# ==========================================
-# v 70.6
-# - Debug visuals removed (debug_gap_line, debug_top_rail_line, PLL zigzag) —
-#   they served their purpose validating the PLL geometry math.
-# - gap_width replaced by polymerase_x_offset_slots (float multiplier on
-#   nucleotide_slot_spacing, default 4.0) — polymerase_x is now computed
-#   directly off helicase_x rather than via a separate fixed pixel constant.
-# - new_bottom_template_offset renamed to polymerase_y_offset — the vertical
-#   distance each polymerase sits from center_y (the helicase's y).
-# - factory_x/factory_y renamed to polymerase_x/polymerase_y_lagging;
-#   the leading polymerase's y is polymerase_y_leading. Both are computed
-#   directly from helicase_node.position, which is now the single source of
-#   truth for replisome positioning.
-# - replication_manager.gd Phase 1 + Phase 2 complete; simulation.gd is purely
-#   template manager + visual coordinator
+# v 80 — cofactor rename (no behavior change)
+# - The ATP lens outgrew its name before shipping a second cofactor. NAD+ is
+#   next, and FAD / CoA / GTP arrive with Krebs; a namespace called after one
+#   of its members ages badly. Shared identity is now cofactor_*.
+# - Renamed here: atp_cycle -> helicase_atp_cycle (MORE specific, not less —
+#   it was always helicase-only and the bare name implied otherwise), and the
+#   ThemeManager pushes now read cofactor_* / cofactor_head_scale.
+# - DELIBERATELY NOT renamed: this file's helicase timeline fields
+#   (atp_spawn_lead_ratio, atp_spark_window, atp_byproduct_fade_end_eased,
+#   atp_pi_*, atp_approach_offset). Helicase runs on ATP in every domain, so
+#   atp_ is honest there and generalizing it would make the code LESS precise.
+#   Two prefixes coexisting is the labeled-chimera principle applied to field
+#   names — shared thing shared, divergent thing labeled.
+# - atp_adenine_scale -> cofactor_head_scale: adenine holds for ATP, NAD+,
+#   FAD and CoA, then breaks on GTP. Named for the role, not the molecule.
+# - CSV keys stay UI_ATP_* this pass; they get fixed with the copy in the
+#   NAD+ pass, when the copy actually needs to change.
+# - Zero behavior change. simulation.tscn needed no edits: it had no
+#   serialized atp_* overrides, so nothing had to be migrated.
+#
+# CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md — when
+# delivering a new version, move this block there first, then write the new
+# one here. This header never accumulates more than one version.
 # ==========================================
 
 # ---------- SIGNALS ----------
@@ -155,6 +93,7 @@ var new_bottom_template_y: float = 0.0  # ADD — bottom template's unzipped row
 
 var helicase_node: Node2D = null
 var helicase_ring: HelicaseRing = null   # child of helicase_node; rides its position/modulate for free
+var helicase_atp_cycle: HelicaseAtpCycle = null           # sibling of helicase_ring under helicase_node; same free ride
 var _ring_drag_start_index: int = 0      # scrub index when the ring's current drag gesture began
 
 var wobble_time: float = 0.0
@@ -646,6 +585,54 @@ func _process(delta):
 		var phase = helicase_mgr.get_phase()
 		if phase == helicase_mgr.Phase.DONE:
 			settle_blend = 1.0
+
+		if helicase_atp_cycle != null:
+			# ---- ATP cycle: BOTH progress values resolved HERE, not there ----
+			# get_eased_step_t() is a cubic ease-out, so raw 0.7 maps to eased
+			# 0.973. Handing helicase_atp_cycle a single step_t and letting it decide
+			# what to ease would fire the approach at effectively 97% of the
+			# step, leaving nothing visible — the same "two similar values are
+			# not interchangeable" trap as the wobble-gating mismatch and the
+			# stale straight_y read. Resolving both at this boundary and naming
+			# the parameters for their space leaves helicase_atp_cycle.gd with no easing
+			# logic at all and therefore nothing to get wrong. This file is
+			# already the single funnel that does exactly this for
+			# helicase_ring's whole config, label_counter_rotation and
+			# rotation_frozen.
+			#
+			# The cleave happened at the slot the helicase is currently AT, so
+			# the origin uses the SAME last_valid branch helicase_x itself uses
+			# just above — evaluated at step start rather than mid-step.
+			# Clamping with min(idx, last_valid) instead would be wrong: during
+			# FINISHING_LAST_PULSE every cleave would report the same origin
+			# and ADP would pile up at the last slot while the helicase walks
+			# away from it. Extrapolate, exactly as helicase_x does.
+			var discard_origin_x: float
+			if idx >= last_valid:
+				discard_origin_x = nucleotide_original_x[last_valid] + (idx - last_valid) * nucleotide_slot_spacing
+			else:
+				discard_origin_x = nucleotide_original_x[idx]
+			# Subtracting helicase_x once, here, is what lets helicase_atp_cycle.gd stay
+			# in pure local space — see its header for why that diverges from
+			# the design doc's global_position instruction.
+			var discard_origin_local := Vector2(discard_origin_x - helicase_x, 0.0)
+
+			# Gated to the two phases where the helicase is actually stepping.
+			# INTRO is the load-bearing exclusion: step_t is 0 there, which
+			# sits inside the spark window and would fire a cleave at scene
+			# load, before replication has begun. FINISHING_LAST_PULSE stays
+			# ON — the cycle lives in step_t space, so finishing_acceleration
+			# compresses it proportionally exactly as it already does the
+			# barrel roll, and switching the lens off while the helicase
+			# visibly keeps translocating would read as fuel-free motion.
+			var cofactor_stepping: bool = phase == helicase_mgr.Phase.SWEEPING or phase == helicase_mgr.Phase.FINISHING_LAST_PULSE
+			helicase_atp_cycle.byproducts_visible = %ComplexityManager.is_enabled("cofactor_byproducts")
+			helicase_atp_cycle.update(
+				helicase_mgr.get_step_t(),        # spawn_progress_raw
+				eased,                            # drift_progress_eased
+				discard_origin_local,
+				cofactor_stepping and %ComplexityManager.is_enabled("cofactor")
+			)
 
 	# wobble_t computed once here — used by both state update and rendering sections
 	wobble_time += delta
@@ -1347,6 +1334,47 @@ func _setup_helicase():
 	helicase_ring.scrub_drag_started.connect(_on_helicase_ring_drag_started)
 	helicase_ring.scrub_drag_delta.connect(_on_helicase_ring_drag_delta)
 	helicase_ring.follow_requested.connect(_on_helicase_ring_follow_requested)
+
+	# ATP cycle — a SIBLING of the ring, not a child of it. helicase_ring.gd
+	# deliberately holds no ThemeManager reference (its own header insists on
+	# being a pure function of one float), so an ATP visual parented inside it
+	# would either break that contract or need every field forwarded twice.
+	# Parenting under helicase_node instead also inherits helicase_node.modulate
+	# for free, which matters at end-of-run: _lagging_fade_enzyme_scene() fades
+	# the whole enzyme scene, and a cycle parented at the scene root would be
+	# the one object left behind.
+	helicase_atp_cycle = HelicaseAtpCycle.new()
+	helicase_atp_cycle.z_as_relative = false
+	helicase_atp_cycle.z_index = %ThemeManager.cofactor_z
+	helicase_atp_cycle.bead_radius = %ThemeManager.cofactor_bead_size
+	helicase_atp_cycle.adenine_radius = %ThemeManager.base_radius * %ThemeManager.cofactor_head_scale
+	helicase_atp_cycle.bead_spacing = %ThemeManager.cofactor_bead_spacing
+	helicase_atp_cycle.bead_color = %ThemeManager.cofactor_bead_color
+	# base_color_a pushed VERBATIM, with no ATP-side field of its own: the
+	# adenine in ATP is the adenine in DNA, and that identity is the point.
+	# Two independently-tuned colors that are only supposed to agree would be
+	# exactly the coincidence this project's rule forbids.
+	helicase_atp_cycle.adenine_color = %ThemeManager.base_color_a
+	helicase_atp_cycle.link_color = %ThemeManager.cofactor_link_color
+	helicase_atp_cycle.link_width = %ThemeManager.cofactor_link_width
+	helicase_atp_cycle.label_color = %ThemeManager.cofactor_label_color
+	helicase_atp_cycle.label_font_size = %ThemeManager.cofactor_label_font_size
+	helicase_atp_cycle.label_font = %ThemeManager.cofactor_label_font
+	helicase_atp_cycle.spark_color = %ThemeManager.cofactor_spark_color
+	helicase_atp_cycle.spark_radius = %ThemeManager.cofactor_spark_radius
+	helicase_atp_cycle.spark_width = %ThemeManager.cofactor_spark_width
+	helicase_atp_cycle.spawn_lead_ratio = %ThemeManager.atp_spawn_lead_ratio
+	helicase_atp_cycle.spark_window = %ThemeManager.atp_spark_window
+	helicase_atp_cycle.byproduct_fade_end_eased = %ThemeManager.atp_byproduct_fade_end_eased
+	helicase_atp_cycle.pi_x_ratio = %ThemeManager.atp_pi_x_ratio
+	helicase_atp_cycle.pi_rise_distance = %ThemeManager.atp_pi_rise_distance
+	helicase_atp_cycle.approach_offset = %ThemeManager.atp_approach_offset
+	helicase_atp_cycle.nucleotide_slot_spacing = nucleotide_slot_spacing
+	# Same push as helicase_ring's above — the "A"/"P" bead glyphs are drawn
+	# text and would ship sideways in vertical mode without this. This file
+	# stays the single place that asks ZoomManager.
+	helicase_atp_cycle.label_counter_rotation = _zoom_label_rotation()
+	helicase_node.add_child(helicase_atp_cycle)
 
 	helicase_node.position = Vector2(helicase_x, center_y)
 	add_child(helicase_node)

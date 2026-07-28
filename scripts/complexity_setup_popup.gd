@@ -2,7 +2,8 @@ extends ColorRect
 
 # ==========================================
 # COMPLEXITY SETUP POPUP
-# UI-only dialog for the Okazaki maturation toggles (OkazakiMaturationDesign.md).
+# UI-only dialog for the Okazaki maturation toggles (OkazakiMaturationDesign.md),
+# the topology mode, and the ATP activation lens (ATPCycleDesign.md).
 # Shown once at startup (before SequenceLoaderPopup — see simulation.gd's
 # _ready()) and reachable again mid-session via PlayerUI's Menu button.
 # Toggles apply live to ComplexityManager as they're pressed, same immediate-
@@ -23,6 +24,8 @@ const DEBUG_AUTO_SHOW: bool = false
 @onready var pol1_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/Pol1Row/Pol1Toggle
 @onready var topology_option: OptionButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/TopologyRow/TopologyOption
 @onready var telomerase_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/TelomeraseRow/TelomeraseToggle
+@onready var cofactor_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/CofactorRow/CofactorToggle
+@onready var cofactor_byproducts_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/CofactorByproductsRow/CofactorByproductsToggle
 @onready var continue_button: Button = $CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow/ContinueButton
 @onready var cancel_button: Button = $CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow/CancelButton
 
@@ -43,6 +46,8 @@ var _snapshot_ligase: bool = false
 var _snapshot_pol1: bool = false
 var _snapshot_topology_mode: int = 0  # ComplexityManager.Topology.CIRCULAR
 var _snapshot_lagging_gap: bool = false
+var _snapshot_cofactor: bool = false
+var _snapshot_cofactor_byproducts: bool = true
 
 func _ready() -> void:
 	complexity_mgr = get_node_or_null("%ComplexityManager")
@@ -63,6 +68,8 @@ func _ready() -> void:
 	pol1_toggle.toggled.connect(_on_pol1_toggled)
 	topology_option.item_selected.connect(_on_topology_selected)
 	telomerase_toggle.toggled.connect(_on_telomerase_toggled)
+	cofactor_toggle.toggled.connect(_on_cofactor_toggled)
+	cofactor_byproducts_toggle.toggled.connect(_on_cofactor_byproducts_toggled)
 	continue_button.pressed.connect(_on_continue_pressed)
 	cancel_button.pressed.connect(_on_cancel_pressed)
 
@@ -93,7 +100,17 @@ func show_dialog(is_startup: bool = false) -> void:
 		pol1_toggle.set_pressed_no_signal(_snapshot_pol1)
 		topology_option.select(_snapshot_topology_mode)
 		telomerase_toggle.set_pressed_no_signal(_snapshot_lagging_gap)
+		# Read the RAW property, not is_enabled("cofactor_byproducts") — that call
+		# folds the parent check in for consumers, so with the lens off it
+		# would report false and this dialog would silently overwrite the
+		# user's real byproducts setting on the next Cancel.
+		_snapshot_cofactor = complexity_mgr.is_enabled("cofactor")
+		_snapshot_cofactor_byproducts = complexity_mgr.cofactor_byproducts_visible
+		cofactor_toggle.set_pressed_no_signal(_snapshot_cofactor)
+		cofactor_byproducts_toggle.set_pressed_no_signal(_snapshot_cofactor_byproducts)
 		_update_telomerase_gate(_snapshot_topology_mode)
+		_update_cofactor_byproducts_gate(_snapshot_cofactor)
+		_update_cofactor_mode_note(_snapshot_topology_mode)
 	# At startup there's no prior simulation state to cancel back to — Cancel
 	# quits instead of reverting. Reused label per this project's stable-key
 	# translation convention rather than a whole separate button.
@@ -120,12 +137,58 @@ func _on_topology_selected(index: int) -> void:
 func _on_telomerase_toggled(pressed: bool) -> void:
 	complexity_mgr.set_lagging_gap_enabled(pressed)
 
+func _on_cofactor_toggled(pressed: bool) -> void:
+	complexity_mgr.set_cofactor_activation_enabled(pressed)
+
+func _on_cofactor_byproducts_toggled(pressed: bool) -> void:
+	complexity_mgr.set_cofactor_byproducts_visible(pressed)
+
+## Grey-out for the child of the "default-follows-parent, override-persists"
+## cascade. Deliberately does NOT touch the checkbox's pressed state: the
+## parent's own setter re-asserts true for real when the lens is enabled, and
+## that arrives here through _on_complexity_toggle_changed() like every other
+## cascade in this dialog. Same division of labour as _update_telomerase_gate().
+func _update_cofactor_byproducts_gate(cofactor_on: bool) -> void:
+	cofactor_byproducts_toggle.disabled = not cofactor_on
+	# CSV KEYS DELIBERATELY NOT RENAMED IN THIS PASS. The lens still shows ATP
+	# and nothing but ATP, so "ATP (energy cofactor)" is accurate copy for the
+	# build that exists. Renaming the keys now would leave display strings
+	# describing a NAD+ capability that has not shipped. Keys and copy both get
+	# fixed together in the NAD+ pass, where the copy actually needs to change.
+	# Expect UI_ATP_* against cofactor_* identifiers until then; it is a known,
+	# bounded mismatch, not drift.
+	cofactor_byproducts_toggle.tooltip_text = "" if cofactor_on else "UI_ATP_BYPRODUCTS_REQUIRES_ATP_TOOLTIP"
+
 ## Grey-out + tooltip for the mode-gated telomerase checkbox — same treatment
 ## COMPLEXITY_MODEL.md calls for any child control under an incoherent mode
 ## (Telomerase in Circular, Tus–Ter in Linear once that tier exists).
 ## Doesn't touch the checkbox's pressed state — set_topology_mode()'s own
 ## cascade already handles that side by calling set_lagging_gap_enabled(false)
 ## for real, which arrives here via _on_complexity_toggle_changed().
+## A NOTE, NOT A GATE — and the difference is the whole point of this function
+## existing separately from _update_telomerase_gate() below.
+##
+## Telomerase in Circular is INCOHERENT, so it gets disabled. ATP in Circular
+## is perfectly coherent: the helicase runs on ATP in bacteria and eukaryotes
+## alike, so the lens stays fully enabled and fully useful. What changes is
+## that LIGASE alone drops out of it, because bacterial ligase runs on NAD+.
+## Never disable this checkbox.
+##
+## Without this note the divergence is SILENT, which the labeled-chimera
+## principle specifically forbids: components drawn from different organisms
+## are shown with their divergences explicitly labeled, never quietly blended.
+## A professor seeing ligase seal a nick with no cofactor visible has no way
+## to tell whether that is the lesson or a bug — and "is that a bug?" during a
+## demo is exactly the outcome the principle exists to prevent.
+##
+## The copy is deliberately written to survive the eventual NAD+ pass. It
+## states what bacterial ligase USES rather than what this build LACKS, so
+## when an NAD+ visual ships the note stays true and simply stops being the
+## only place that fact appears.
+func _update_cofactor_mode_note(mode: int) -> void:
+	var linear: bool = mode == 1  # ComplexityManager.Topology.LINEAR
+	cofactor_toggle.tooltip_text = "" if linear else "UI_ATP_BACTERIAL_LIGASE_NAD_TOOLTIP"
+
 func _update_telomerase_gate(mode: int) -> void:
 	var linear: bool = mode == 1  # ComplexityManager.Topology.LINEAR
 	telomerase_toggle.disabled = not linear
@@ -161,6 +224,15 @@ func _on_cancel_pressed() -> void:
 		complexity_mgr.set_pol1_enabled(_snapshot_pol1)
 		complexity_mgr.set_topology_mode(_snapshot_topology_mode)
 		complexity_mgr.set_lagging_gap_enabled(_snapshot_lagging_gap)
+		# ATP restores parent-then-child for the same reason pol1 restores
+		# last and topology restores before telomerase: the parent's cascade
+		# force-sets the child true on every enable, so restoring the child
+		# first would let set_cofactor_activation_enabled() stomp a value already
+		# put back underneath it. Third instance of the same ordering trap in
+		# this one function — the shape is now familiar enough that any future
+		# toggle with a cascade should be added here parent-first by default.
+		complexity_mgr.set_cofactor_activation_enabled(_snapshot_cofactor)
+		complexity_mgr.set_cofactor_byproducts_visible(_snapshot_cofactor_byproducts)
 	hide_dialog()
 
 func _on_complexity_toggle_changed(feature: String, enabled: bool) -> void:
@@ -173,7 +245,13 @@ func _on_complexity_toggle_changed(feature: String, enabled: bool) -> void:
 			pol1_toggle.set_pressed_no_signal(enabled)
 		"lagging_gap":
 			telomerase_toggle.set_pressed_no_signal(enabled)
+		"cofactor":
+			cofactor_toggle.set_pressed_no_signal(enabled)
+			_update_cofactor_byproducts_gate(enabled)
+		"cofactor_byproducts":
+			cofactor_byproducts_toggle.set_pressed_no_signal(enabled)
 
 func _on_topology_changed(mode: int) -> void:
 	topology_option.select(mode)
 	_update_telomerase_gate(mode)
+	_update_cofactor_mode_note(mode)

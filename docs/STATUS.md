@@ -14,7 +14,24 @@ doesn't change when a feature ships, and shouldn't be expected to.
 something** — that's the actual habit this split is meant to make easier to
 keep. Companion to SKILL.md (Claude-facing quick reference, covers some of
 the same architecture patterns at a terser grain) and to the per-feature
-design docs this file summarizes at a glance without duplicating._
+design docs this file summarizes at a glance without duplicating.
+
+**What does NOT belong here: the version log.** That is `CHANGELOG.md`'s
+job, added after this file was written. The boundary:
+
+| File | Owns |
+| --- | --- |
+| `simulation.gd` header | The **current version only**. Nothing older. |
+| `CHANGELOG.md` | **All version history**, newest first. Terse — what changed. |
+| `STATUS.md` (this file) | **Current state and why.** Architecture, roadmap, pinned issues, scene structure, and the root-cause narratives behind how the current state came to be. |
+
+Version numbers in this file's section headings are **provenance markers,
+not log entries** — they record when a piece of the current architecture
+landed, which is why "Helicase-anchored positioning (v70.6 refactor, still
+current...)" earns its place while a bare list of what changed in v70.6 does
+not. When a section here and a `CHANGELOG.md` entry cover the same pass, the
+changelog stays terse and points here for the full writeup; do not copy the
+narrative into both._
 
 ---
 

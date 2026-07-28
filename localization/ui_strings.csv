@@ -15,6 +15,10 @@ UI_LIGASE_TOGGLE_LABEL,Ligase (seal fragments),Ligase (selar fragmentos),Ligasa 
 UI_POL1_TOGGLE_LABEL,Pol I (primer removal),Pol I (remoção do primer),Pol I (eliminación del cebador)
 UI_TELOMERASE_TOGGLE_LABEL,Telomerase (chromosome ends),Telomerase (extremidades do cromossomo),Telomerasa (extremos del cromosoma)
 UI_TELOMERASE_REQUIRES_LINEAR_TOOLTIP,Requires Linear topology,Requer topologia Linear,Requiere topología Lineal
+UI_ATP_TOGGLE_LABEL,ATP (energy cofactor),ATP (cofator energético),ATP (cofactor energético)
+UI_ATP_BYPRODUCTS_TOGGLE_LABEL,"Byproducts (ADP, Pi, PPi, AMP)","Subprodutos (ADP, Pi, PPi, AMP)","Subproductos (ADP, Pi, PPi, AMP)"
+UI_ATP_BYPRODUCTS_REQUIRES_ATP_TOOLTIP,Requires ATP,Requer ATP,Requiere ATP
+UI_ATP_BACTERIAL_LIGASE_NAD_TOOLTIP,"Bacterial ligase uses NAD+, not ATP","A ligase bacteriana usa NAD+, não ATP","La ligasa bacteriana usa NAD+, no ATP"
 UI_CONTINUE_BUTTON,CONTINUE,CONTINUAR,CONTINUAR
 UI_QUIT_BUTTON,QUIT,SAIR,SALIR
 UI_POL1_COMING_SOON,Coming soon — requires Primase and Ligase,Em breve — requer Primase e Ligase,Próximamente — requiere Primasa y Ligasa

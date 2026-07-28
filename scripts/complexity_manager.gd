@@ -44,6 +44,20 @@ enum Topology { CIRCULAR, LINEAR }
 
 @export var topology_mode: Topology = Topology.CIRCULAR
 @export var primase_enabled: bool = false
+## Cross-cutting lens (ATPCycleDesign.md), NOT a node in the enzyme tree —
+## it lights up whichever enzymes actually run on ATP, wherever they are.
+##
+## Deliberately a real @export here rather than a ThemeManager field, which
+## is where wobble_enabled (the other shipped cross-cutting lens) lives. That
+## precedent predates this file, and ATPCycleDesign.md followed it out of
+## habit. It does not survive contact with the cascade below: the popup keeps
+## its checkboxes in sync ONLY through toggle_changed, and reverts on Cancel
+## ONLY by replaying setters that live here. A toggle outside this file would
+## show a stale checkbox the first time its parent re-asserted it, and would
+## silently fail to revert. The tuning VALUES (bead size, spark radius, fade)
+## stay in ThemeManager's "ATP Cycle" group, where visual constants belong.
+@export var cofactor_activation_enabled: bool = false
+@export var cofactor_byproducts_visible: bool = true
 @export var pol1_enabled: bool = false  # Complex tier — implemented (pol1.gd, wired into replication_manager.gd's bridge-toggle cascade). Comment was stale; correcting per ground-truth read during the topology_mode pass.
 
 var _sim: Node = null  # simulation.gd instance — see ligase_enabled migration note above
@@ -69,6 +83,25 @@ func is_enabled(feature: String) -> bool:
 			# ever needs is_enabled("lagging_gap") and never has to know
 			# topology_mode exists at all.
 			return topology_mode == Topology.LINEAR and (_sim.lagging_gap_enabled if _sim != null else false)
+		"cofactor":
+			return cofactor_activation_enabled
+		"ligase_cofactor":
+			# Mode-gate folded in, the SECOND use of the pattern
+			# set_topology_mode() introduced for lagging_gap. Bacterial ligase
+			# runs on NAD+, not ATP — and NAD+ is not ATP under another name:
+			# only one half is adenine-based and its byproduct NMN shares no
+			# shape with a phosphate chain, so reusing the ATP glyph in
+			# circular mode would actively teach something false. Circular is
+			# the bacterial model this sim already runs, so the lens simply
+			# does not light ligase up there. Helicase's own is_enabled("cofactor")
+			# above is deliberately NOT gated: helicase runs on ATP in both.
+			return cofactor_activation_enabled and topology_mode == Topology.LINEAR
+		"cofactor_byproducts":
+			# Parent check folded in, same reasoning as lagging_gap's mode
+			# check above: every caller asks one question and never has to
+			# know the parent lens exists. Byproducts are meaningless with
+			# the whole cycle switched off.
+			return cofactor_activation_enabled and cofactor_byproducts_visible
 		_:
 			push_warning("ComplexityManager.is_enabled(): unknown feature '%s'" % feature)
 			return false
@@ -148,3 +181,39 @@ func set_lagging_gap_enabled(value: bool) -> void:
 	_sim.lagging_gap_enabled = value
 	print("[COMPLEXITY] lagging_gap_enabled = %s" % value)
 	toggle_changed.emit("lagging_gap", value)
+
+## "Default-follows-parent, override-persists" cascade — the FOURTH named
+## pattern in this file, alongside standard (parent off disables dependents),
+## bridge (child on force-enables parents), and mode-gate (a mode gates which
+## dependents are coherent). None of those three fits, which is why it is
+## named here rather than re-derived ad hoc at the UI layer:
+##
+##   Enabling the parent sets cofactor_byproducts_visible true EVERY time it is
+##   re-enabled. The user may then turn byproducts off freely at any point,
+##   including mid-playback, without affecting the parent. Toggling the
+##   parent off and on again re-asserts the default.
+##
+## "Re-assert on every parent enable" was chosen over "set once, remember the
+## user's override forever" deliberately — the byproducts default is a live
+## rule about what turning the lens on should show you, not a first-run
+## convenience. Add this to COMPLEXITY_MODEL.md's Cascading UI behavior
+## section as a registered pattern.
+##
+## Note the parent going OFF does NOT force the child false. There is nothing
+## to hide once the whole cycle is invisible, and clearing it would destroy
+## the override the user just expressed — the "override-persists" half.
+func set_cofactor_activation_enabled(value: bool) -> void:
+	if cofactor_activation_enabled == value:
+		return
+	cofactor_activation_enabled = value
+	print("[COMPLEXITY] cofactor_activation_enabled = %s" % value)
+	toggle_changed.emit("cofactor", value)
+	if value and not cofactor_byproducts_visible:
+		set_cofactor_byproducts_visible(true)
+
+func set_cofactor_byproducts_visible(value: bool) -> void:
+	if cofactor_byproducts_visible == value:
+		return
+	cofactor_byproducts_visible = value
+	print("[COMPLEXITY] cofactor_byproducts_visible = %s" % value)
+	toggle_changed.emit("cofactor_byproducts", value)
