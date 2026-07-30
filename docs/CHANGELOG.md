@@ -23,6 +23,38 @@ from git history and STATUS.md's narrative sections.
 
 ---
 
+## [docs-only, not a version] Molecular Structure — Lattice phase complete (DNA-first milestone)
+
+No code touched — recorded here anyway per explicit instruction, since this
+closes a real planning phase worth having in the version history even
+though the "version bump" rule (`SKILL.md`: "A documentation-only restructure
+is not itself a version bump") correctly keeps it out of `simulation.gd`'s
+header.
+
+- `MolecularStructureDesign.md`'s Lattice phase (Crystal Building Method) is
+  now fully grounded and resolved for the DNA-first milestone: all six
+  originally-flagged files read across three ground-truth-correction passes
+  (13 corrections total, `replication_manager.gd` — 3,144 lines — the last),
+  and every open question that bears on the milestone is decided.
+- Two new companion resolution docs: `MolecularStructure_OpenQuestions_RenderClusterResolution.md`
+  (questions 4/7/8/9, plus new question 10 — render-mode selection inside
+  free-camera mode, hysteresis band verified against `zoom_manager.gd`,
+  atom-picking and culling scoped out for this milestone) and
+  `MolecularStructure_OpenQuestions_Q3Q5Resolution.md` (question 5 —
+  operator-authoring format, fixed four-array diff interface; question 3's
+  milestone slice — ribose handedness as a hardcoded deriver constant).
+- Questions 1 (aconitase) and 6 (ATP bead-chain migration) parked
+  indefinitely, correctly out of scope until the full Krebs build.
+- `ClaudeCode_Handout_MolecularStructure.md` (the Growth-phase kickoff brief)
+  updated to match — the stale "six files unread" framing is gone.
+- The stale root-level `SKILL.md` duplicate (v70.3) was also removed this
+  pass; `docs/SKILL.md` (v77.0) is the sole current copy.
+- **Next**: Growth phase — implement against the scope fence (ribose ring
+  deriver, phosphodiester operator, skeletal rendering gated to free-camera
+  deep zoom). No implementation code exists yet as of this entry.
+
+---
+
 # ==========================================
 # v 80 — cofactor rename (no behavior change)
 # - The ATP lens outgrew its name before shipping a second cofactor. NAD+ is
