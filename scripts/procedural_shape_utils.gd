@@ -73,3 +73,27 @@ static func round_corners(pts: PackedVector2Array, radius_ratio: float, segments
 			var b = cur.lerp(p2, t)
 			out.append(a.lerp(b, t))
 	return out
+
+## Shortens a bead-to-bead bond so it runs edge-to-edge instead of
+## center-to-center — used by both cofactor files (helicase_atp_cycle.gd,
+## ligase_cofactor.gd) for the ATP/NAD+ glyph's connecting bonds. Paired with
+## Line2D.LINE_CAP_ROUND, this is what makes a bond read as a short rounded
+## connector between two circles rather than a rod passing through their
+## centers — which, at partial alpha during a fade, is exactly what let the
+## old center-to-center line show through several collinear beads as one
+## continuous "backbone," crossing straight over each label in the process.
+##
+## Clamped rather than allowed to invert: if the two radii already meet or
+## overlap (from_r + to_r >= dist), the usable span is zero and both points
+## collapse to the same location on the line between the centers — the bond
+## simply disappears under the beads rather than drawing backwards.
+static func inset_segment(from: Vector2, to: Vector2, from_r: float, to_r: float) -> PackedVector2Array:
+	var delta: Vector2 = to - from
+	var dist: float = delta.length()
+	if dist < 0.0001:
+		return PackedVector2Array([from, to])
+	var dir: Vector2 = delta / dist
+	var usable: float = maxf(dist - from_r - to_r, 0.0)
+	var a: Vector2 = from + dir * from_r
+	var b: Vector2 = a + dir * usable
+	return PackedVector2Array([a, b])

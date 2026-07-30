@@ -11,6 +11,7 @@
 [ext_resource type="Script" uid="uid://c3nm7346tpsle" path="res://scripts/locale_manager.gd" id="9_1hwtu"]
 [ext_resource type="Script" uid="uid://bx1dn0be8htfd" path="res://scripts/complexity_manager.gd" id="10_cplxmgr"]
 [ext_resource type="PackedScene" uid="uid://culfpeb6hrg2j" path="res://scenes/ComplexitySetupPopup.tscn" id="11_cplxpop"]
+[ext_resource type="FontFile" uid="uid://c74yu01fh6oc0" path="res://fonts/GoogleSans/GoogleSans-Regular.ttf" id="11_khgle"]
 
 [sub_resource type="Curve2D" id="Curve2D_mwrr7"]
 
@@ -126,6 +127,7 @@ helicase_ring_corner_segments = 8
 helicase_ring_front_color = Color(0.7547807, 0.9128102, 0.28493494, 1)
 helicase_ring_back_color = Color(0.55581564, 0.67922026, 0.17192909, 1)
 helicase_ring_skew_deg = 0.0
+cofactor_label_font = ExtResource("11_khgle")
 clamp_margin = 17.5
 clamp_back_width = 55.0
 clamp_jaw_width = 55.0

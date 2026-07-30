@@ -130,9 +130,13 @@ var label_counter_rotation: float = 0.0:
 
 # ---------- INTERNAL ----------
 var _beads: Array[CofactorBead] = []
-## Precomputed in update(), consumed by _draw(). Each entry is
-## [from: Vector2, to: Vector2, alpha: float] in this node's local space.
-var _links: Array = []
+## Fixed pool of 5 bonds, indices assigned once and reused every frame — same
+## pooling discipline as _beads. 2 for ADP (head-P, P-P), 3 for whole ATP
+## (head-P, P-P, P-P). Pi (bead 3) gets no bond at either index: "a single
+## loose bead is what free inorganic phosphate has to read as" — see
+## _update_spent_cluster()'s own comment on that choice.
+const LINK_COUNT: int = 5
+var _link_lines: Array[Line2D] = []
 var _spark_alpha: float = 0.0
 var _spark_t: float = 0.0
 
@@ -140,6 +144,24 @@ func _ready() -> void:
 	_build_pool()
 
 func _build_pool() -> void:
+	for ln in _link_lines:
+		if is_instance_valid(ln):
+			ln.queue_free()
+	_link_lines.clear()
+	# Built BEFORE the bead pool below: Godot draws same-z_index siblings in
+	# tree order, so links added first render behind beads added after them.
+	# That occlusion is a second line of defense on top of the inset itself —
+	# any rounding error at a bond's end is hidden under the bead it meets
+	# rather than poking out past its edge.
+	for i in range(LINK_COUNT):
+		var ln := Line2D.new()
+		ln.begin_cap_mode = Line2D.LINE_CAP_ROUND
+		ln.end_cap_mode = Line2D.LINE_CAP_ROUND
+		ln.antialiased = true
+		ln.visible = false
+		add_child(ln)
+		_link_lines.append(ln)
+
 	for b in _beads:
 		if is_instance_valid(b):
 			b.queue_free()
@@ -164,10 +186,11 @@ func _build_pool() -> void:
 ## `active`               — the lens is on AND the helicase is actually
 ##                          stepping (SWEEPING or FINISHING_LAST_PULSE).
 func update(spawn_progress_raw: float, drift_progress_eased: float, discard_origin_local: Vector2, active: bool) -> void:
-	_links.clear()
 	if not active:
 		for b in _beads:
 			b.visible = false
+		for ln in _link_lines:
+			ln.visible = false
 		_spark_alpha = 0.0
 		queue_redraw()
 		return
@@ -195,6 +218,8 @@ func _update_spent_cluster(eased: float, origin: Vector2) -> void:
 	for i in range(SPENT_BEADS):
 		_beads[i].visible = show
 	if not show:
+		_hide_link(0)
+		_hide_link(1)
 		return
 
 	var adp_head := Vector2(origin.x - nucleotide_slot_spacing * eased, origin.y)
@@ -208,11 +233,11 @@ func _update_spent_cluster(eased: float, origin: Vector2) -> void:
 	_place_bead(2, adp_head + Vector2(bead_spacing * 2.0, 0.0), bead_radius, bead_color, "P", alpha)
 	_place_bead(3, pi_pos, bead_radius, bead_color, "P", alpha)
 
-	_links.append([_beads[0].position, _beads[1].position, alpha])
-	_links.append([_beads[1].position, _beads[2].position, alpha])
-	# Pi carries no link on purpose: a single loose bead is what "free
-	# inorganic phosphate" has to read as. PPi (ligase's byproduct, next pass)
-	# is the opposite case — two beads FUSED by a visibly thicker connector,
+	_set_link(0, _beads[0], _beads[1], alpha)
+	_set_link(1, _beads[1], _beads[2], alpha)
+	# Pi (bead 3) gets no bond on either end — a single loose bead is what
+	# "free inorganic phosphate" has to read as. PPi (ligase's byproduct) is
+	# the opposite case — two beads FUSED by a visibly thicker connector,
 	# drifting as one rigid unit, and it must never read as two loose Pi that
 	# happen to be adjacent.
 
@@ -225,6 +250,9 @@ func _update_whole_cluster(raw: float) -> void:
 	for i in range(SPENT_BEADS, BEAD_COUNT):
 		_beads[i].visible = show
 	if not show:
+		_hide_link(2)
+		_hide_link(3)
+		_hide_link(4)
 		return
 
 	var span: float = max(1.0 - spawn_lead_ratio, 0.0001)
@@ -236,9 +264,9 @@ func _update_whole_cluster(raw: float) -> void:
 	_place_bead(6, head + Vector2(bead_spacing * 2.0, 0.0), bead_radius, bead_color, "P", 1.0)
 	_place_bead(7, head + Vector2(bead_spacing * 3.0, 0.0), bead_radius, bead_color, "P", 1.0)
 
-	_links.append([_beads[4].position, _beads[5].position, 1.0])
-	_links.append([_beads[5].position, _beads[6].position, 1.0])
-	_links.append([_beads[6].position, _beads[7].position, 1.0])
+	_set_link(2, _beads[4], _beads[5], 1.0)
+	_set_link(3, _beads[5], _beads[6], 1.0)
+	_set_link(4, _beads[6], _beads[7], 1.0)
 
 ## The spark marks the beta-gamma cleave, pinned to the step boundary itself.
 ## It precedes the helicase's motion rather than coinciding with it, which is
@@ -264,11 +292,24 @@ func _place_bead(index: int, pos: Vector2, r: float, fill: Color, text: String, 
 	bead.modulate.a = alpha
 	bead.configure(r, fill, text)
 
+## Insets to bead EDGES (ProceduralShapeUtils.inset_segment), not centers, and
+## rounds both caps — a bond now reads as a short connector between two
+## circles rather than a rod running through them. Read bead_a/bead_b's own
+## `radius` field rather than a passed-in constant, since bead 0/4 (adenine)
+## and beads 1/2/5/6/7 (phosphate) differ in size.
+func _set_link(idx: int, bead_a: CofactorBead, bead_b: CofactorBead, alpha: float) -> void:
+	var ln := _link_lines[idx]
+	ln.points = ProceduralShapeUtils.inset_segment(bead_a.position, bead_b.position, bead_a.radius, bead_b.radius)
+	var c := link_color
+	c.a = link_color.a * alpha
+	ln.default_color = c
+	ln.width = link_width
+	ln.visible = true
+
+func _hide_link(idx: int) -> void:
+	_link_lines[idx].visible = false
+
 func _draw() -> void:
-	for link in _links:
-		var c := link_color
-		c.a = link_color.a * float(link[2])
-		draw_line(link[0], link[1], c, link_width, true)
 	if _spark_alpha > 0.01:
 		var sc := spark_color
 		sc.a = spark_color.a * _spark_alpha

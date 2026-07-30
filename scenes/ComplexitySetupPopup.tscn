@@ -162,7 +162,7 @@ size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
 theme_override_fonts/font = ExtResource("3_cplxpop")
 theme_override_font_sizes/font_size = 15
-text = "UI_ATP_TOGGLE_LABEL"
+text = "UI_COFACTOR_TOGGLE_LABEL"
 
 [node name="CofactorToggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/CofactorRow"]
 layout_mode = 2
@@ -177,7 +177,7 @@ size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
 theme_override_fonts/font = ExtResource("3_cplxpop")
 theme_override_font_sizes/font_size = 15
-text = "UI_ATP_BYPRODUCTS_TOGGLE_LABEL"
+text = "UI_COFACTOR_BYPRODUCTS_TOGGLE_LABEL"
 
 [node name="CofactorByproductsToggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/CofactorByproductsRow"]
 layout_mode = 2

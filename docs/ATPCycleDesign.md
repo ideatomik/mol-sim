@@ -1,9 +1,10 @@
 # ATP Cycle Design — the cofactor-activation lens
-_**STATUS: BOTH halves shipped — helicase in v78, ligase in v79.** The body
-of this document below is preserved as written at Lattice time and is wrong
-in fifteen places — see **As-Built (v78)** and **As-Built (v79)** at the end
-rather than trusting the body where the two disagree. This status line is
-the only edit made to the original text; everything else was appended._
+_**STATUS: helicase (v78), ligase (v79), cofactor rename (v80), NAD+ pass
+(v81) — all shipped.** The body of this document below is preserved as
+written at Lattice time and is wrong in nineteen-plus places — see
+**As-Built (v78)**, **As-Built (v79)**, and **As-Built (v81)** at the end
+rather than trusting the body where any of them disagree. This status line
+is the only edit made to the original text; everything else was appended._
 
 _Design document. Companion to
 COMPLEXITY_MODEL.md (Cross-Cutting Lenses & Dials —
@@ -1019,6 +1020,73 @@ parsing is fragile enough not to introduce more.
 
 ---
 
+## Bond biochemistry — covalent throughout, and which kind
+
+Every connector drawn in this glyph — `cofactor_link_width` and
+`cofactor_fused_link_width` alike — is a COVALENT bond. There are no
+hydrogen bonds anywhere in the ATP/NAD+ chain, and the glyph should never
+reach for `hydrogen_bond_width` / `hydrogen_bond_spacing` /
+`at_bond_color` / `cg_bond_color` by analogy with base pairing. Those fields
+belong to a structurally different connector reserved for DNA base pairing,
+drawn distinctly (thinner, and — check `hydrogen_bonds_container.gd` before
+asserting further — likely dashed) specifically so it reads as non-covalent.
+This project's rendering rule ("shape and thickness first, never colour
+alone") applies to distinguishing bond TYPES here too.
+
+Within the covalent chain, two different bond chemistries are actually on
+screen:
+
+- **Head to first phosphate** (adenine-P, or guanine-P for a future GTP) — a
+  phosphoester bond.
+- **Phosphate to phosphate** (`alpha`-`beta`, `beta`-`gamma` in ATP; the
+  `alpha`-P-N linkage in NAD+) — a PHOSPHOANHYDRIDE bond. These are the
+  "high-energy" bonds: cleaving one is literally what powers the helicase and
+  what ligase uses to activate the nick, and it is exactly this bond that
+  ligase (LigA in bacteria) cleaves to release PPi or NMN.
+
+The whole `_amp_group` / `_ppi_group` (helicase: ADP head + 2 P / whole ATP)
+backbone is one continuous covalent chain of these two bond types, with no
+hydrogen bond anywhere in it — recorded here as insurance against a future
+cofactor pass reaching for the hydrogen-bond fields by analogy.
+
+## v80.1 — bond rendering: edge-to-edge with round caps
+
+**Not a design change, an As-Built correction to how v78/v79's bonds actually
+draw.** The original implementation connected bead CENTERS with a flat-capped
+line (`draw_line()` in the helicase half, plain `Line2D` in the ligase half).
+At partial alpha during a fade, that line remained visible passing straight
+through each bead's interior — where the label sits — and across several
+collinear beads (ADP's head-P-P chain, the whole ATP's head-P-P-P chain) it
+read as one continuous rigid "backbone" rather than as distinct bonds, rather
+than a shape a student would recognize as several bonds.
+
+Fixed by insetting every bond to the two beads' EDGES rather than their
+centers (`ProceduralShapeUtils.inset_segment()`, new shared helper alongside
+`octagon()`/`round_corners()`) and giving every bond `Line2D.LINE_CAP_ROUND`
+on both ends. A bond now reads as a short rounded connector between two
+circles — it can no longer cross a label, and it can no longer read as one
+rod spanning multiple beads, since each segment visibly terminates at the
+bead it meets.
+
+The helicase half's bonds were promoted from immediate-mode `draw_line()`
+calls to a pooled `Array[Line2D]` of 5 (`LINK_COUNT`) for this fix, matching
+`_beads`' own pooling discipline — built once in `_build_pool()`, reused every
+frame via `_set_link()`/`_hide_link()`. Built BEFORE the bead pool
+specifically so bonds render behind beads in the same-z_index tree-order
+sense, which is a second line of defense: any small rounding error at a
+bond's inset endpoint lands under the bead rather than poking past its edge.
+
+## Cofactor label styling — already Inspector-accessible, not new
+
+`cofactor_label_color`, `cofactor_label_font_size`, and `cofactor_label_font`
+have been real `@export var`s on ThemeManager's "Cofactor" group since v78,
+and both cofactor files already route through them (`set_label_style()` on
+every bead, pushed from `simulation.gd`/`ligase_cofactor.gd` respectively).
+No code change was needed for this ask — flagged here in case it reads as new
+in a future diff.
+
+---
+
 ## Still open after v79
 
 - **The frozen scrub spark** (entry 11) — unchanged, still needs eyes on a
@@ -1031,6 +1099,60 @@ parsing is fragile enough not to introduce more.
   same category as `pi_x_ratio`. The carry point must read as *on* the blob
   and the nick point as *on the strand*, and neither can be derived on paper.
 - **Bacterial ligase / NAD+** — scoped below, not yet built.
+
+---
+
+# As-Built (v81) — the NAD+ pass, shipped
+
+_The scoping section below ("The NAD+ pass — scoped") is preserved as
+written; this records where the build diverged from that scope, plus the
+one decision the scope explicitly deferred (naming) and how it landed._
+
+## What shipped exactly as scoped
+
+- `_ppi_group` -> `_leaving_group` rename, exactly as proposed.
+- Fused-connector treatment dropped for NMN, exactly as proposed: NMN's two
+  beads are already visually distinct by colour, so an ordinary link carries
+  the meaning without falsely claiming a "rigid fused unit."
+- The AMP half of `ligase_cofactor.gd` needed zero changes, confirming the
+  scoping table's core claim: adenylylation is chemically identical for both
+  donors.
+
+## Where the build differed from the scope
+
+**The scope proposed a `donor` concept without settling its shape.** Built
+as `donor_is_nad: bool`, a property written by `replication_manager.gd` from
+a new `ComplexityManager.ligase_uses_nad()` immediately before every
+`begin_carry()` — not cached, not read once at setup, so a topology switch
+mid-run takes effect on the very next fragment rather than requiring a
+reload. The scope didn't specify re-read timing; this follows the same
+per-kick-freshness idiom `byproducts_visible` already used one line above it.
+
+**The mode-parameter question resolved the way the scope's "Recommendation"
+leaned, but for a sharper reason than "don't rename before naming is
+settled."** `is_enabled("ligase_cofactor")` collapsed to a plain proxy for
+`cofactor_activation_enabled` — no topology check at all — and
+`ligase_uses_nad()` was added as a SEPARATE function outside `is_enabled()`
+entirely, rather than as a third string key inside it. Folding it in would
+have made `is_enabled("ligase_cofactor") == false` ambiguous between "the
+lens is off" and "the lens is on but this call asked about the wrong donor,"
+which a boolean gate can never safely be. `is_enabled()` answers "is the
+lens on"; `ligase_uses_nad()` answers a completely different question
+("which molecule"), and mixing them was the actual trap, not just a style
+preference.
+
+**`_update_cofactor_mode_note()` was deleted outright, per the scope's own
+call — but recorded, not silently removed.** A comment stands at both the
+function's old location and its old call site explaining why it's gone: it
+existed to explain an ABSENCE, and the absence is now filled. This matches
+the project's As-Built-over-silent-deletion convention, applied to a UI
+function rather than a design doc for once.
+
+**The naming decision landed as "Cofactor" alone, not the scope's
+speculative "cofactor rather than ATP."** `UI_COFACTOR_TOGGLE_LABEL` reads
+*"Cofactor (ATP / NAD+)"* — both donors named in the label itself, so the
+mode-dependence is visible in the UI rather than only in a tooltip a user
+might not hover.
 
 ---
 

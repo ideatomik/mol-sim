@@ -1916,8 +1916,9 @@ func _ligase_cofactor_enabled() -> bool:
 
 ## Called as the travel tween starts. The whole uncleaved ATP rides in with
 ## the enzyme; nothing cleaves until arrival. Also re-reads the byproducts
-## toggle per kick rather than caching it, so flipping the checkbox mid-run
-## takes effect on the very next fragment.
+## toggle AND the donor (NAD+ pass) per kick rather than caching either, so
+## flipping the checkbox — or the topology mode — mid-run takes effect on the
+## very next fragment.
 func _ligase_cofactor_begin() -> void:
 	if ligase_cofactor == null:
 		return
@@ -1925,6 +1926,7 @@ func _ligase_cofactor_begin() -> void:
 		ligase_cofactor.reset()
 		return
 	ligase_cofactor.byproducts_visible = complexity_mgr.is_enabled("cofactor_byproducts")
+	ligase_cofactor.donor_is_nad = complexity_mgr.ligase_uses_nad()
 	ligase_cofactor.begin_carry()
 
 func _lagging_scrub_rebuild(ctx: Dictionary) -> void:

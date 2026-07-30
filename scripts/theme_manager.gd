@@ -126,6 +126,14 @@ extends Node
 @export_range(0.1, 2.0) var cofactor_head_scale: float = 0.75   # multiplies base_radius
 @export var cofactor_bead_spacing: float = 20.0             # centre-to-centre along the chain
 @export var cofactor_bead_color: Color = Color(0.95, 0.80, 0.25, 1.0)
+## The one bead that differs by donor (NAD+ pass, ATPCycleDesign.md).
+## Deliberately a different hue from cofactor_bead_color rather than a
+## shape change: NMN's two beads (P + nicotinamide) are already visually
+## DISTINCT from each other by colour alone, which is exactly why the fused-
+## connector treatment PPi needs is correctly dropped for NMN — two
+## differently-coloured beads read as "a pair," not "one ambiguous unit,"
+## without needing a thick link to say so.
+@export var cofactor_nicotinamide_color: Color = Color(0.55, 0.35, 0.85, 1.0)
 @export var cofactor_link_color: Color = Color(0.95, 0.80, 0.25, 1.0)
 @export var cofactor_link_width: float = 4.0
 @export var cofactor_label_color: Color = Color(1.0, 1.0, 1.0, 1.0)

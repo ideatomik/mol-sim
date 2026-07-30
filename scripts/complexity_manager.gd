@@ -86,16 +86,16 @@ func is_enabled(feature: String) -> bool:
 		"cofactor":
 			return cofactor_activation_enabled
 		"ligase_cofactor":
-			# Mode-gate folded in, the SECOND use of the pattern
-			# set_topology_mode() introduced for lagging_gap. Bacterial ligase
-			# runs on NAD+, not ATP — and NAD+ is not ATP under another name:
-			# only one half is adenine-based and its byproduct NMN shares no
-			# shape with a phosphate chain, so reusing the ATP glyph in
-			# circular mode would actively teach something false. Circular is
-			# the bacterial model this sim already runs, so the lens simply
-			# does not light ligase up there. Helicase's own is_enabled("cofactor")
-			# above is deliberately NOT gated: helicase runs on ATP in both.
-			return cofactor_activation_enabled and topology_mode == Topology.LINEAR
+			# NO LONGER MODE-GATED (was, through v79). Ligase has a cofactor
+			# in EVERY mode now — ATP in eukaryotic, NAD+ in bacterial — so
+			# this collapses to the same one-liner as helicase's own
+			# is_enabled("cofactor") above. WHICH donor to draw is a
+			# separate question, answered by ligase_uses_nad() below, and
+			# deliberately NOT folded in here: is_enabled() answers "is the
+			# lens on," and mixing a mode PARAMETER into that boolean would
+			# make "false" ambiguous between "lens off" and "wrong donor for
+			# this mode," which it can never be.
+			return cofactor_activation_enabled
 		"cofactor_byproducts":
 			# Parent check folded in, same reasoning as lagging_gap's mode
 			# check above: every caller asks one question and never has to
@@ -105,6 +105,15 @@ func is_enabled(feature: String) -> bool:
 		_:
 			push_warning("ComplexityManager.is_enabled(): unknown feature '%s'" % feature)
 			return false
+
+## Which donor ligase reaches for — a MODE PARAMETER, not a toggle, so it
+## lives outside is_enabled() entirely rather than as a third string key.
+## Bacterial ligase runs on NAD+; eukaryotic ligase runs on ATP — see
+## ATPCycleDesign.md's NAD+ pass. Callers ask this only once they already
+## know is_enabled("ligase_cofactor") is true; it says nothing about whether
+## the lens is on, only which molecule to draw if it is.
+func ligase_uses_nad() -> bool:
+	return topology_mode == Topology.CIRCULAR
 
 ## Standard cascade direction (COMPLEXITY_MODEL.md's usual rule): a required
 ## dependency going away disables the dependent. Turning Primase off while

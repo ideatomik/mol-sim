@@ -988,7 +988,137 @@ item on TODO.md — that one's too-narrow margin; this was stale-width panel.
 
 ---
 
-## Roadmap
+## Cofactor-Activation Lens (v78–v81)
+
+A cross-cutting toggle (`ComplexityManager.cofactor_activation_enabled`),
+sibling to the whole enzyme tree rather than a node in it — see
+COMPLEXITY_MODEL.md's Cross-Cutting Lenses & Dials. Shows the enzyme picking
+up its energy cofactor, spending it, and discarding the byproducts —
+deliberately distinct from `nitrogen_base.gd`/`polymerase_halo.gd`'s
+substrate-incorporation mechanic, where a free nucleotide *becomes part of
+the product*. A student watching both must be able to tell which is which;
+see ATPCycleDesign.md's own opening section for the full argument.
+
+Full design and As-Built record: **ATPCycleDesign.md** — four As-Built
+sections (v78, v79, v81) on top of the original Lattice, since the shipped
+architecture diverged from the design doc in more than a dozen places. This
+STATUS.md section is the summary; that file is the narrative.
+
+### Two enzymes, two mechanisms, one lens
+
+**Helicase (v78)** — `helicase_atp_cycle.gd`, a pure function of
+`(spawn_progress_raw, drift_progress_eased, discard_origin_local, active)`,
+all four resolved and pushed in by `simulation.gd`'s `_process()` every
+frame. No clock, no state, no signal subscription — scrub-safety comes for
+free the same way `helicase_ring.gd`'s barrel roll gets it. Parented as a
+SIBLING of `helicase_ring` under `helicase_node`, inheriting its
+`modulate` for the end-of-run fade.
+
+**Ligase (v79)** — `ligase_cofactor.gd`, a child of the `Ligase` node,
+genuinely tween-driven (four hook points in `replication_manager.gd`'s
+existing seal chain: carry begins with the travel tween; the spark fires at
+`TRAVELING`→`HOLDING`; the AMP hop runs parallel to the seal pulse's release
+half; release fires at `_ligase_finish_seal()`). Legitimate specifically
+because `ligase.gd` is hidden entirely during scrub — it inherits no
+reconstruct-instantly contract, unlike the helicase half.
+
+**Why this matters architecturally, not just pedagogically:** helicase is
+clock-driven (autonomous, per-step) and ligase is event-count-gated (fires
+on fragment seal) — the two trigger philosophies already used separately
+elsewhere in this codebase, and NaKPumpSpikeDesign.md had flagged unifying
+them as an open question. Built out, they did NOT want to be one mechanism.
+They share the glyph vocabulary, the ThemeManager identity group, and the
+toggle — and share zero timing machinery. **The trigger philosophy follows
+from the scrub contract, not from the enzyme** — worth carrying into the
+pump spike and Krebs: ask what scrub does to an enzyme first, and the
+mechanism falls out.
+
+### The glyph family and the mechanism-vs-waste boundary
+
+Bead-chain vocabulary, one shape per phosphate/donor bead, no new geometry
+per molecule — `cofactor_bead.gd` (a lightweight `Node2D`, deliberately NOT
+inheriting `nitrogen_base.gd`'s `RigidBody2D`, copying only its visual
+conventions). The adenine head reuses `base_color_a` verbatim rather than
+its own color field — ATP's A *is* the DNA base's A, and two
+independently-tuned colors that are only ever supposed to agree is exactly
+the coincidence this project's "never let two numbers coincidentally agree"
+rule forbids.
+
+`byproducts_visible` (a second toggle, `cofactor_byproducts_visible`) hides
+DISCARDED molecules only — ADP, Pᵢ, PPᵢ/NMN, and AMP once *released*. The
+carried AMP and its hop onto the nick stay visible regardless: adenylylation
+is mechanism, not waste, and hiding it would hide *how* ligase seals rather
+than tidy away a spent molecule. This is COMPLEXITY_MODEL.md's fourth named
+cascade pattern — "default-follows-parent, override-persists": enabling the
+parent re-asserts the child true every time; the user may override freely;
+the parent going off does not clear the override.
+
+### Bond rendering — edge-to-edge, round caps
+
+Found in CQA after v79 shipped: bonds originally connected bead CENTERS with
+flat caps. At partial alpha during a fade, the line ran straight through
+each bead's interior — crossing the label — and across several collinear
+beads (ADP's head-P-P chain) read as one rigid rod rather than distinct
+bonds. Fixed (recorded in ATPCycleDesign.md as "v80.1," an As-Built
+correction rather than a version bump of its own) by insetting every bond to
+the two beads' EDGES — new `ProceduralShapeUtils.inset_segment()`, alongside
+`octagon()`/`round_corners()` — with `Line2D.LINE_CAP_ROUND` on both ends.
+The helicase half's bonds were promoted from immediate-mode `draw_line()` to
+a pooled `Array[Line2D]` of 5 for this fix, matching `_beads`' own pooling
+discipline, built BEFORE the bead pool so bonds render behind beads (a
+second line of defense: any inset rounding error lands under the bead
+rather than past its edge).
+
+### Cofactor rename (v80) and the NAD+ pass (v81)
+
+Shipped as ATP-only first (v78–v79); renamed to a domain-neutral
+`cofactor_*` namespace (v80, zero behavior change) once it was clear NAD⁺,
+and later FAD/CoA/GTP with Krebs, would outgrow a group named after one of
+its own members. Six helicase-only timeline fields DELIBERATELY kept the
+`atp_` prefix — helicase runs on ATP in every domain, so genericizing them
+would make the code *less* precise. Two prefixes coexisting is the
+labeled-chimera principle applied to field names.
+
+**v81** gave bacterial ligase its own donor. The two cofactors turned out
+structurally parallel — NAD⁺ is `[A]-(P)-(P)-[N]` where ATP is
+`[A]-(P)-(P)-(P)`, cleaved at the same relative position, so the entire
+AMP/adenylylation half of `ligase_cofactor.gd` needed zero code changes.
+Only the leaving group's second bead and its link are donor-dependent
+(`_apply_donor()`, re-applied every `begin_carry()` since the topology
+toggle can change between one seal and the next): ATP gets a phosphate with
+the thick fused PPᵢ link (must never read as two loose Pᵢ); NAD⁺ gets a
+nicotinamide bead with an ordinary link (NMN's two beads are already
+visually distinct by color, so the fused treatment would falsely claim a
+"rigid unit" that isn't there).
+
+The real cost of the NAD⁺ pass wasn't the drawing — it was that
+`is_enabled("ligase_cofactor")` stopped being a topology GATE (ligase now
+has *a* cofactor in both modes) and *which* cofactor became a separate
+question, `ComplexityManager.ligase_uses_nad()`, deliberately kept OUTSIDE
+`is_enabled()` rather than folded in as a third string key. Mixing a mode
+parameter into that boolean would make `false` ambiguous between "lens off"
+and "wrong donor for this mode," which a gate can never safely be.
+`_update_cofactor_mode_note()` (a tooltip explaining the ATP-only absence)
+was deleted outright once the absence was filled — left as a comment at
+both its old sites rather than vanishing without a trace, per this
+project's As-Built-over-silent-deletion convention.
+
+### Still open
+
+- **The frozen scrub spark** — `helicase.gd`'s `scrub_to_slot()` sets
+  `step_t = 0.0` unconditionally, which always falls inside the spark
+  window. Every scrub target renders a frozen spark plus un-drifted
+  byproducts — the honest state for "the cleave at this slot," kept
+  deliberately, but it means the arcade-flash reading only exists during
+  live play. Ligase doesn't have this question; it's hidden entirely on
+  scrub. Needs eyes on a running scene, not a design call.
+- **Pure tune-by-eye, same category as `pi_x_ratio`**: `atp_approach_offset`,
+  `ligase_cofactor_carry_offset`/`ligase_cofactor_nick_offset`,
+  `atp_fused_link_width` (whether 9.0 against the ordinary 4.0 clears the
+  "one rigid unit" bar), and the new `cofactor_nicotinamide_color` against
+  the existing palette.
+
+---
 
 ### v71 — Visual polish + localization — DONE
 - [x] Polymerase vector graphics (leading + lagging). Procedural two-piece
@@ -1079,6 +1209,38 @@ See Vertical Mode section above for full detail.
       (see `_on_zoom_target_changed()`'s own comment anticipating
       "keyboard/click/voice, later"), so this is the first step of the enzyme
       zoom dropdown rework rather than a vertical-only detour.
+
+### Cofactor-Activation Lens (v78–v81) — DONE
+See Cofactor-Activation Lens section above for full detail; ATPCycleDesign.md
+for the complete As-Built record.
+- [x] **Helicase half (v78)** — `helicase_atp_cycle.gd`, pure derived
+      function, scrub-safe by construction. Sibling of `helicase_ring` under
+      `helicase_node`.
+- [x] **Ligase half (v79)** — `ligase_cofactor.gd`, tween-driven, hooked into
+      the existing seal chain. Deliberate asymmetry from the helicase half,
+      justified by the scrub-hidden contract `ligase.gd` already had.
+- [x] **Fourth cascade pattern** — "default-follows-parent,
+      override-persists," `cofactor_activation_enabled` /
+      `cofactor_byproducts_visible` on `ComplexityManager`.
+- [x] **Bond rendering fix (post-v79)** — edge-to-edge insets +
+      `Line2D.LINE_CAP_ROUND`, replacing center-to-center flat-capped lines
+      that bled through fading beads and crossed labels. New
+      `ProceduralShapeUtils.inset_segment()`.
+- [x] **Cofactor rename (v80)** — `atp_*` → `cofactor_*` for the shared
+      identity group, zero behavior change. Six helicase-only timeline
+      fields deliberately kept `atp_`.
+- [x] **NAD+ pass (v81)** — bacterial ligase's own donor. AMP/adenylylation
+      half needed zero changes (chemically identical to both donors); only
+      the leaving group's second bead + link are donor-dependent.
+      `is_enabled("ligase_cofactor")` stopped gating on topology;
+      `ComplexityManager.ligase_uses_nad()` answers the donor question
+      separately.
+- [ ] **Bacterial ligase visual polish** — `cofactor_nicotinamide_color`,
+      `ligase_cofactor_carry_offset`/`ligase_cofactor_nick_offset` are all
+      first-pass tune-by-eye values, unreviewed against a running scene.
+- [ ] **Frozen scrub spark** — needs an eyes-on-scene call on whether it
+      reads as informative or as an artifact; see Cofactor-Activation Lens
+      section above for the narrow fix if it's the latter.
 
 ### Near term — SSB tier (prerequisite for telomerase visual)
 - [ ] SSB (single-strand binding protein) as its own general Stage 2
@@ -1248,6 +1410,28 @@ interchangeable" trap):**
   line array never saw the bridge point — the retained-primer segment didn't
   connect. Fixed by returning the points and appending in the caller.
 
+**Resolved during the Cofactor-Activation Lens pass (v78–v81):**
+- **Bonds crossed bead interiors and labels at partial alpha (post-v79,
+  found in CQA)**: bonds connected bead CENTERS with flat caps. As a
+  cluster faded, the line — still visible through the now-translucent bead
+  — ran straight across the label sitting in that bead's interior, and
+  across several collinear beads (ADP's head-P-P chain) read as one rigid
+  rod rather than as distinct bonds. Fixed by insetting every bond to the
+  two beads' EDGES (new `ProceduralShapeUtils.inset_segment()`) with
+  `Line2D.LINE_CAP_ROUND` on both ends — a bond now visibly terminates at
+  the bead it meets and can no longer cross a label.
+- **Raw/eased dead band never overlapped at default tuning (design-time,
+  caught before shipping, not at runtime)**: another instance of this
+  file's recurring "two similar values aren't interchangeable" trap. The
+  design's byproduct-fade-end (`byproduct_fade_end_eased` ≈ 0.9, on the
+  EASED curve) and the whole-ATP approach threshold (`spawn_lead_ratio` =
+  0.7, on the RAW `step_t`) look like they should describe an overlap
+  window — but converted to the same space, fade-end is raw ≈0.536 and
+  approach-start is raw 0.7, so at shipped defaults the two states never
+  coexist and peak concurrent bead count is 4, not the "~12 pooled nodes"
+  the design doc claimed. Recorded in ATPCycleDesign.md's As-Built (v78),
+  entry 3, rather than silently corrected.
+
 ---
 
 ## Scene Structure
@@ -1287,11 +1471,21 @@ lagging_catchup_timer (Timer) — added as child of simulation.gd at runtime by
   replication_manager.gd, lazily on first use, on the base-complexity catch-up path
 ligase (Ligase) — added as child of sim by replication_manager.gd's initialize(),
   created once, persists across sequence loads (visible toggled, not freed)
+ligase_cofactor (LigaseCofactor) — added as child of ligase (NOT sim) by
+  replication_manager.gd's initialize(), immediately after ligase itself.
+  Cofactor-Activation Lens, ligase half (v79) — see that section above.
 primase_blip (PrimaseBlip) — same lifecycle as ligase above
 pol1 (Pol1Enzyme) — the one exception: NOT created in initialize() — true
   absence until its first job, instantiated on demand by
   replication_manager.gd's _pol1_kick(), persists once created. See SKILL.md's
   True-absence lifecycle entry.
+
+helicase_node (Node2D) — added as child of sim by simulation.gd's
+  _setup_helicase(), positioned at (helicase_x, center_y). Contains:
+  ├── helicase_ring (HelicaseRing) — the six-blob barrel-roll visual
+  └── helicase_atp_cycle (HelicaseAtpCycle) — Cofactor-Activation Lens,
+        helicase half (v78), sibling of helicase_ring, not its child — see
+        that section above for why (inherits helicase_node's own modulate).
 ```
 
 `leading_polymerase` is not a scene node — it's created procedurally by

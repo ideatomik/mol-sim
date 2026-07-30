@@ -23,6 +23,140 @@ from git history and STATUS.md's narrative sections.
 
 ---
 
+# ==========================================
+# v 80 — cofactor rename (no behavior change)
+# - The ATP lens outgrew its name before shipping a second cofactor. NAD+ is
+#   next, and FAD / CoA / GTP arrive with Krebs; a namespace called after one
+#   of its members ages badly. Shared identity is now cofactor_*.
+# - Renamed here: atp_cycle -> helicase_atp_cycle (MORE specific, not less —
+#   it was always helicase-only and the bare name implied otherwise), and the
+#   ThemeManager pushes now read cofactor_* / cofactor_head_scale.
+# - DELIBERATELY NOT renamed: this file's helicase timeline fields
+#   (atp_spawn_lead_ratio, atp_spark_window, atp_byproduct_fade_end_eased,
+#   atp_pi_*, atp_approach_offset). Helicase runs on ATP in every domain, so
+#   atp_ is honest there and generalizing it would make the code LESS precise.
+#   Two prefixes coexisting is the labeled-chimera principle applied to field
+#   names — shared thing shared, divergent thing labeled.
+# - atp_adenine_scale -> cofactor_head_scale: adenine holds for ATP, NAD+,
+#   FAD and CoA, then breaks on GTP. Named for the role, not the molecule.
+# - CSV keys stay UI_ATP_* this pass; they get fixed with the copy in the
+#   NAD+ pass, when the copy actually needs to change.
+# - Zero behavior change. simulation.tscn needed no edits: it had no
+#   serialized atp_* overrides, so nothing had to be migrated.
+#
+# CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md — when
+# delivering a new version, move this block there first, then write the new
+# one here. This header never accumulates more than one version.
+# ==========================================
+
+## v79 — ATP cycle (ligase pass)
+
+- New `ligase_atp.gd` (**renamed to `ligase_cofactor.gd` in v80**) — the
+  ligase half of the cofactor-activation lens. A child of the ligase node,
+  which inherits hide-on-scrub, the end-of-run `modulate` fade, and offstage
+  parking for free, since all three already act on `ligase` itself.
+- **Deliberately tween-driven, unlike the helicase half.** `ligase.gd` is
+  hidden entirely during scrub, so it inherits no reconstruct-instantly
+  contract and real tween timing is legitimate. Recorded as a deliberate
+  asymmetry between the two halves of one lens, not an oversight.
+- Hooked into `replication_manager.gd`'s existing seal chain at four points:
+  carry begins with the travel tween; the spark fires at the
+  `TRAVELING` → `HOLDING` boundary (never mid-travel — the cofactor activates
+  only once the enzyme has engaged the nick); the AMP hop runs between the
+  seal pulse's two halves, so it parallels the RELEASE half rather than the
+  pinch; AMP release fires at `_ligase_finish_seal()`.
+- New named callbacks `_ligase_enter_holding()` and `_ligase_atp_hop()`
+  rather than multi-line lambdas at the two new hook points — GDScript's
+  multi-line lambda parsing is fragile, and the one pre-existing lambda in
+  that chain was a single expression.
+- **Answers the question `ATPCycleDesign.md` was built to ask.** Helicase
+  (clock-driven) and ligase (event-count-gated) share the glyph vocabulary,
+  the ThemeManager identity group and the toggle — and share **no** timing
+  machinery. The trigger philosophy follows from the SCRUB CONTRACT, not from
+  the enzyme. Carry this to the pump and to Krebs: ask what scrub does to an
+  enzyme first, and the mechanism falls out.
+- Eukaryotic-mode gating via `is_enabled("atp_ligase")` (**renamed to
+  `"ligase_cofactor"` in v80**), folding the topology check in so
+  `replication_manager.gd` never learns topology exists — second registered
+  use of the mode-gate pattern `set_topology_mode()` introduced for
+  `lagging_gap`. Bacterial ligase runs on NAD⁺, whose byproduct NMN shares no
+  shape with a phosphate chain, so reusing the ATP glyph in circular mode
+  would actively teach something false.
+- `is_enabled("atp")` is deliberately **not** topology-gated: helicase runs
+  on ATP in both domains.
+- ThemeManager gains `atp_fused_link_width` / `atp_fused_link_color` (PPᵢ's
+  fused connector — the only genuinely new geometry in the design, and it
+  must never read as two loose phosphates), `atp_discard_drift`,
+  `atp_spark_duration` and `atp_fade_duration` (both **seconds** here, unlike
+  the helicase half's `step_t`-space equivalents), plus
+  `ligase_atp_carry_offset`, `ligase_atp_nick_offset` and
+  `ligase_amp_hop_duration`. All renamed in v80 except
+  `ligase_amp_hop_duration`, which was already domain-neutral — AMP is the
+  carried intermediate for both donors.
+- Two independent tweens (`_ppi_tween`, `_amp_tween`) rather than one: a
+  shared tween meant `hop()` would kill the PPᵢ fade mid-flight whenever
+  `atp_fade_duration` was tuned longer than `ligase_hold_duration`, freezing
+  it half-transparent until the next reset. Default timings hide it, which is
+  what made it a trap rather than a saving.
+- `simulation.gd` unchanged apart from its version header.
+
+## v78 — ATP cycle (helicase pass)
+
+- New `atp_cycle.gd` (**renamed to `helicase_atp_cycle.gd` in v80**), built
+  in `_setup_helicase()` as a SIBLING of `helicase_ring` under
+  `helicase_node`. Inherits the node's position and `modulate` for free;
+  ThemeManager-free like the ring, so its whole config is pushed from
+  `simulation.gd`.
+- New `atp_bead.gd` (**renamed to `cofactor_bead.gd` in v80**) — a pooled
+  glyph bead. Copies `nitrogen_base.gd`'s visual vocabulary (`draw_circle`
+  antialiased, the `pivot_offset` label-centering fix) without inheriting its
+  `RigidBody2D` overhead.
+- **Derived, not event-driven.** `helicase.gd`'s `scrub_to_slot()` never
+  emits `slot_reached`, so any signal-triggered spark would be
+  unreconstructible by scrub. Deriving everything from
+  (`slot_index`, `step_t`) removes the problem rather than working around it,
+  and scrub-safety comes for free with zero rebuild logic.
+- `_process()` section 1 resolves **both** progress values at the boundary —
+  `get_step_t()` raw for the spawn threshold, `get_eased_step_t()` for drift
+  — and passes them pre-named. The cubic ease-out maps raw 0.7 to eased
+  0.973, so testing the spawn threshold against the eased value would have
+  fired the approach at 97% of the step with nothing visible. The cycle file
+  holds no easing logic at all and therefore has nothing to get wrong.
+- Also resolves `discard_origin` using the same `last_valid` extrapolation
+  branch `helicase_x` uses, and subtracts `helicase_x` once so the cycle
+  stays in pure local space.
+- Runs in section 1 (always, even paused and scrubbed) deliberately: pausing
+  to say "the ATP just cleaved here" is the classroom case, so the cycle
+  freezes visible and correct rather than hiding.
+- Toggles added to `complexity_manager.gd` — `atp_activation_enabled`,
+  `atp_byproducts_visible` (both **renamed to `cofactor_*` in v80**) — with a
+  **fourth named cascade pattern**, "default-follows-parent,
+  override-persists": enabling the parent re-asserts the child true every
+  time; the user may override freely; the parent going off does not clear the
+  override. Placed here rather than in ThemeManager (where the older
+  `wobble_enabled` lens lives) because `complexity_setup_popup.gd` syncs its
+  checkboxes only through `toggle_changed` and reverts on Cancel only by
+  replaying setters that live in ComplexityManager.
+- ThemeManager gains an `ATP Cycle` group (**renamed `Cofactor` in v80**) for
+  the cofactor's shared identity, plus helicase-specific timeline fields in
+  the Helicase Ring group: `atp_spawn_lead_ratio`, `atp_spark_window`,
+  `atp_byproduct_fade_end_eased`, `atp_pi_x_ratio`, `atp_pi_rise_distance`,
+  `atp_approach_offset`. **These six survive v80's rename** — helicase runs
+  on ATP in every domain, so the prefix is honest there.
+- The head bead pushes `base_color_a` verbatim with no colour field of its
+  own: ATP's adenine IS the DNA base's adenine, and two independently-tuned
+  colours that are only supposed to agree is exactly the coincidence this
+  project's rule forbids.
+- Bead labels get `_zoom_label_rotation()` pushed, same as the ring's — the
+  "A"/"P" glyphs are drawn text and would have shipped sideways in vertical
+  mode. Not in the design doc; caught at Lattice review.
+- Two new rows in `ComplexitySetupPopup.tscn` and three new `ui_strings.csv`
+  keys (`UI_ATP_TOGGLE_LABEL`, `UI_ATP_BYPRODUCTS_TOGGLE_LABEL`,
+  `UI_ATP_BYPRODUCTS_REQUIRES_ATP_TOOLTIP`); a fourth,
+  `UI_ATP_BACTERIAL_LIGASE_NAD_TOOLTIP`, was added afterwards to label the
+  bacterial-ligase divergence rather than leave it silent.
+
+
 ## v77 — Vertical mode
 
 - New `_swap_in_vertical_player_ui(zoom_mgr)`, called from `_ready()`: when
