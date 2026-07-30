@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="ReactionOperator" format=3 uid="uid://5wfhau80e7mk"]
+
+[ext_resource type="Script" uid="uid://d0yydgc3lecqe" path="res://scripts/reaction_operator.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+bonds_broken = Array[Array]([["incoming.alpha_phosphate", "incoming.alpha_beta_bridge_O"]])
+bonds_formed = Array[Array]([["chain.o3_prime", "incoming.alpha_phosphate"]])
+atoms_leaving = Array[String](["incoming.beta_phosphate", "incoming.gamma_phosphate", "incoming.alpha_beta_bridge_O", "incoming.beta_O1", "incoming.beta_O2", "incoming.beta_gamma_bridge_O", "incoming.gamma_O1", "incoming.gamma_O2", "incoming.gamma_O3"])
+teaching_text = "The 3'-OH attacks the alpha-phosphate; pyrophosphate leaves."

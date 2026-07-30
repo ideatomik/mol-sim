@@ -910,6 +910,37 @@ func get_sequence_rich_text(helicase_x: float, nucleotide_original_x: Array, hov
 	text += "3'" if window_end >= n else "…"
 	return text
 
+## Read-only view over leading_synthesized_bases / lagging_synthesized_bases
+## for molecule_structure_renderer.gd — introduced for the Molecular
+## Structure DNA-first milestone (MolecularStructureDesign.md). No new
+## state: world_position is read straight off each already-spawned base
+## node's own .position (already kept current every frame by
+## _leading_render()/_lagging_render()), not recomputed independently, so
+## this can never drift from what's actually on screen. Respects "no script
+## reaches into another script's owned visual nodes" — callers get this
+## array, never the underlying node arrays themselves.
+func get_synthesized_nucleotides() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for i in range(leading_synthesized_bases.size()):
+		var base = leading_synthesized_bases[i]
+		if base != null and is_instance_valid(base):
+			result.append({
+				slot = i,
+				strand = "leading",
+				base_type = sim.dna_sequence.get_complement(i),
+				world_position = base.position,
+			})
+	for i in range(lagging_synthesized_bases.size()):
+		var base = lagging_synthesized_bases[i]
+		if base != null and is_instance_valid(base) and not _is_still_primer(i):
+			result.append({
+				slot = i,
+				strand = "lagging",
+				base_type = sim.dna_sequence.get_base(i),
+				world_position = base.position,
+			})
+	return result
+
 # ==========================================
 # LEADING STRAND — self-contained section
 # ==========================================

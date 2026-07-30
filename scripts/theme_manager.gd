@@ -474,6 +474,40 @@ extends Node
 ## zoom_level_transition_duration. NOT YET TUNED.
 @export var zoom_follow_resume_duration: float = 0.35
 
+@export_group("Molecular Structure")
+## Zoom scalar (free-camera zoom.x — CONFIRMED against zoom_manager.gd:
+## zooming IN increases this value, zooming OUT decreases it toward a
+## floor) crossed GOING UP that activates skeletal rendering. Must be
+## strictly greater than molecular_zoom_exit_threshold — this is a
+## hysteresis band, not a single toggle point, or scroll-wheel jitter at
+## one shared threshold would flap the render mode every tick reversed.
+## See MolecularStructure_OpenQuestions_RenderClusterResolution.md
+## (question 4). NOT YET TUNED.
+@export var molecular_zoom_enter_threshold: float = 3.0
+## Zoom scalar crossed GOING DOWN that deactivates skeletal rendering.
+## Strictly less than molecular_zoom_enter_threshold. NOT YET TUNED.
+@export var molecular_zoom_exit_threshold: float = 2.2
+## World-space bond length for one ribose-ring edge, expressed as a
+## fraction of nucleotide_slot_spacing (sim.gd) rather than a literal
+## Ångström constant — relative bond-length ratios only, per
+## MolecularStructureDesign.md Open Question 2's resolution (derived
+## geometry, not real-world scale). NOT YET TUNED.
+@export var molecular_ring_bond_length_ratio: float = 0.35
+## Line width for skeletal bonds, world units (scales with zoom like
+## everything else drawn in world space). NOT YET TUNED.
+@export var molecular_bond_width: float = 2.5
+## Atom circle radius, world units. NOT YET TUNED.
+@export var molecular_atom_radius: float = 6.0
+## Fill color for skeletal bonds and any atom with no per-element color
+## defined below (the element color table itself lives in
+## molecule_structure_renderer.gd, matching simulation.gd's
+## _get_base_fill() pattern rather than duplicating a color table here).
+@export var molecular_bond_color: Color = Color(0.6, 0.6, 0.65)
+## World-space padding added to a nucleotide's derived ring/substituent
+## extent when building its per-molecule culling bounding box. NOT YET
+## TUNED.
+@export var molecular_cull_bbox_padding: float = 20.0
+
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:
 	match base_type:

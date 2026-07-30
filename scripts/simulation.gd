@@ -60,6 +60,7 @@ const NewNitrogenBaseScene := preload("res://scenes/nitrogen_base.tscn")
 @onready var top_rail_path: Path2D = $TopRailPath
 @onready var top_template_new_track: Line2D = $TopTemplateStrandNewTrack
 @onready var nucleotide_field: Node = $NucleotideField  # decorative free-nucleotide layer; scene node, not code-instantiated — see nucleotide_field.gd
+@onready var molecule_renderer: Node = $MoleculeStructureRenderer  # deep-zoom skeletal ribose renderer; scene node, not code-instantiated — see molecule_structure_renderer.gd
 
 # ---------- SUB-MANAGERS ----------
 var helicase_mgr: Node = null   # helicase.gd instance, added as child in initialize_simulation
@@ -424,6 +425,7 @@ func initialize_simulation(sequence: String):
 		replication_mgr = RepScript.new()
 		add_child(replication_mgr)
 		replication_mgr.initialize(self)
+		molecule_renderer.set_replication_manager(replication_mgr)
 
 	replication_mgr.connect_helicase(helicase_mgr)
 

@@ -12,6 +12,7 @@
 [ext_resource type="Script" uid="uid://bx1dn0be8htfd" path="res://scripts/complexity_manager.gd" id="10_cplxmgr"]
 [ext_resource type="PackedScene" uid="uid://culfpeb6hrg2j" path="res://scenes/ComplexitySetupPopup.tscn" id="11_cplxpop"]
 [ext_resource type="FontFile" uid="uid://c74yu01fh6oc0" path="res://fonts/GoogleSans/GoogleSans-Regular.ttf" id="11_khgle"]
+[ext_resource type="Script" uid="uid://6y37sg7poatt" path="res://scripts/molecule_structure_renderer.gd" id="12_molstruct"]
 
 [sub_resource type="Curve2D" id="Curve2D_mwrr7"]
 
@@ -92,6 +93,9 @@ simulation = NodePath("../..")
 script = ExtResource("8_160l5")
 max_speed = 200.0
 jitter_accel = 200.0
+
+[node name="MoleculeStructureRenderer" type="Node2D" parent="." unique_id=1589815839]
+script = ExtResource("12_molstruct")
 
 [node name="LocaleManager" type="Node" parent="." unique_id=2027790647]
 unique_name_in_owner = true
