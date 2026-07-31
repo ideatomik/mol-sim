@@ -200,7 +200,77 @@ complementary pairs, not the AA/TT/GG artifacts):
     (19.987 > 8.74). This remains the leading open geometry question.
 
 ================================================================
-8. OPEN / NOT YET DONE
+9. RIBOSE-OVERLAP ROOT CAUSE — SUBSTITUENT CHAIN, not just the bare ring,
+   is the dominant driver (extended F9 dump, 2026-07-31T13:39:53)
+================================================================
+Extended the diagnostic to measure RiboseDeriver.derive_substituents()'s
+chain (O3'/C5'/O5'/alpha-phosphate) — NOT covered by the earlier "ribose
+ring diameter" metric, which only counts the 5 bare ring atoms. The chain
+is placed as 3 successive bond_length steps outward from C4', all in the
+SAME direction (C4'.normalized()) — at bond_length=10.8 it reaches 58.14
+units from C1', more than 3x the bare ring's own 17.47 diameter, and
+farther than the base ring's own diameter (37-46).
+
+New metric: "substituent chain closest approach to OWN base."
+  - Template-template pairing: 0.56 to 4.26 units — the chain gets
+    almost exactly as close as physically touching its own base, in
+    several pairs closer than the bare-ring number (1.613) that was
+    reported as the headline overlap metric before. This is very likely
+    the DOMINANT visible driver of the "ribose sitting on its own base"
+    screenshot symptom, more than the bare ring alone.
+  - Leading/template_top and lagging/template_bottom pairing: 34.30 to
+    38.12 units — comfortably clear, consistent with the same
+    "destructive" sign-interaction pattern already found for the bare
+    ring (section 6). Same mechanism, same direction of effect, just a
+    3x larger absolute number since the chain reaches 3x further.
+
+Root cause is the SAME sign interaction as section 6 (RiboseDeriver's
+strand-fixed rotation vs. NitrogenBaseDeriver's pairing-direction-based
+rotation) — the chain's "outward from C4'" direction is fixed by ring
+rotation (strand sign), exactly like the bare ring's own bulk direction,
+so it inherits the same constructive/destructive relationship with the
+base's placement.
+
+IMPORTANT CONSTRAINT on any fix: both RiboseDeriver's ring rotation AND
+its substituent chain placement are backbone-continuity-critical — the
+ring rotation is the confirmed-correct antiparallel-strand fix
+(Handout_AntiparallelStrandOrientation.md), and the substituent chain's
+final O3'/alpha-phosphate positions are exactly what Bug B's inter-residue
+phosphodiester bond connector (_build_backbone_bonds()) reads to draw
+correct backbone bonds between adjacent residues. Touching either risks
+breaking already-verified-correct geometry from earlier in this project.
+This means any fix almost certainly has to act on the BASE's placement
+(NitrogenBaseDeriver), not the ribose/chain side — same conclusion as
+section 6, now with stronger evidence.
+
+RESOLVED (docs/MolecularStructure_BasePairExpansion.md Bug F). Fix
+reformulates derive_base_layout() so the H-bond ANCHOR's target position
+is computed directly, algebraically identical to what the old
+attachment-anchored formula already produced. This frees the base ring's
+rotation angle as a genuine free parameter (previously fully consumed by
+aligning attachment->anchor with pairing_direction), which is then
+searched (72 candidate angles, 5-degree steps) to maximize the ring's
+minimum distance from the ribose's own substituent chain.
+
+A single-vector heuristic (rotate so attachment->anchor points opposite
+the chain's own direction) was tried first, cheaper and more in-keeping
+with the file's closed-form trig style — tested via
+diagnosis/diag_anchor_preserving.py before the full search was written:
+it recovered ~80% of the achievable clearance gap for the sign+1 case but
+only ~17% for sign-1 (purine fused-ring bulk isn't captured by one
+vector), so the real search was used instead.
+
+Verified via diagnosis/diag_anchor_preserving.py (OLD vs. SHIPPED
+algorithm, run for real):
+  - anchor world position: BIT-IDENTICAL (both signs) — confirmed, not
+    assumed. The H-bond span (12.5484) is completely unchanged.
+  - top (sign+1) clearance: 4.26 -> 9.20
+  - bottom (sign-1) clearance: 0.56 -> 11.15
+Both a large, verified improvement with zero regression on the
+already-tuned H-bond span.
+
+================================================================
+11. OPEN / NOT YET DONE
 ================================================================
 - Same-strand adjacent-residue ring overlap was NOT measured by this
   diagnostic (only cross-strand distances were computed) — original
@@ -214,3 +284,79 @@ complementary pairs, not the AA/TT/GG artifacts):
 - Whether dna_ribbons_gap=60 / molecular_ring_bond_length_ratio=0.2 in
   scenes/simulation.tscn are intentional hand-tuned values or should be
   changed is an open question for the user, not yet answered.
+- Section 9's ribose-overlap fix (Bug F) is RESOLVED and implemented in
+  nitrogen_base_deriver.gd/molecule_structure_renderer.gd — needs the
+  user's own in-editor verification, since I cannot run Godot myself.
+
+================================================================
+12. CORRECTION to section 7 — Bug E's original fix was itself wrong
+================================================================
+After a full project reload, a screenshot at normal (non-molecular) zoom
+STILL showed leading/lagging same-letter-paired against their template —
+even though a full-sequence scan (all 57 slots) of the data Bug E's fix
+touched came back completely clean. That scan was checking the wrong
+reference.
+
+Root cause: simulation.gd has TWO functions describing the templates that
+have ALWAYS disagreed with each other, predating this whole session:
+  - get_template_nucleotides() (what the molecular renderer, the F9
+    diagnostic, and Bug E's fix were all validated against): claimed
+    template_bottom=get_base(i), template_top=get_complement(i).
+  - The REAL bead-spawn functions that build what's actually on screen
+    (_spawn_bottom_strand()/_spawn_top_strand()): use the OPPOSITE —
+    template_bottom=get_complement(i), template_top=get_base(i).
+
+Bug E's fix aligned leading/lagging to match get_template_nucleotides() —
+correct relative to that function, wrong relative to what's actually
+rendered, since that function itself didn't match reality. The diagnostic
+scan being "clean" only proved internal consistency with a reference that
+was itself wrong — not that the reference matched the real screen.
+
+Fixed properly (see Bug E's CORRECTION entry in
+docs/MolecularStructure_BasePairExpansion.md for full detail): reverted
+all 12 of Bug E's replication_manager.gd changes back to their ORIGINAL
+formulas (correct all along), and fixed get_template_nucleotides() in
+simulation.gd instead to match the real spawn functions. Spawn functions
+themselves were never touched.
+
+LESSON: when a "ground truth" function disagrees with what's actually
+rendered, verify against the render directly — don't just re-derive from
+the same reference that was already wrong. A clean diagnostic scan proves
+internal consistency, not correctness, if its own data source is
+untrusted.
+
+CONFIRMED FIXED: user did a full reload + fresh play-through and confirmed
+correct complementary bead colors at normal zoom. Screenshot evidence, not
+just self-report.
+
+================================================================
+13. Bug F follow-up — same crossing still visible for UNPAIRED residues,
+    sign-dependent (fixed)
+================================================================
+Back on the molecular-zoom track after section 12's correction, a
+screenshot at deep zoom showed a ribose substituent chain visibly crossing
+through its own base ring — same symptom Bug F (section 9) was supposed to
+fix. The residue was an UNPAIRED template_bottom base (sign=-1), freshly
+split off the helicase, not yet caught up to by its polymerase.
+
+Root cause: unpaired residues have pairing_direction=Vector2.ZERO (no real
+partner to compute a direction from), which fell back to a fixed
+Vector2.DOWN in derive_base_layout() — arbitrary, since there's no H-bond
+constraint to satisfy when unpaired. Verified via diagnosis/
+diag_unpaired_case.py (segment-vs-atom distance, catches a chain LINE
+cutting through the base's interior, not just endpoint-to-atom distance):
+  - sign=+1 (lagging/template_top) unpaired: worst case 46.4 — fine,
+    arbitrary fallback happened to work out.
+  - sign=-1 (leading/template_bottom) unpaired: worst case 4.8 for T/C —
+    barely better than the original pre-Bug-F bug (0.56).
+
+Fixed by making the fallback direction chain-aware: when unpaired but the
+ribose's substituent chain is available (always is, in the real renderer),
+point away from the chain's own centroid instead of a fixed Vector2.DOWN —
+there's no real constraint being violated, nothing depends on an unpaired
+residue's exact anchor direction. Verified: sign=-1 worst case 4.8 -> 45.9,
+sign=+1 unaffected (still 43.9+).
+
+STILL NEEDS: user's in-editor verification (zoom into an unpaired
+template residue just past the helicase, confirm no more crossing) — not
+yet confirmed fixed, since I cannot run Godot myself.

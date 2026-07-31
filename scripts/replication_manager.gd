@@ -967,15 +967,21 @@ func get_synthesized_nucleotides() -> Array[Dictionary]:
 			result.append({
 				slot = i,
 				strand = "leading",
-				# Watson-Crick fix (docs/MolecularStructure_BasePairExpansion.md):
-				# leading's real template is template_top (confirmed via
-				# docs/SKILL.md's polarity table — leading's 3'-left/5'-right
-				# orientation is antiparallel to template_top's 5'-left/3'-right,
-				# not template_bottom's). template_top's own letter is
-				# get_complement(i), so leading (complementary TO template_top)
-				# must be get_base(i) — was get_complement(i), which duplicated
-				# template_top's letter instead of complementing it.
-				base_type = sim.dna_sequence.get_base(i),
+				# Watson-Crick fix REVERTED (docs/MolecularStructure_
+				# BasePairExpansion.md, Bug E follow-up): the original
+				# get_complement(i) here was correct all along. The earlier
+				# "fix" (get_base(i)) was based on get_template_nucleotides()'s
+				# reported template_top formula, which turned out to NOT match
+				# what simulation.gd's real _spawn_top_strand() bead-spawn
+				# actually displays for template_top (get_base(i), not
+				# get_complement(i) as get_template_nucleotides() claimed) — a
+				# separate, older, pre-existing inconsistency between those two
+				# functions. Leading's real template is template_top (still
+				# confirmed via docs/SKILL.md's polarity table); template_top's
+				# REAL displayed letter is get_base(i), so leading (its
+				# complement) must be get_complement(i). Fixed at the other end
+				# instead: see get_template_nucleotides() in simulation.gd.
+				base_type = sim.dna_sequence.get_complement(i),
 				world_position = base.position,
 			})
 	for i in range(lagging_synthesized_bases.size()):
@@ -984,10 +990,8 @@ func get_synthesized_nucleotides() -> Array[Dictionary]:
 			result.append({
 				slot = i,
 				strand = "lagging",
-				# Watson-Crick fix, symmetric to leading's above: lagging's
-				# real template is template_bottom (get_base(i)), so lagging
-				# must be get_complement(i) — was get_base(i).
-				base_type = sim.dna_sequence.get_complement(i),
+				# Reverted, symmetric to leading's above — see that comment.
+				base_type = sim.dna_sequence.get_base(i),
 				world_position = base.position,
 			})
 	return result
@@ -1112,10 +1116,8 @@ func _leading_scrub_rebuild(ctx: Dictionary) -> void:
 
 	for i in range(leading_synth_count):
 		if leading_synthesized_bases[i] == null:
-			# Watson-Crick fix — see get_synthesized_nucleotides()'s matching
-			# comment: leading's real template is template_top, so leading
-			# must be get_base(i), not get_complement(i).
-			leading_synthesized_bases[i] = _spawn_leading_base(i, sim.dna_sequence.get_base(i))
+			# Reverted — see get_synthesized_nucleotides()'s matching comment.
+			leading_synthesized_bases[i] = _spawn_leading_base(i, sim.dna_sequence.get_complement(i))
 			leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
 func _leading_render(ctx: Dictionary) -> void:
@@ -1204,12 +1206,13 @@ func _spawn_leading_base(index: int, base_type: String, start_pos = null) -> Nod
 	return base
 
 func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
-	# Watson-Crick fix: leading's real template is template_top, whose own
-	# letter is get_complement(index) — was get_base(index) (template_
-	# bottom's formula). Was invisible before since hydrogen_bond_count()/
-	# bond color only depend on AT-vs-GC family, which a base and its
-	# complement always share.
-	var template_base = sim.dna_sequence.get_complement(index)
+	# Reverted — leading's real template is template_top, whose REAL
+	# displayed letter (simulation.gd's _spawn_top_strand()) is
+	# get_base(index), not get_complement(index). Functionally invisible
+	# either way since hydrogen_bond_count()/bond color only depend on
+	# AT-vs-GC family, which a base and its complement always share — kept
+	# consistent with the real formula anyway, not left mismatched.
+	var template_base = sim.dna_sequence.get_base(index)
 	var bond_count = NitrogenBaseDeriver.hydrogen_bond_count(template_base)
 	var bond_color = tm.cg_bond_color if (template_base == "C" or template_base == "G") else tm.at_bond_color
 	var container = Node2D.new()
@@ -1543,11 +1546,14 @@ func _convert_primer_base_to_dna(index: int) -> void:
 	var node = lagging_synthesized_bases[index]
 	if node == null or node.shape != "rounded_square":
 		return  # already converted, or nothing there yet
-	# Watson-Crick fix (docs/MolecularStructure_BasePairExpansion.md):
-	# lagging's real template is template_bottom (get_base(i)), so lagging
-	# must be get_complement(i) — was get_base(i), which duplicated
-	# template_bottom's letter instead of complementing it.
-	var base_type = sim.dna_sequence.get_complement(index)  # real letter — converting back to DNA, T not U
+	# Reverted (docs/MolecularStructure_BasePairExpansion.md, Bug E
+	# follow-up): lagging's real template is template_bottom, whose REAL
+	# displayed letter (simulation.gd's _spawn_bottom_strand()) is
+	# get_complement(i), not get_base(i) as get_template_nucleotides()
+	# claimed — see get_synthesized_nucleotides()'s comment in this file
+	# for the full account. Lagging (template_bottom's complement) must be
+	# get_base(i).
+	var base_type = sim.dna_sequence.get_base(index)  # real letter — converting back to DNA, T not U
 	node.set_base_type(base_type)
 	node.set_shape("circle")
 	node.set_colors(sim._get_base_fill(base_type), tm.base_label_color)
@@ -1662,8 +1668,8 @@ func _primase_place_primer_base(index: int, is_first: bool, is_last: bool, seq: 
 		_primase_place_sequence(seq, seq_pos + 1)
 		return
 	_primase_ensure_pending_backbone(_primase_tile_end(index))
-	# Watson-Crick fix — see _convert_primer_base_to_dna()'s comment.
-	var base_type = sim.dna_sequence.get_complement(index)
+	# Reverted — see _convert_primer_base_to_dna()'s comment.
+	var base_type = sim.dna_sequence.get_base(index)
 	if base_type == "T":
 		base_type = "U"  # rendering-layer only — real RNA has no thymine. The
 		# underlying sequence data (re-read via get_base() by anything else,
@@ -2181,8 +2187,8 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 				break  # this tile's anchor isn't exposed yet — neither is any later tile's
 			var primer_start = max(k, this_tile_end - span)
 			for i in range(primer_start, this_tile_end):
-				# Watson-Crick fix — see _convert_primer_base_to_dna()'s comment.
-				var base_type = sim.dna_sequence.get_complement(i)
+				# Reverted — see _convert_primer_base_to_dna()'s comment.
+				var base_type = sim.dna_sequence.get_base(i)
 				var rna_letter = base_type
 				if rna_letter == "T":
 					rna_letter = "U"
@@ -2249,8 +2255,8 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 func _lagging_scrub_spawn_fragment(frag: Dictionary) -> void:
 	var primer_still_present: bool = _pol1_enabled() and not frag.get("primer_removed", false)
 	for i in frag.slots:
-		# Watson-Crick fix — see _convert_primer_base_to_dna()'s comment.
-		var base_type = sim.dna_sequence.get_complement(i)
+		# Reverted — see _convert_primer_base_to_dna()'s comment.
+		var base_type = sim.dna_sequence.get_base(i)
 		if primer_still_present and _is_primer_slot(i):
 			var rna_letter = base_type
 			if rna_letter == "T":
@@ -2497,11 +2503,11 @@ func _spawn_lagging_base(index: int, base_type: String, start_pos = null, color_
 	return base
 
 func _spawn_lagging_hydrogen_bonds(index: int) -> Node2D:
-	# Watson-Crick fix: lagging's real template is template_bottom, whose
-	# own letter is get_base(index) — was get_complement(index)
-	# (template_top's formula). See _spawn_leading_hydrogen_bonds()'s
-	# matching comment for why this was invisible before.
-	var template_base = sim.dna_sequence.get_base(index)
+	# Reverted — lagging's real template is template_bottom, whose REAL
+	# displayed letter (simulation.gd's _spawn_bottom_strand()) is
+	# get_complement(index). See _spawn_leading_hydrogen_bonds()'s matching
+	# comment.
+	var template_base = sim.dna_sequence.get_complement(index)
 	var bond_count = NitrogenBaseDeriver.hydrogen_bond_count(template_base)
 	var bond_color = tm.cg_bond_color if (template_base == "C" or template_base == "G") else tm.at_bond_color
 	var container = Node2D.new()
@@ -3137,8 +3143,8 @@ func _capture_on_leading_slot_reached(index: int) -> void:
 	# it to paper over the same gap.
 	var prev = target - 1
 	if prev >= 0 and leading_synthesized_bases[prev] == null and leading_capture_target_slot != prev:
-		# Watson-Crick fix — see get_synthesized_nucleotides()'s comment.
-		leading_synthesized_bases[prev] = _spawn_leading_base(prev, sim.dna_sequence.get_base(prev))
+		# Reverted — see get_synthesized_nucleotides()'s comment.
+		leading_synthesized_bases[prev] = _spawn_leading_base(prev, sim.dna_sequence.get_complement(prev))
 		leading_hydrogen_bonds[prev] = _spawn_leading_hydrogen_bonds(prev)
 
 	if leading_synthesized_bases[target] != null:
@@ -3150,8 +3156,8 @@ func _capture_begin_leading(index: int, duration: float) -> void:
 		return
 	if leading_capture_node != null:
 		_capture_finish_leading(leading_capture_target_slot, leading_capture_node)
-	# Watson-Crick fix — see get_synthesized_nucleotides()'s comment.
-	var base_type = sim.dna_sequence.get_base(index)
+	# Reverted — see get_synthesized_nucleotides()'s comment.
+	var base_type = sim.dna_sequence.get_complement(index)
 	var fallback_pos = Vector2(sim.nucleotide_original_x[index], sim.new_top_template_y - sim.dna_ribbons_gap)
 	var start_pos = leading_halo.capture_particle(base_type) if leading_halo != null else fallback_pos
 	leading_capture_node = _spawn_leading_base(index, base_type, start_pos)
@@ -3198,8 +3204,8 @@ func _capture_begin_lagging(index: int, duration: float) -> void:
 		return
 	if lagging_capture_node != null:
 		_capture_finish_lagging(lagging_capture_target_slot, lagging_capture_node)
-	# Watson-Crick fix — see _convert_primer_base_to_dna()'s comment.
-	var base_type = sim.dna_sequence.get_complement(index)
+	# Reverted — see _convert_primer_base_to_dna()'s comment.
+	var base_type = sim.dna_sequence.get_base(index)
 	var fallback_pos = Vector2(sim.nucleotide_original_x[index], sim.new_bottom_template_y + sim.dna_ribbons_gap)
 	var start_pos = lagging_halo.capture_particle(base_type) if lagging_halo != null else fallback_pos
 	lagging_capture_node = _spawn_lagging_base(index, base_type, start_pos)

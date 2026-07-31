@@ -95,9 +95,10 @@ var _operators: Array[ReactionOperator] = []  # [_phosphodiester_operator] — b
 
 ## Which strand a given strand's bases hydrogen-bond to when a synthesized
 ## counterpart EXISTS at that slot. template_bottom/template_top pair with
-## EACH OTHER instead, but only when NEITHER synthesized counterpart exists
-## yet at that slot (pre-fork) — handled specially in _pair_for_slot(), not
-## in this table, since it's conditional rather than fixed.
+## EACH OTHER instead, but only ahead of the helicase (see
+## _pair_for_slot()'s own header for the corrected condition and why) —
+## handled specially there, not in this table, since it's conditional
+## rather than fixed.
 const PARTNER_STRAND: Dictionary = {
 	"leading": "template_top",
 	"lagging": "template_bottom",
@@ -290,7 +291,7 @@ func _rebuild_layout() -> void:
 		# existing hydrogen-bond line geometry actually terminates.
 		var anchor_offset: Vector2 = c1_local
 
-		var partner_key: String = _pair_for_slot(entry.strand, entry.slot, base_type_by_key)
+		var partner_key: String = _pair_for_slot(entry.strand, entry.slot, base_type_by_key, position_by_key)
 		var pairing_direction: Vector2 = Vector2.ZERO
 		if partner_key != "" and position_by_key.has(partner_key):
 			pairing_direction = position_by_key[partner_key] - world_pos
@@ -301,7 +302,13 @@ func _rebuild_layout() -> void:
 		# so it's correct regardless of strand identity on its own. Rotating
 		# it again here would point the base AWAY from its real partner for
 		# direction_sign < 0 strands — a double-transform bug, not a fix.
-		var base_positions: Dictionary = NitrogenBaseDeriver.derive_base_layout(topology, "incoming.", entry.base_type, c1_local, pairing_direction, bond_length)
+		#
+		# avoid_points (docs/MolecularStructure_BasePairExpansion.md, Bug D
+		# "ribose sits on its own base" follow-up): the ribose's own
+		# substituent chain, already computed above (substituent_positions)
+		# — passed through so derive_base_layout() can pick a rotation that
+		# clears it, without this file duplicating any of that search logic.
+		var base_positions: Dictionary = NitrogenBaseDeriver.derive_base_layout(topology, "incoming.", entry.base_type, c1_local, pairing_direction, bond_length, substituent_positions.values())
 		for id in base_positions:
 			local_positions[id] = base_positions[id]
 
@@ -338,7 +345,7 @@ func _rebuild_layout() -> void:
 			anchor_by_key[key] = world_pos + (local_positions[anchor_id] - anchor_offset)
 
 	_build_backbone_bonds(o3_by_key, alpha_by_key)
-	_build_hydrogen_bonds(anchor_by_key, base_type_by_key)
+	_build_hydrogen_bonds(anchor_by_key, base_type_by_key, position_by_key)
 
 
 ## Bug-B fix: connects residue N's own already-positioned O3' to residue
@@ -445,20 +452,37 @@ func _build_bond_points(strand: String, from_pos: Vector2, to_pos: Vector2, thre
 ## Which strand+slot key this residue's base pairs with THIS frame, or ""
 ## if no partner. leading/lagging always pair with their fixed template
 ## counterpart (PARTNER_STRAND). template_bottom/template_top pair with
-## EACH OTHER, but only when neither synthesized counterpart exists yet at
-## that slot — mirrors template_hydrogen_bonds' own existing visibility
-## rule in simulation.gd (visible only ahead of the helicase / before
-## either strand has a synthesized base there), so this renderer's pairing
-## never contradicts what the bead-glyph rendering already decided.
-func _pair_for_slot(strand: String, slot: int, base_type_by_key: Dictionary) -> String:
+## EACH OTHER, but only ahead of the helicase — matched against
+## `template_sim.helicase_x` directly, the SAME value simulation.gd's own
+## `template_hydrogen_bonds[i].visible = (world_x >= helicase_x)` already
+## uses (see simulation.gd's per-frame template rendering).
+##
+## Correction (live screenshot at atom zoom, ghost cyan H-bond dashes
+## visible on template residues already past the helicase, toggling
+## on/off with a single camera-zoom tick): this used to check "does
+## leading or lagging have a synthesized base at this slot yet" instead —
+## NOT the same condition, since `polymerase_x_offset_slots` (simulation.gd,
+## default 4) keeps both polymerases trailing several slots BEHIND the
+## helicase. That left a real gap — already unwound by the helicase, not
+## yet reached by either polymerase — where this function kept reporting
+## the two templates as still paired, drawing an H-bond between two
+## strands that are no longer actually in contact. The doc comment
+## previously here claimed this "mirrors" simulation.gd's own rule; it
+## didn't — it used a different, laxer proxy that happened to agree only
+## once synthesis caught all the way up. The zoom-tick flicker was this
+## gap-zone pair's cull-boundary sensitivity (only drawn when both
+## residues' anchors survive this frame's cull rect), not a separate bug —
+## fixed at the root by switching to the real, authoritative condition.
+func _pair_for_slot(strand: String, slot: int, base_type_by_key: Dictionary, position_by_key: Dictionary) -> String:
 	if PARTNER_STRAND.has(strand):
 		var partner: String = "%s:%d" % [PARTNER_STRAND[strand], slot]
 		return partner if base_type_by_key.has(partner) else ""
 	if strand == "template_bottom" or strand == "template_top":
-		var leading_key: String = "leading:%d" % slot
-		var lagging_key: String = "lagging:%d" % slot
-		if base_type_by_key.has(leading_key) or base_type_by_key.has(lagging_key):
-			return ""  # unzipped at this slot — no longer paired with the other template strand
+		var self_key: String = "%s:%d" % [strand, slot]
+		if template_sim != null and position_by_key.has(self_key):
+			var world_x: float = position_by_key[self_key].x
+			if world_x < template_sim.helicase_x:
+				return ""  # already past the helicase — no longer paired with the other template strand
 		var other: String = "template_top:%d" % slot if strand == "template_bottom" else "template_bottom:%d" % slot
 		return other if base_type_by_key.has(other) else ""
 	return ""
@@ -470,7 +494,7 @@ func _pair_for_slot(strand: String, slot: int, base_type_by_key: Dictionary) -> 
 ## recomputed independently). Only drawn when BOTH sides of a pair are
 ## rendered this frame, same accepted-simplification rule as the backbone
 ## bonds above.
-func _build_hydrogen_bonds(anchor_by_key: Dictionary, base_type_by_key: Dictionary) -> void:
+func _build_hydrogen_bonds(anchor_by_key: Dictionary, base_type_by_key: Dictionary, position_by_key: Dictionary) -> void:
 	var seen: Dictionary = {}
 	for key in anchor_by_key.keys():
 		if seen.has(key):
@@ -478,7 +502,7 @@ func _build_hydrogen_bonds(anchor_by_key: Dictionary, base_type_by_key: Dictiona
 		var parts: PackedStringArray = key.split(":")
 		var strand: String = parts[0]
 		var slot: int = int(parts[1])
-		var partner_key: String = _pair_for_slot(strand, slot, base_type_by_key)
+		var partner_key: String = _pair_for_slot(strand, slot, base_type_by_key, position_by_key)
 		if partner_key == "" or not anchor_by_key.has(partner_key):
 			continue
 		seen[key] = true
@@ -529,9 +553,23 @@ func _dump_geometry_diagnostic() -> void:
 	var template_entries: Array[Dictionary] = template_sim.get_template_nucleotides() if template_sim != null else []
 	var synth_entries: Array[Dictionary] = replication_mgr.get_synthesized_nucleotides() if replication_mgr != null else []
 
-	_dump_pairing(out, "template_top", "template_bottom", template_entries, template_entries, bond_length)
+	_dump_pairing(out, "template_top", "template_bottom", template_entries, template_entries, bond_length, synth_entries)
 	_dump_pairing(out, "leading", "template_top", synth_entries, template_entries, bond_length)
 	_dump_pairing(out, "lagging", "template_bottom", synth_entries, template_entries, bond_length)
+
+	# Full-sequence same-letter scan (docs/MolecularStructure_
+	# BasePairExpansion.md, Bug E follow-up): the per-pairing dump above
+	# only ever samples the first _DIAG_PAIR_COUNT slots. A same-letter
+	# report at a slot outside that range would be invisible to it. This
+	# scans EVERY slot present in each pairing and flags any where top and
+	# bottom show the identical letter (never valid Watson-Crick), plus
+	# prints the two full sequences so they can be eyeballed directly
+	# against a screenshot.
+	out.append("\n\n=== FULL-SEQUENCE SAME-LETTER SCAN (all slots, not just first 10) ===")
+	_scan_pairing_for_same_letter(out, "template_top", "template_bottom", template_entries, template_entries)
+	_scan_pairing_for_same_letter(out, "leading", "template_top", synth_entries, template_entries)
+	_scan_pairing_for_same_letter(out, "lagging", "template_bottom", synth_entries, template_entries)
+
 	out.append("=== END DUMP ===\n")
 
 	var existing: String = ""
@@ -549,7 +587,69 @@ func _dump_geometry_diagnostic() -> void:
 		print("[GEOMETRY DIAG] FAILED to open %s for writing" % _DIAG_OUTPUT_PATH)
 
 
-func _dump_pairing(out: Array, top_strand: String, bottom_strand: String, top_source: Array[Dictionary], bottom_source: Array[Dictionary], bond_length: float) -> void:
+## Scans EVERY slot present in this pairing (not just the first
+## _DIAG_PAIR_COUNT) and reports any where top and bottom show the
+## identical letter — never valid Watson-Crick, so any hit here is a real
+## bug regardless of which slot range a screenshot happened to show.
+## Also prints both full sequences (in slot order) so they can be
+## eyeballed directly against a screenshot.
+func _scan_pairing_for_same_letter(out: Array, top_strand: String, bottom_strand: String, top_source: Array[Dictionary], bottom_source: Array[Dictionary]) -> void:
+	var top_by_slot: Dictionary = {}
+	for e in top_source:
+		if e.strand == top_strand:
+			top_by_slot[e.slot] = e.base_type
+	var bottom_by_slot: Dictionary = {}
+	for e in bottom_source:
+		if e.strand == bottom_strand:
+			bottom_by_slot[e.slot] = e.base_type
+
+	out.append("\n--- %s (top) / %s (bottom) — %d top slots, %d bottom slots ---" % [top_strand, bottom_strand, top_by_slot.size(), bottom_by_slot.size()])
+	if top_by_slot.is_empty() or bottom_by_slot.is_empty():
+		out.append("  (nothing to scan yet)")
+		return
+
+	var max_slot: int = 0
+	for s in top_by_slot.keys():
+		max_slot = max(max_slot, s)
+	for s in bottom_by_slot.keys():
+		max_slot = max(max_slot, s)
+
+	var top_seq: String = ""
+	var bottom_seq: String = ""
+	var violations: Array = []
+	for slot in range(max_slot + 1):
+		var t: String = top_by_slot.get(slot, "-")
+		var b: String = bottom_by_slot.get(slot, "-")
+		top_seq += t
+		bottom_seq += b
+		if t != "-" and b != "-" and t == b:
+			violations.append(slot)
+
+	out.append("  top    sequence (slot 0..%d): %s" % [max_slot, top_seq])
+	out.append("  bottom sequence (slot 0..%d): %s" % [max_slot, bottom_seq])
+	if violations.is_empty():
+		out.append("  SAME-LETTER VIOLATIONS: none — every paired slot has two different letters.")
+	else:
+		out.append("  SAME-LETTER VIOLATIONS at %d slot(s): %s" % [violations.size(), str(violations)])
+
+
+## unzip_check_entries, if non-empty: replicates _pair_for_slot()'s real
+## unzip logic (docs/MolecularStructure_BasePairExpansion.md, Bug F
+## unpaired-residue follow-up) — a template_top/template_bottom slot is
+## ONLY really paired with its opposite template if NEITHER leading NOR
+## lagging has a base at that slot yet; once either exists, the real
+## renderer treats that template residue as UNPAIRED (pairing_direction =
+## ZERO, triggering the chain-aware fallback), regardless of whether the
+## opposite template residue still physically exists. The old version of
+## this function ignored that and force-paired every slot where BOTH
+## template entries existed, silently computing geometry from a fake
+## pairing_direction the real renderer never uses once replication has
+## started — confirmed to give misleading "closest approach" numbers, not
+## just a misleading H-bond span (the previously-known issue). Slots that
+## are really unpaired are now dumped through the SAME unpaired code path
+## as leading/lagging's own unpaired case, so the numbers here always
+## match what actually renders.
+func _dump_pairing(out: Array, top_strand: String, bottom_strand: String, top_source: Array[Dictionary], bottom_source: Array[Dictionary], bond_length: float, unzip_check_entries: Array[Dictionary] = []) -> void:
 	var top_by_slot: Dictionary = {}
 	for e in top_source:
 		if e.strand == top_strand:
@@ -558,6 +658,27 @@ func _dump_pairing(out: Array, top_strand: String, bottom_strand: String, top_so
 	for e in bottom_source:
 		if e.strand == bottom_strand:
 			bottom_by_slot[e.slot] = e
+
+	# Matches _pair_for_slot()'s corrected real condition (docs/
+	# MolecularStructure_BasePairExpansion.md, "ghost H-bond past helicase"
+	# fix): a slot is unzipped once the helicase has physically passed it,
+	# not merely once leading/lagging synthesis has caught up — those are
+	# different positions (polymerase_x_offset_slots keeps synthesis
+	# several slots behind the helicase), and the old leading/lagging-
+	# existence-only check here would under-report unzipped slots in that
+	# gap, same as the renderer bug it was written to catch.
+	var unzipped_slots: Dictionary = {}
+	if not unzip_check_entries.is_empty():
+		for e in unzip_check_entries:
+			if e.strand == "leading" or e.strand == "lagging":
+				unzipped_slots[e.slot] = true
+	if template_sim != null:
+		for e in top_by_slot.values():
+			if e.world_position.x < template_sim.helicase_x:
+				unzipped_slots[e.slot] = true
+		for e in bottom_by_slot.values():
+			if e.world_position.x < template_sim.helicase_x:
+				unzipped_slots[e.slot] = true
 
 	out.append("\n--- PAIRING: %s (top) / %s (bottom) ---" % [top_strand, bottom_strand])
 	if top_by_slot.is_empty() or bottom_by_slot.is_empty():
@@ -569,9 +690,27 @@ func _dump_pairing(out: Array, top_strand: String, bottom_strand: String, top_so
 	var max_slot_scan: int = 5000
 	while printed < _DIAG_PAIR_COUNT and slot < max_slot_scan:
 		if top_by_slot.has(slot) and bottom_by_slot.has(slot):
-			printed += 1
 			var top_entry: Dictionary = top_by_slot[slot]
 			var bottom_entry: Dictionary = bottom_by_slot[slot]
+			var really_paired: bool = not unzipped_slots.has(slot)
+
+			if not really_paired:
+				# Real renderer treats BOTH sides as unpaired here — dump each
+				# independently through the unpaired (ZERO pairing_direction)
+				# path, no fake partner.
+				printed += 1
+				var top_r_u: Dictionary = _derive_full_residue(top_entry, top_entry.world_position, bond_length)
+				var bottom_r_u: Dictionary = _derive_full_residue(bottom_entry, bottom_entry.world_position, bond_length)
+				out.append("\n[PAIR %d | sequence: %s%s | UNPAIRED — unzipped, real renderer uses fallback direction, not shown as a real pair]" % [printed, top_entry.base_type, bottom_entry.base_type])
+				_write_residue_block(out, "TOP (unpaired)", top_r_u)
+				_write_residue_block(out, "BOTTOM (unpaired)", bottom_r_u)
+				out.append("OVERLAP CHECK (own-base only, no real cross-strand pairing to check):")
+				out.append("  top    substituent chain closest approach to OWN base = %.4f  (chain reaches %.4f from C1')" % [top_r_u.chain_closest_to_own_base, top_r_u.chain_far_from_c1])
+				out.append("  bottom substituent chain closest approach to OWN base = %.4f  (chain reaches %.4f from C1')" % [bottom_r_u.chain_closest_to_own_base, bottom_r_u.chain_far_from_c1])
+				slot += 1
+				continue
+
+			printed += 1
 			var top_r: Dictionary = _derive_full_residue(top_entry, bottom_entry.world_position, bond_length)
 			var bottom_r: Dictionary = _derive_full_residue(bottom_entry, top_entry.world_position, bond_length)
 
@@ -590,6 +729,8 @@ func _dump_pairing(out: Array, top_strand: String, bottom_strand: String, top_so
 			out.append("  bottom base ring closest-atom -> top strand center    = %.4f" % bottom_closest_to_top_center)
 			out.append("  top    ribose-to-own-base (attachment -> ring center) = %.4f  (base ring diameter = %.4f)" % [top_r.attachment_to_ring_center, top_r.base_diameter])
 			out.append("  bottom ribose-to-own-base (attachment -> ring center) = %.4f  (base ring diameter = %.4f)" % [bottom_r.attachment_to_ring_center, bottom_r.base_diameter])
+			out.append("  top    substituent chain closest approach to OWN base = %.4f  (chain reaches %.4f from C1')" % [top_r.chain_closest_to_own_base, top_r.chain_far_from_c1])
+			out.append("  bottom substituent chain closest approach to OWN base = %.4f  (chain reaches %.4f from C1')" % [bottom_r.chain_closest_to_own_base, bottom_r.chain_far_from_c1])
 		slot += 1
 
 
@@ -614,8 +755,10 @@ func _derive_full_residue(entry: Dictionary, partner_world_pos: Vector2, bond_le
 	var c1_local: Vector2 = ring_positions.get(c1_id, Vector2.ZERO)
 	ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(strand))
 
+	var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length)
+
 	var pairing_direction: Vector2 = partner_world_pos - world_pos
-	var base_positions: Dictionary = NitrogenBaseDeriver.derive_base_layout(topology, "incoming.", base_type, c1_local, pairing_direction, bond_length)
+	var base_positions: Dictionary = NitrogenBaseDeriver.derive_base_layout(topology, "incoming.", base_type, c1_local, pairing_direction, bond_length, substituent_positions.values())
 
 	var ring_named: Dictionary = {}
 	for suffix in _DIAG_RING_ROLE_LABELS:
@@ -644,6 +787,32 @@ func _derive_full_residue(entry: Dictionary, partner_world_pos: Vector2, bond_le
 	for id in base_positions:
 		base_world_positions[id] = world_pos + (base_positions[id] - c1_local)
 
+	# Substituent chain (docs/MolecularStructure_BasePairExpansion.md, Bug D
+	# follow-up): O3'/C5'/O5'/alpha-phosphate — placed radially OUTWARD from
+	# C4' by RiboseDeriver.derive_substituents(), chained (C5' = C4' +
+	# outward*bond_length, O5' = C5' + outward*bond_length, alpha_phosphate
+	# = O5' + outward*bond_length) — 3 full bond_lengths beyond the ring
+	# itself, in the SAME "outward" direction every time. Not covered by
+	# the earlier "ribose ring diameter" measurement (ring atoms only) —
+	# this chain can reach much further than the bare ring, and its
+	# direction is tied to ring rotation (sign) same as the ring itself,
+	# independently of the base's own pairing-direction-based rotation.
+	const CHAIN_ROLE_LABELS: Dictionary = {
+		"o3_prime": "O3'", "c5_prime": "C5'", "o5_prime": "O5'", "alpha_phosphate": "alpha-P",
+	}
+	var chain_named: Dictionary = {}
+	for suffix in CHAIN_ROLE_LABELS:
+		var id: int = topology.find_by_role("incoming." + suffix)
+		if substituent_positions.has(id):
+			chain_named[CHAIN_ROLE_LABELS[suffix]] = substituent_positions[id]
+	var chain_far_from_c1: float = 0.0
+	for p in substituent_positions.values():
+		chain_far_from_c1 = max(chain_far_from_c1, p.distance_to(c1_local))
+	var chain_closest_to_own_base: float = INF
+	for p in substituent_positions.values():
+		for bp in base_positions.values():
+			chain_closest_to_own_base = min(chain_closest_to_own_base, p.distance_to(bp))
+
 	return {
 		strand = strand, slot = slot, sign = _strand_direction_sign(strand),
 		base_type = base_type, world_pos = world_pos,
@@ -654,6 +823,9 @@ func _derive_full_residue(entry: Dictionary, partner_world_pos: Vector2, bond_le
 		base_named = base_named, base_diameter = _max_pairwise_distance(base_positions.values()),
 		anchor_suffix = anchor_suffix.to_upper(), anchor_world = anchor_world,
 		base_world_positions = base_world_positions,
+		chain_named = chain_named,
+		chain_far_from_c1 = chain_far_from_c1,
+		chain_closest_to_own_base = chain_closest_to_own_base,
 	}
 
 
@@ -665,6 +837,11 @@ func _write_residue_block(out: Array, label: String, r: Dictionary) -> void:
 		var p: Vector2 = r.ring_named[role_label]
 		out.append("    %s: (%.4f, %.4f)" % [role_label, p.x, p.y])
 	out.append("  ribose ring diameter (widest extent) = %.4f" % r.ring_diameter)
+	out.append("  substituent chain (O3'/C5'/O5'/alpha-P) — local coords:")
+	for role_label in r.chain_named:
+		var pc: Vector2 = r.chain_named[role_label]
+		out.append("    %s: (%.4f, %.4f)" % [role_label, pc.x, pc.y])
+	out.append("  substituent chain farthest point from C1' = %.4f" % r.chain_far_from_c1)
 	out.append("  attachment atom (%s): local=(%.4f, %.4f), distance from C1' = %.4f" % [r.attachment_suffix, r.attachment_local.x, r.attachment_local.y, r.attachment_dist_from_c1])
 	out.append("  base ring — local coords:")
 	for role_label in r.base_named:

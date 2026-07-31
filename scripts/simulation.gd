@@ -1084,6 +1084,19 @@ func get_sequence_rich_text(hover_index: int = -1) -> String:
 ## children of PathFollow2D slots riding rail_path/top_rail_path (see
 ## _spawn_nucleotide_slots()/_spawn_top_strand()), so .position is local to
 ## a moving parent, not a world position.
+## Watson-Crick fix (docs/MolecularStructure_BasePairExpansion.md, Bug E
+## follow-up): these formulas used to disagree with the REAL bead-spawn
+## functions that build what's actually on screen (_spawn_bottom_strand()/
+## _spawn_top_strand(), both in this file) — this function claimed
+## template_bottom = get_base(i), template_top = get_complement(i), while
+## the real spawned beads use the OPPOSITE (template_bottom =
+## get_complement(i), template_top = get_base(i)). This function is the
+## one every OTHER consumer (the molecular skeletal renderer, the F9
+## diagnostic) trusts as ground truth, so it was silently reporting the
+## wrong letter at every template slot relative to what a user actually
+## sees. Confirmed via a live geometry dump + screenshot cross-check, not
+## guessed. Swapped to match the real spawn functions — never touch the
+## spawn functions themselves, they were correct all along.
 func get_template_nucleotides() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for i in range(nucleotide_bases.size()):
@@ -1092,7 +1105,7 @@ func get_template_nucleotides() -> Array[Dictionary]:
 			result.append({
 				slot = i,
 				strand = "template_bottom",
-				base_type = dna_sequence.get_base(i),
+				base_type = dna_sequence.get_complement(i),
 				world_position = base.global_position,
 			})
 	for i in range(top_strand_bases.size()):
@@ -1101,7 +1114,7 @@ func get_template_nucleotides() -> Array[Dictionary]:
 			result.append({
 				slot = i,
 				strand = "template_top",
-				base_type = dna_sequence.get_complement(i),
+				base_type = dna_sequence.get_base(i),
 				world_position = base.global_position,
 			})
 	return result

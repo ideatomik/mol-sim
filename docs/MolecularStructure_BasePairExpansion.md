@@ -377,6 +377,192 @@ of their template, a directly visible change, not just a
 molecular-renderer-only fix. See `diagnosis/FINDINGS_SUMMARY.txt` for the
 diagnostic trail that led here.
 
+**E, CORRECTION — the fix above was itself wrong, in the opposite
+direction of E's own bug.** After F (below) shipped, a live screenshot at
+the normal (non-molecular) zoom level showed leading/lagging STILL
+same-letter-paired against their template, even after a full project
+reload. A new diagnostic (full-sequence same-letter scan, all 57 slots,
+not just the first 10) came back completely clean — meaning the DATA E's
+fix touched (`get_synthesized_nucleotides()`) was internally consistent
+with `get_template_nucleotides()`, yet the actual on-screen rendering
+still disagreed. Root cause: `simulation.gd` has TWO separate functions
+describing the templates, and they had always disagreed with each other —
+`get_template_nucleotides()` (used by the molecular renderer and the F9
+diagnostic — the reference E's fix was validated against) claimed
+`template_bottom = get_base(i)`, `template_top = get_complement(i)`; the
+REAL bead-spawn functions that build what a user actually sees
+(`_spawn_bottom_strand()`/`_spawn_top_strand()`) use the OPPOSITE
+(`template_bottom = get_complement(i)`, `template_top = get_base(i)`) —
+predating this entire session, unrelated to anything fixed today until
+now. E's fix aligned leading/lagging to match `get_template_nucleotides()`
+— which made them WRONG relative to the actually-rendered template beads,
+even though `get_template_nucleotides()` itself, SKILL.md's polarity
+table, and the diagnostic all appeared to agree with each other
+throughout. The diagnostic scan being clean was real but insufficient — it
+only proved internal consistency with the wrong reference, not that the
+reference matched reality.
+
+Fixed properly this time: reverted every one of E's 12
+`replication_manager.gd` changes back to their ORIGINAL formulas (they
+were correct all along), and fixed `get_template_nucleotides()` in
+`simulation.gd` instead, swapping it to match the real spawn functions.
+Never touch the spawn functions themselves. Lesson recorded plainly: when
+a "ground truth" reference function disagrees with what's actually
+rendered, trust the render, not the reference — and check that
+independently, don't just re-derive from the same source that was already
+wrong.
+
+**F — base ring visibly overlaps its own ribose's substituent chain in
+template-template pairing.** With D and E both fixed, the F9 diagnostic
+was extended to measure `RiboseDeriver.derive_substituents()`'s chain
+(O3'/C5'/O5'/alpha-phosphate — 3 successive `bond_length` steps outward
+from C4', all in the same direction, never covered by the earlier "ribose
+ring diameter" metric which only counts the 5 bare ring atoms). Real
+numbers: template-template pairing's chain came within 0.56-4.26 units of
+its own base (near-touching); leading/lagging pairing stayed a comfortable
+34-38 units clear. Same root cause as D's rotation fix — RiboseDeriver's
+ring rotation is tied to fixed strand identity (sign), while
+NitrogenBaseDeriver's base rotation is tied to the actual momentary
+pairing_direction; these two independent choices constructively align for
+template-template pairing (small clearance) and destructively cancel for
+leading/lagging-vs-template pairing (large clearance) — confirmed via the
+diagnostic, not asserted.
+
+Constraint: neither RiboseDeriver's ring rotation (the confirmed-correct
+antiparallel fix) nor its substituent chain (Bug B's inter-residue
+backbone bonds depend on its exact O3'/alpha-phosphate positions) can
+move. The H-bond anchor position (span 12.5484, confirmed consistent
+across all three real pairing relationships after E's fix) also had to
+stay exactly where it was — explicitly required, not just nice-to-have,
+since it took several rounds this session to get right.
+
+Fix: reformulated `derive_base_layout()` so the ANCHOR's target position
+is computed directly, algebraically identical to what the old
+attachment-anchored formula already produced (verified bit-for-bit via
+`diagnosis/diag_anchor_preserving.py` before shipping — both old and new
+formulas produce the same anchor world coordinates to floating-point
+precision). This frees up the base ring's rotation angle as a genuine
+spare degree of freedom (previously fully consumed by aligning
+attachment->anchor with `pairing_direction`), then picks whichever angle
+maximizes the ring's minimum distance from the ribose's own substituent
+chain (passed in as `avoid_points`, computed by the caller one line before
+this call — no duplicated derivation). A single-vector heuristic (rotate
+so attachment->anchor points opposite the chain's own direction) was
+tried first — cheaper, more in-keeping with the rest of the file's
+closed-form trig — and tested via `diagnosis/diag_anchor_preserving.py`:
+it recovered ~80% of the achievable clearance gap for one strand sign but
+only ~17% for the other (the purine fused five-ring's asymmetric bulk
+isn't captured by one vector), so a real search
+(`BASE_ROTATION_SEARCH_STEPS = 72`, i.e. 5-degree resolution) was used
+instead. Still a deterministic, principled derivation — a maximization
+over the one legitimately free rotation DOF, not a tuned constant — same
+"derive, don't hardcode" spirit as every other fix in this file, just
+expressed as a search rather than closed-form trig because the shape
+genuinely doesn't reduce to one. Cost is negligible: skeletal mode only
+ever renders a handful of residues at once (see the Culling note below).
+
+**F, follow-up — the same crossing was still visible for UNPAIRED
+residues, sign-dependent.** A live screenshot (post-F) of an unpaired
+`template_bottom` residue — freshly split off the helicase, not yet
+caught up to by the lagging polymerase — showed the exact same
+ribose-through-base crossing F was supposed to fix. Root cause: an
+unpaired residue has `pairing_direction = Vector2.ZERO` (no real partner
+to compute a direction from), which fell back to a fixed `Vector2.DOWN` —
+completely arbitrary, since there's no H-bond constraint to satisfy when
+unpaired at all. That arbitrary choice happened to leave the clearance
+search plenty of room for `sign=+1` strands (worst case 46.4, comfortably
+clear) but not for `sign=-1` (worst case 4.8 for T/C — barely better than
+the original bug). Confirmed via `diagnosis/diag_unpaired_case.py`
+(segment-vs-base-atom distance, not just endpoint-vs-atom, since the
+earlier metric wouldn't have caught a chain LINE cutting through the
+base's interior between two far-apart points).
+
+Fixed by making the fallback direction chain-aware instead of fixed: when
+unpaired but the ribose's substituent chain (`avoid_points`) is available,
+point away from the chain's own centroid instead of always `Vector2.DOWN`
+— there's no real constraint being violated by doing this, since nothing
+depends on an unpaired residue's exact anchor direction. Verified: raises
+the `sign=-1` worst case from 4.8 to 45.9, comfortably clear, and doesn't
+regress `sign=+1` (still 43.9+). Genuinely direction-only unpaired
+fallback (`Vector2.DOWN`, no `avoid_points` at all) kept as a last-resort
+fallback for any caller that doesn't supply `avoid_points`.
+
+**F, correction — clearance search silently stretched the glycosidic
+bond.** Flagged from a live atom-zoom screenshot of the bottom template
+strand (no paired base yet): the vertical C1'-to-base line's length
+visibly varied residue to residue, and the phosphodiester backbone lines
+near it looked jumbled. Root cause, confirmed algebraically before
+touching code: the clearance search (Bug F's core fix, above) pins the
+H-bond ANCHOR atom (N1/N3) at a fixed target and rotates the whole base
+ring freely around it to maximize distance from `avoid_points`. Nothing
+in that search constrains where the ATTACHMENT atom (N9/N1) lands — it's
+only exactly `bond_length` from C1' when the chosen rotation happens to
+put `local_reach` (anchor minus attachment, fixed in the ring's local
+frame) parallel to `pairing_direction`, which the search has no reason to
+prefer. But the C1'-to-attachment bond is a real covalent bond in the
+topology (`_attach_glycosidic_bond()`) — same category as the
+phosphodiester backbone bond this codebase already treats as
+non-stretching (see the Culling note's sibling reasoning in
+`molecule_structure_renderer.gd`'s `_build_backbone_bonds()` comments).
+The search was stretching it as a side effect, differently per residue
+depending on avoid-point geometry — exactly the varying-length line seen
+on screen.
+
+Fixed by re-deriving `derive_base_layout()`'s search to pin the
+ATTACHMENT atom at `c1_position + dir * bond_length` and rotate around
+that instead of the anchor. Verified algebraically (not assumed) that
+this is identical to the old formula whenever `avoid_points` is empty —
+both converge on the same result when the rotation happens to align
+`local_reach` with `dir` — so the no-search fallback path, and every
+already-verified paired/unpaired clearance number from Bug F and its
+unpaired follow-up above, are unaffected. The accepted tradeoff: the
+H-bond anchor's exact position — and therefore its span, previously noted
+above as "exactly right and must not move again" — is no longer perfectly
+fixed across every paired case; it now varies with whichever angle the
+search picks for that residue. This is judged correct: an H-bond is not a
+rigid covalent bond, so letting its geometry flex is chemically more
+honest than letting a real covalent bond stretch. **Confirmed** via a
+fresh F9 dump: every `attachment atom ... distance from C1'` entry now
+reads exactly `10.8000` (the live `bond_length`), paired and unpaired
+alike, across the whole dump.
+
+## Bug G — ghost H-bond between templates already past the helicase
+
+Flagged from a live atom-zoom screenshot: cyan dashed H-bond lines
+visible between `template_top`/`template_bottom` residues clearly already
+separated by (to the left of) the helicase glyph, toggling fully on/off
+with a single camera-zoom-wheel tick — a reproducible input-tied flicker,
+not a one-off render glitch.
+
+Root cause: `_pair_for_slot()`'s template-template branch decided
+"unzipped" purely from whether `leading`/`lagging` had a synthesized base
+at that slot yet, with a doc comment claiming this "mirrors
+`template_hydrogen_bonds`' own existing visibility rule in simulation.gd."
+That claim was never actually true: simulation.gd's own bead-glyph rule
+(`template_hydrogen_bonds[i].visible = (world_x >= helicase_x)`) keys
+purely off the helicase's physical position, while `_pair_for_slot()` keyed
+off synthesis progress — two different positions, since
+`polymerase_x_offset_slots` (simulation.gd, default 4) keeps both
+polymerases trailing several slots behind the helicase. In that real gap —
+already unwound, not yet reached by either polymerase — `_pair_for_slot()`
+kept reporting the two templates as still paired, so the skeletal renderer
+drew an H-bond between two strands no longer in contact. The zoom-tick
+flicker was this gap-zone pair sitting right at the per-molecule cull
+boundary (`_build_hydrogen_bonds()` only draws a pair when both residues'
+anchors survive the current frame's cull rect, itself sized from the live
+zoom level) — a symptom of the stale pairing decision, not a second bug.
+
+Fixed by switching `_pair_for_slot()` to the same authoritative condition
+simulation.gd already uses: compare the slot's own world-x position
+(`position_by_key`, already threaded through both call sites) against
+`template_sim.helicase_x` directly, rather than inferring it from
+leading/lagging existence. `_dump_pairing()`'s diagnostic replica of this
+logic updated to match (it now also marks a slot unzipped once past
+`template_sim.helicase_x`, not only once leading/lagging exists), so the
+diagnostic can't silently drift from the renderer's real behavior again.
+Awaiting a live screenshot to confirm the ghost lines are gone and no
+longer flicker with zoom.
+
 ---
 
 ## Culling note
