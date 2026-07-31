@@ -1,0 +1,216 @@
+MOLECULAR STRUCTURE — BASE-PAIR GEOMETRY DIAGNOSTIC FINDINGS
+Session date: 2026-07-31
+Status: DIAGNOSIS IN PROGRESS — not all findings below are fixed yet.
+Related doc: docs/MolecularStructure_BasePairExpansion.md (Bug D entry has
+the earlier, already-applied fixes recorded in full).
+
+================================================================
+1. ALREADY FIXED THIS SESSION (confirmed via diag_verify.py/diag_symmetry.py)
+================================================================
+a) derive_fused_ring() direction bug (nitrogen_base_deriver.gd): was
+   walking toward the ALREADY-KNOWN ring neighbor instead of the unplaced
+   one, landing purine N9 exactly on top of C5. Fixed (swapped +1/-1
+   branch). Verified: |N9-C5| now 30.58 (was 0.0).
+
+b) derive_base_layout() rotation-target retarget (nitrogen_base_deriver.gd):
+   originally aligned the C1'->attachment-atom direction with
+   pairing_direction, which pointed the H-bond ANCHOR atom (N1/N3 — a
+   DIFFERENT atom than the attachment atom N9/N1) away from the partner,
+   since attachment and anchor sit on roughly opposite sides of the ring.
+   A bond_length sweep proved NO bond_length value could fix this under
+   the old rotation target (span only ever grew from the bare gap
+   upward). Fixed by aligning the LOCAL attachment->anchor vector with
+   pairing_direction instead — attachment atom still lands at exactly
+   c1_position + pairing_direction * bond_length (unchanged); only the
+   rotation around that point changed. Still a proper Vector2.rotated(),
+   never a mirror. Verified: G/C and A/T spans became symmetric and
+   showed a real V-shaped minimum instead of a monotonic-only-grows curve.
+
+Both fixes are real and confirmed independent of everything below.
+
+================================================================
+2. CRITICAL DISCOVERY: theme_manager.gd/simulation.gd script DEFAULTS do
+   NOT drive the running scene — scenes/simulation.tscn has SAVED
+   PER-INSTANCE OVERRIDES that silently win.
+================================================================
+Confirmed via grep of scenes/simulation.tscn:
+    dna_ribbons_gap = 60.0
+    molecular_ring_bond_length_ratio = 0.2   (bond_length = 10.8)
+
+This means:
+  - My earlier "retune to molecular_ring_bond_length_ratio = 0.287" edit
+    to theme_manager.gd's script default NEVER actually took effect in
+    the running game — the scene's saved 0.2 overrode it the whole time.
+  - EVERY synthetic Python sweep run earlier this session
+    (diag_span_breakdown.py, diag_retarget.py) assumed dna_ribbons_gap =
+    90. The real live value is 60. All "optimal bond_length" conclusions
+    from those scripts were calibrated against the wrong gap and need to
+    be redone against 60 if/when a retune is revisited.
+  - Not yet resolved: whether 60 / 0.2 were intentionally hand-tuned by
+    the user in the editor (in which case treat as ground truth) or are
+    stale/accidental. ASK BEFORE CHANGING THE .tscn VALUES.
+
+Live values confirmed via the in-game diagnostic dump (not assumed):
+    nucleotide_slot_spacing = 54.0
+    dna_ribbons_gap = 60.0
+    molecular_ring_bond_length_ratio = 0.2
+    bond_length = 10.8
+
+================================================================
+3. GEOMETRY DIAGNOSTIC DUMP TOOL
+================================================================
+Added to scripts/molecule_structure_renderer.gd (temporary — remove once
+no longer needed, same convention as earlier removed diagnostics):
+  - Press F9 in the running scene (before or during play) to write a full
+    geometry dump to user://geometry_dump.txt (NOT print()/console — an
+    earlier version used a self-resetting @export bool toggled via the
+    Remote Inspector tab, which crashed the game: the editor's live
+    property sync can re-push "true" before the script's own one-shot
+    reset lands, firing the dump every frame and flooding the same
+    connection print() uses, causing a "Packet too large" debugger
+    disconnect. Switched to a real keypress + file output to avoid this
+    entirely).
+  - Bypasses _rebuild_layout()'s cull_rect — always dumps the first 10
+    slots of each pairing regardless of camera position.
+  - Dumps all 3 pairings every trigger: template_top/template_bottom,
+    leading/template_top, lagging/template_bottom.
+  - KNOWN FLAW (not yet fixed): the template_top/template_bottom section
+    pairs every slot unconditionally, even ones already unzipped
+    post-play (where the real renderer's _pair_for_slot() would return ""
+    and draw no H-bond at all there). Post-play dumps of this section
+    show a huge anchor-to-anchor span (227.45) that is an ARTIFACT of
+    this — disregard those numbers. The leading/template_top and
+    lagging/template_bottom sections do NOT have this flaw (their
+    pairing is unconditional on the real PARTNER_STRAND table too, so the
+    diagnostic matches real behavior there).
+
+================================================================
+4. CONFIRMED FORMULA: bond_length simultaneously controls ribose ring
+   size, base ring size, AND ribose-to-base attachment reach (Goal 1)
+================================================================
+Ribose ring's own centroid sits exactly 0.8507 * bond_length from C1'
+(regular-pentagon geometry, exact). The base's attachment atom (N9/N1)
+sits exactly 1.0 * bond_length from C1' (by construction, unconditional).
+For the STRAIGHT/purely-vertical pairing case (no wobble), the distance
+between the ribose ring's centroid and the base's attachment point is
+therefore exactly:
+    bond_length * |1 - 0.8507| = bond_length * 0.1493
+At bond_length=10.8: 10.8 * 0.1493 = 1.613 — matches every template-top/
+template-bottom row in the pre-play dump exactly.
+
+NOTE (see section 6): this 0.1493 relationship is NOT universal — it only
+holds for the specific sign/pairing-direction combination present in
+template-template pairing. Leading/lagging show a different, also-
+constant value (19.987) for the same underlying quantity. The bond_length
+coupling itself (one knob driving all three quantities) IS universal;
+which constant it lands on is not.
+
+================================================================
+5. RIBOSE VISIBLY OVERLAPS ITS OWN BASE — confirmed for template pairing
+   (Goal 2)
+================================================================
+Ribose ring's own half-width = 17.4748 / 2 = 8.74. Template-template
+pairing's ribose-to-attachment offset (1.613) is more than 5x smaller than
+that half-width, so the ribose ring necessarily intrudes deep into the
+base ring's near edge. Matches the screenshot symptom exactly, with
+numbers, for template-strand rendering specifically. Leading/lagging do
+NOT show this (offset 19.987 > half-width 8.74 — no overlap there).
+
+================================================================
+6. WHY TEMPLATE LOOKS STRUCTURALLY WORSE THAN LEADING/LAGGING (Goal 3) —
+   RESOLVED, sign-interaction, not staleness or different code
+================================================================
+Confirmed NOT a caching/staleness issue (both re-read from live code:
+topology fold is cached per "strand:slot" key forever, but ring/base
+LOCAL GEOMETRY is recomputed fresh every frame for every strand including
+template — verified from molecule_structure_renderer.gd directly).
+
+Confirmed NOT a different code path (same _rebuild_layout() ->
+RiboseDeriver / NitrogenBaseDeriver calls for all three).
+
+Root cause: two INDEPENDENT rotations interact.
+  - RiboseDeriver.apply_strand_direction()'s 180-degree ribose rotation is
+    tied to fixed STRAND IDENTITY (leading is always sign -1, regardless
+    of who it's paired with this frame).
+  - NitrogenBaseDeriver.derive_base_layout()'s retargeted rotation (fix
+    2a above) is tied to the ACTUAL pairing_direction for that residue
+    this frame — situational, not fixed per strand.
+  For template-top/template-bottom pairing, these two signs combine
+  CONSTRUCTIVELY, producing the small 1.613 ribose-to-base offset (heavy
+  overlap). For leading-paired-against-template_top and lagging-paired-
+  against-template_bottom, the same two rotations combine
+  DESTRUCTIVELY instead, producing 19.987 (no overlap). This was
+  confirmed identical (19.987) across every leading pair and every
+  lagging pair tested, regardless of which specific bases were involved
+  — a real, reproducible geometric consequence of the sign relationship,
+  not noise.
+
+Earlier in this same investigation I called 1.613 a "universal constant"
+before pass 2/3 data existed — that was premature/wrong. It's constant
+WITHIN a given pairing relationship (template-template, or leading-
+template, or lagging-template), but different ACROSS relationships,
+because each relationship has its own fixed sign combination.
+
+================================================================
+7. RESOLVED: leading/lagging showed SAME-LETTER pairs against their
+   template partner — confirmed real bug, fixed
+================================================================
+Every one of the first 10 slots in BOTH the leading/template_top section
+and the lagging/template_bottom section showed IDENTICAL letters (AA, TT,
+GG — never AT, TA, GC, CG). Investigated and fixed (see
+docs/MolecularStructure_BasePairExpansion.md's Bug E entry for the full
+account). Root cause confirmed against docs/SKILL.md's own polarity
+table: leading's real template is template_top (get_complement(i)), so
+leading's own letter must be get_base(i), not get_complement(i) as every
+call site had it (and symmetrically for lagging vs. template_bottom).
+PARTNER_STRAND and the spatial layout formulas were already correct —
+only the base-identity formula was backwards, at 12 call sites in
+replication_manager.gd, all now fixed and swapped consistently.
+
+This means every leading/lagging H-bond-span number gathered earlier in
+this dump (26.08 for AA/GG pairs, 0.99 for TT pairs) was measuring a
+nonsensical purine-purine/pyrimidine-pyrimidine combination the
+rotation-retarget fix was never designed for — those numbers should be
+discarded, not reused. Re-run the F9 diagnostic dump after this fix to get
+real leading/lagging span numbers for genuinely complementary pairs before
+making any further bond_length decision.
+
+CONFIRMED FIXED (post-fix F9 dump, 2026-07-31T13:20:31, plus user's own
+visual check in the live game): every pair in all three sections —
+template_top/template_bottom, leading/template_top, lagging/template_bottom
+— now shows a genuine two-different-letter Watson-Crick combination (GC,
+CG, AT, TA — never AA/CC/GG/TT). User independently confirmed visually in
+the live bead-glyph view too, not just the diagnostic dump.
+
+New real numbers from the post-fix dump, now trustworthy (genuinely
+complementary pairs, not the AA/TT/GG artifacts):
+  - template-template H-bond anchor-to-anchor span: 12.5484 (consistent
+    across all 10 pairs).
+  - leading/template_top and lagging/template_bottom H-bond span: ALSO
+    12.5484-12.5485 — matches template-template almost exactly now that
+    real WC pairs are being measured. (The old, discarded AA/TT/GG-based
+    numbers were 26.08/0.99 — nowhere close; this alone confirms those
+    were nonsense.)
+  - ribose-to-own-base offset: STILL 1.6130 for template-template pairing,
+    STILL 19.9870 for leading/lagging pairing against their template —
+    unchanged by the sequence fix, as expected, since section 6's
+    sign-interaction explanation is about ROTATION signs, not which
+    letters are involved. Template pairing still visibly overlaps its own
+    base (1.613 << ribose half-width 8.74); leading/lagging still don't
+    (19.987 > 8.74). This remains the leading open geometry question.
+
+================================================================
+8. OPEN / NOT YET DONE
+================================================================
+- Same-strand adjacent-residue ring overlap was NOT measured by this
+  diagnostic (only cross-strand distances were computed) — original
+  screenshot symptom (1) from the request that started this diagnostic
+  pass is still unconfirmed numerically.
+- Section 7's sequence/complement question is RESOLVED (see updated
+  section 7 above) — the leading/lagging base_type fix is applied.
+- No bond_length retune has been decided or applied since the scene-
+  override discovery (section 2) invalidated the earlier 0.287
+  recommendation's basis (wrong gap assumption).
+- Whether dna_ribbons_gap=60 / molecular_ring_bond_length_ratio=0.2 in
+  scenes/simulation.tscn are intentional hand-tuned values or should be
+  changed is an open question for the user, not yet answered.

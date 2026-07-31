@@ -8,7 +8,7 @@ description: >
   placement, Camera2D.ignore_rotation, stale editor state), edit protocol,
   architecture patterns, polarity marker logic, scrub rebuild rules, and
   biological model reference.
-version: "77.0"
+version: "81.0"
 ---
 
 # MolSim GDScript Skill
@@ -261,6 +261,25 @@ resolving it.
 been uploaded yet and had a `draw_string()` — it would have shipped with sideways
 letters. Any claim about ALL of the code must be checked against the repo, not
 against what happens to be in the conversation.
+
+### Verify biology against current sources, not memory
+The same ground-truth discipline above applies to biological claims, not just
+code. Before finalizing a design decision, a complexity-toggle behavior, or a
+proposed option set that rests on a biological mechanism, check it against a
+current authoritative source (a recent review, textbook, or primary paper) —
+don't rely on trained-in recall. As zoom depth and mechanism count grow, the
+risk of quietly conflating adjacent facts (wrong rate-limiting step, wrong
+enzyme assignment, a detail that's true for one organism but not the one
+MolSim models) grows with it, and errors like that are far more expensive to
+catch after they're embedded in animation logic than before.
+
+Cite what was checked: name the source and pull the specific supporting detail
+in your own words, with a short (sub-sentence) excerpt only where the exact
+wording matters — not a running paraphrase-quote of the source. If a source
+can't be found or is ambiguous, say so explicitly rather than defaulting to
+memory silently. This applies to Nucleation/Lattice-stage discussion as much
+as to committed doc text — flag the unverified biological claim before it
+becomes a premise the rest of the session builds on.
 
 ### When combining fixes across versions
 Always diff the two versions first to identify exactly what changed. Apply only

@@ -36,10 +36,17 @@ const RING_ROLE_SUFFIXES: Array[String] = ["c1_prime", "c2_prime", "c3_prime", "
 ## existing terminal 3'-oxygen — the previous residue's own ring is
 ## rendered as its own independent unit elsewhere, so only the one atom it
 ## contributes to THIS reaction needs to exist here) plus the full
-## "incoming."-prefixed ribose + triphosphate topology. Fold this seed with
-## the phosphodiester operator (step_n = 0) to get the post-bond-formation
-## topology actually rendered for a synthesized base.
-static func build_incoming_nucleotide_seed(role_prefix: String = "incoming.") -> MoleculeTopology:
+## "incoming."-prefixed ribose + triphosphate + base topology.
+## `base_letter` (A/T/C/G) selects the nitrogenous base attached at C1' —
+## see NitrogenBaseDeriver.build_base_seed_into(). No ReactionOperator
+## models base attachment (see docs/MolecularStructure_BasePairExpansion.md's
+## decision record): the base is always present, not a simulated reaction
+## step, so it's built directly into the seed rather than via a fold.
+## Fold this seed with the phosphodiester operator (step_n = 0) to get the
+## post-bond-formation topology actually rendered for a synthesized base;
+## template-strand residues use step_n = -1 (the seed itself, unfolded —
+## template nucleotides are never a party to that reaction).
+static func build_incoming_nucleotide_seed(role_prefix: String = "incoming.", base_letter: String = "A") -> MoleculeTopology:
 	var t := MoleculeTopology.new()
 
 	var chain_o3 := t.add_atom("O", "chain.o3_prime")
@@ -54,6 +61,8 @@ static func build_incoming_nucleotide_seed(role_prefix: String = "incoming.") ->
 	t.add_bond(c3, c4)
 	t.add_bond(c4, o4)
 	t.add_bond(o4, c1)
+
+	NitrogenBaseDeriver.build_base_seed_into(t, role_prefix, base_letter)
 
 	var o3 := t.add_atom("O", role_prefix + "o3_prime")
 	t.add_bond(c3, o3)
@@ -92,38 +101,28 @@ static func build_incoming_nucleotide_seed(role_prefix: String = "incoming.") ->
 	return t
 
 ## Ring vertex positions in a local, unrotated, unscaled frame (ring
-## centroid at origin) — the Layout layer. Placed as a regular pentagon
-## (circumradius derived from bond_length) rather than walked edge-by-edge
-## with a fixed turn angle: an edge-walk using a single idealized turn
-## angle (e.g. derived from TETRAHEDRAL_ANGLE_DEG) does not close exactly
-## over 5 vertices, which would leave a visible gap or require a
-## non-uniform closing edge — undermining the "stability, not just
-## determinism" requirement (MolecularStructureDesign.md's Layout
-## section). A regular pentagon closes by construction and keeps every
-## edge equal length, which is the correct idealized-schematic choice for
-## canonical vertex positions; TETRAHEDRAL_ANGLE_DEG is kept as a named
-## constant for documentation/future reference even though the pentagon
-## placement itself doesn't consume it directly.
+## centroid at origin) — the Layout layer. Thin wrapper over
+## NitrogenBaseDeriver.derive_regular_ring() (extracted as a shared pure
+## utility in Growth Session 2 — see docs/MolecularStructure_BasePairExpansion.md):
+## placed as a regular pentagon (circumradius derived from bond_length)
+## rather than walked edge-by-edge with a fixed turn angle, since an
+## edge-walk over 5 vertices does not close exactly — undermining the
+## "stability, not just determinism" requirement (MolecularStructureDesign.md's
+## Layout section). A regular pentagon closes by construction.
+## TETRAHEDRAL_ANGLE_DEG is kept as a named constant for documentation/
+## future reference even though the pentagon placement itself doesn't
+## consume it directly.
+##
+## HARDCODED HANDEDNESS (MolecularStructureDesign.md Open Question 3's
+## milestone-slice decision): walking RING_ROLE_SUFFIXES in INCREASING
+## angle (derive_regular_ring()'s default start_angle/direction) is the one
+## fixed convention that produces D-ribose. Not a parameter, deliberately —
+## see this file's header and the design doc's Open Questions section.
+## Reversing the walk direction would produce L-ribose instead; do not add
+## a flag here to "support" that without promoting handedness to real
+## topology data first, per the design doc's explicit caution.
 static func derive_ring(topology: MoleculeTopology, role_prefix: String, bond_length: float) -> Dictionary:
-	var positions: Dictionary = {}
-	var circumradius: float = bond_length / (2.0 * sin(PI / RING_ATOM_COUNT))
-	var angle_step: float = TAU / RING_ATOM_COUNT
-	for i in range(RING_ATOM_COUNT):
-		var atom_id: int = topology.find_by_role(role_prefix + RING_ROLE_SUFFIXES[i])
-		if atom_id == -1:
-			push_warning("RiboseDeriver.derive_ring: role not found (%s)" % [role_prefix + RING_ROLE_SUFFIXES[i]])
-			continue
-		# HARDCODED HANDEDNESS (MolecularStructureDesign.md Open Question 3's
-		# milestone-slice decision): walking RING_ROLE_SUFFIXES in
-		# INCREASING angle is the one fixed convention that produces
-		# D-ribose. Not a parameter, deliberately — see this file's header
-		# and the design doc's Open Questions section. Reversing this
-		# loop's angle direction would produce L-ribose instead; do not add
-		# a flag here to "support" that without promoting handedness to
-		# real topology data first, per the design doc's explicit caution.
-		var angle: float = -PI / 2.0 + i * angle_step
-		positions[atom_id] = Vector2(cos(angle), sin(angle)) * circumradius
-	return positions
+	return NitrogenBaseDeriver.derive_regular_ring(topology, RING_ROLE_SUFFIXES, role_prefix, bond_length)
 
 ## Substituent positions (5'-CH2-phosphate chain's first atom, 3'-OH),
 ## merged into the same local frame as derive_ring()'s output — the
@@ -174,3 +173,27 @@ static func derive_substituents(topology: MoleculeTopology, role_prefix: String,
 					positions[alpha_o2_id] = alpha_pos + (outward - perp).normalized() * bond_length
 
 	return positions
+
+## Rotates every position in `local_positions` by 180 degrees around `pivot`
+## when `direction_sign` is negative — identity otherwise. This is a PROPER
+## ROTATION (`new = 2*pivot - old`, negating both components relative to
+## the pivot), never a mirror/reflection. A rotation preserves chirality in
+## 2D; a mirror would invert it — silently flipping the ring to the wrong
+## enantiomer on screen while visually "fixing" the overlap, a correctness
+## bug masquerading as a layout fix. See
+## docs/Handout_AntiparallelStrandOrientation.md.
+##
+## Strand-agnostic by design — this file has no concept of "leading" vs.
+## "template_top," only a caller-supplied sign, matching the same
+## separation pairing_direction already established (the renderer owns
+## strand identity; this file owns geometry). `pivot` is expected to be the
+## same anchor point (C1') the renderer already translates the whole
+## residue by, so C1' itself stays fixed under the rotation — only the
+## ring/substituents/base rotate around it.
+static func apply_strand_direction(local_positions: Dictionary, pivot: Vector2, direction_sign: float) -> Dictionary:
+	if direction_sign >= 0.0:
+		return local_positions
+	var rotated: Dictionary = {}
+	for id in local_positions:
+		rotated[id] = 2.0 * pivot - local_positions[id]
+	return rotated

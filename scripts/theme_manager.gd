@@ -454,7 +454,18 @@ extends Node
 ## no target selected). There's no enzyme footprint to size against once no
 ## target is selected, so this is a flat number rather than a per-target
 ## Level 3 fit. NOT YET TUNED — placeholder pending real numbers in-engine.
-@export var zoom_free_camera_max_zoom_in: float = 4.0
+##
+## Raised 4.0 -> 8.0 (Growth Session 2 CQA follow-up, see
+## docs/MolecularStructure_BasePairExpansion.md's culling note): this value
+## also doubles as the ceiling molecule_structure_renderer.gd's per-molecule
+## cull window narrows toward (cull window = viewport_size / zoom.x). At
+## 4.0 the window stayed wide enough (~320px raw at a 1280px viewport) to
+## keep 10+ nucleotides simultaneously in skeletal mode at once, each now
+## carrying a full base + backbone + H-bond lines across up to 4 strands —
+## a real perf drop. 8.0 narrows that to ~160px (~3 nucleotides), back in
+## range of the "a handful" working-set assumption Q9's per-molecule-only
+## culling decision was built on. Still empirically tunable, not final.
+@export var zoom_free_camera_max_zoom_in: float = 8.0
 ## Multiplier applied per scroll-wheel tick, or per Zoom In/Out button press
 ## while already in free-camera mode (zoom *= this per step in, /= this per
 ## step out). NOT YET TUNED.
@@ -483,21 +494,68 @@ extends Node
 ## one shared threshold would flap the render mode every tick reversed.
 ## See MolecularStructure_OpenQuestions_RenderClusterResolution.md
 ## (question 4). NOT YET TUNED.
-@export var molecular_zoom_enter_threshold: float = 3.0
+##
+## Raised 3.0 -> 6.5 (Growth Session 2 CQA follow-up, see
+## docs/MolecularStructure_BasePairExpansion.md's culling note): raising
+## zoom_free_camera_max_zoom_in alone only narrowed the per-molecule cull
+## window (viewport_size / zoom.x) once actually zoomed to near that
+## ceiling — for most of the active range, the window was still sized by
+## THIS threshold, which stayed wide enough (~427px at a 1280px viewport,
+## ~8 nucleotides) to keep the same perf problem for anywhere but the
+## extreme max zoom. At 6.5 the window is already ~197px (~3.6
+## nucleotides) at the moment skeletal mode activates.
+@export var molecular_zoom_enter_threshold: float = 6.5
 ## Zoom scalar crossed GOING DOWN that deactivates skeletal rendering.
-## Strictly less than molecular_zoom_enter_threshold. NOT YET TUNED.
-@export var molecular_zoom_exit_threshold: float = 2.2
+## Strictly less than molecular_zoom_enter_threshold. Raised 2.2 -> 5.5
+## alongside the enter threshold, keeping a comparable hysteresis gap.
+## NOT YET TUNED.
+@export var molecular_zoom_exit_threshold: float = 5.5
 ## World-space bond length for one ribose-ring edge, expressed as a
 ## fraction of nucleotide_slot_spacing (sim.gd) rather than a literal
 ## Ångström constant — relative bond-length ratios only, per
 ## MolecularStructureDesign.md Open Question 2's resolution (derived
-## geometry, not real-world scale). NOT YET TUNED.
-@export var molecular_ring_bond_length_ratio: float = 0.35
+## geometry, not real-world scale). Tuned (docs/MolecularStructure_
+## BasePairExpansion.md): 0.35 (bond_length=18.9) put the H-bond anchor
+## span at 36.96 with the purine ring's own widest extent (62.54) actually
+## EXCEEDING nucleotide_slot_spacing (54.0) — confirmed cause of the
+## screenshot-reported same-strand purine overlap. 0.287 (bond_length=15.5)
+## was picked from a fine sweep (diagnosis/diag_retarget.py) as the point
+## where the H-bond span first clears 2 full dash+gap cycles of
+## molecular_h_bond_dash_length/gap_length (14.0 units) while the purine
+## extent (51.29) still keeps a real, if thin (~5%), margin under
+## nucleotide_slot_spacing — the two constraints trade off against each
+## other across the whole sweep, so this is a balance point, not a value
+## that clears both with room to spare.
+@export var molecular_ring_bond_length_ratio: float = 0.287
 ## Line width for skeletal bonds, world units (scales with zoom like
 ## everything else drawn in world space). NOT YET TUNED.
 @export var molecular_bond_width: float = 2.5
 ## Atom circle radius, world units. NOT YET TUNED.
 @export var molecular_atom_radius: float = 6.0
+## Font size (px) for skeletal atom element-symbol labels. Deliberately its
+## OWN field, not a reuse of base_label_font_size — that value (14) is
+## proportioned for the bead-glyph mode's base_radius (15 world units,
+## ratio ~0.93). Reused directly against molecular_atom_radius (6.0), the
+## ratio becomes ~2.33 — ~2.5x too large relative to its own atom circle,
+## independent of zoom (both circle and label are magnified equally by the
+## same camera transform, so this was a proportion bug, not a zoom-level
+## one) — the root cause of the label/atom overlap CQA found. Default here
+## (6) matches the bead-glyph mode's own ratio applied to this circle's
+## actual radius. NOT YET TUNED — a reasoned starting point, not a final
+## answer; residual overlap after this is the signal to tune
+## molecular_atom_radius/molecular_ring_bond_length_ratio next.
+@export var molecular_atom_label_font_size: int = 6
+## Option C fix (docs/MolecularStructure_BasePairExpansion.md): number of
+## points sampled along the actual template rail curve for an
+## inter-residue bond whose straight-chord length exceeds
+## nucleotide_slot_spacing (only possible on template_bottom/template_top,
+## the only strands with a curve to bend around — leading/lagging use flat
+## algebraic Y, never trigger this). A covalent phosphodiester bond does
+## not stretch; drawing a curve-following polyline through the fork's
+## steep bonded->unzipped transition is chemically honest where a straight
+## chord was a rendering approximation, not a data problem. "A handful" —
+## 5 segments. NOT YET TUNED.
+@export var molecular_curve_sample_count: int = 6
 ## Fill color for skeletal bonds and any atom with no per-element color
 ## defined below (the element color table itself lives in
 ## molecule_structure_renderer.gd, matching simulation.gd's
@@ -507,6 +565,30 @@ extends Node
 ## extent when building its per-molecule culling bounding box. NOT YET
 ## TUNED.
 @export var molecular_cull_bbox_padding: float = 20.0
+## Growth Session 2 (base-pair expansion): CPK color for nitrogen atoms —
+## carbon/oxygen/phosphorus already have dedicated cases in
+## molecule_structure_renderer.gd's _element_color(); nitrogen previously
+## fell through to molecular_bond_color, which stopped being distinct once
+## real base topology (with several N atoms per residue) started rendering.
+## Standard CPK convention: blue. NOT YET TUNED.
+@export var molecular_nitrogen_color: Color = Color(0.25, 0.35, 0.95)
+## Growth Session 2: additional cull-bbox padding accounting for a base
+## pair's real extent now spanning BOTH strands (the hydrogen-bond span),
+## not just one ribose ring. Sized off the same live gap
+## _update_hydrogen_bond_height() already reads (dna_ribbons_gap), not an
+## independently-tuned constant — see
+## docs/MolecularStructure_BasePairExpansion.md's culling note. NOT YET
+## TUNED (defaults to sim.dna_ribbons_gap at the renderer call site if left
+## at 0.0).
+@export var molecular_pair_span_padding: float = 0.0
+## Growth Session 2: dash length for the dotted hydrogen-bond lines drawn
+## between paired bases' named pairing-anchor atoms (Tier 2 per the
+## addendum doc — one anchor atom per base, existing AT=2/CG=3 line count
+## reused from replication_manager.gd, not recomputed). NOT YET TUNED.
+@export var molecular_h_bond_dash_length: float = 4.0
+## Growth Session 2: gap length between dashes for the same dotted
+## hydrogen-bond lines. NOT YET TUNED.
+@export var molecular_h_bond_gap_length: float = 3.0
 
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:

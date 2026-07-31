@@ -48,6 +48,14 @@ extends Node
 var sim: Node = null  # Set by initialize(). Used for add_child(), geometry, etc.
 var tm: Node = null   # ThemeManager reference, cached in initialize()
 var zoom_mgr: Node = null  # ZoomManager reference, cached in initialize()
+## MoleculeStructureRenderer reference (Growth Session 2), pushed in by
+## simulation.gd — used only to poll is_slot_active() live each frame for
+## bug-A occlusion suppression. Never reached into for anything else,
+## preserving "no script reaches into another script's owned visual nodes."
+var molecule_renderer: Node = null
+
+func set_molecule_renderer(renderer: Node) -> void:
+	molecule_renderer = renderer
 # LongSequenceDesign.md follow-up — scrub index when each clamp's current
 # drag gesture began. Kept separate per clamp (only one is realistically
 # ever mid-drag at once, but no reason to share state that doesn't need to be).
@@ -782,31 +790,63 @@ func _apply_highlight() -> void:
 	if lagging_clamp != null: lagging_clamp.modulate.a = lagging_dim
 	if lagging_halo != null: lagging_halo.modulate.a = lagging_dim
 
-	# Strand visuals: plain modulate.a is safe here — nothing else writes it.
+	# Strand visuals: plain modulate.a is safe here — nothing else writes it,
+	# EXCEPT the molecular-structure occlusion suppression (bug A,
+	# MolecularStructure_BasePairExpansion.md), which is folded in directly
+	# below rather than living as a second writer in _leading_render()/
+	# _lagging_render() — two writers on the same modulate.a property is
+	# exactly the bug class this file's own "one writer per property" rule
+	# (see the enzyme comment above) already warns against, and a real
+	# instance of it shipped here once: this function runs AFTER
+	# _leading_render()/_lagging_render() inside render(), so an earlier
+	# occlusion write here would have silently clobbered strand_dim right
+	# back to ~1.0 every frame. molecular_active(...) suppression always
+	# wins over strand_dim (0.0, not multiplied) — a residue being shown
+	# skeletally should read as fully hidden in bead mode regardless of
+	# whatever the zoom-highlight dim would otherwise have been.
 	var strand_dim = zoom_mgr.get_strand_highlight_dim()
-	if leading_backbone_line != null: leading_backbone_line.modulate.a = strand_dim
-	for mark in leading_strand_bond_marks:
-		if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
-	for bond in leading_hydrogen_bonds:
-		if bond != null and is_instance_valid(bond): bond.modulate.a = strand_dim
+	var leading_strand_active: bool = molecule_renderer != null and molecule_renderer.is_strand_active("leading")
+	var lagging_strand_active: bool = molecule_renderer != null and molecule_renderer.is_strand_active("lagging")
 
-	if lagging_backbone_line != null: lagging_backbone_line.modulate.a = strand_dim
+	if leading_backbone_line != null: leading_backbone_line.modulate.a = 0.0 if leading_strand_active else strand_dim
+	for mark in leading_strand_bond_marks:
+		if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if leading_strand_active else strand_dim
+	for i in range(leading_hydrogen_bonds.size()):
+		var bond = leading_hydrogen_bonds[i]
+		if bond == null or not is_instance_valid(bond): continue
+		var bond_molecular_active: bool = molecule_renderer != null and molecule_renderer.is_slot_active("leading", i)
+		bond.modulate.a = 0.0 if bond_molecular_active else strand_dim
+
+	if lagging_backbone_line != null: lagging_backbone_line.modulate.a = 0.0 if lagging_strand_active else strand_dim
 	for mark in lagging_bond_marks:
-		if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
-	for bond in lagging_hydrogen_bonds:
-		if bond != null and is_instance_valid(bond): bond.modulate.a = strand_dim
+		if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
+	for i in range(lagging_hydrogen_bonds.size()):
+		var bond = lagging_hydrogen_bonds[i]
+		if bond == null or not is_instance_valid(bond): continue
+		var bond_molecular_active: bool = molecule_renderer != null and not _is_still_primer(i) and molecule_renderer.is_slot_active("lagging", i)
+		bond.modulate.a = 0.0 if bond_molecular_active else strand_dim
 	for frag in lagging_fragments:
 		if frag.backbone != null and is_instance_valid(frag.backbone):
-			frag.backbone.modulate.a = strand_dim
+			frag.backbone.modulate.a = 0.0 if lagging_strand_active else strand_dim
+		# primer_backbone (RNA segment) wasn't covered by this function
+		# before the molecular-occlusion fix — adding it here rather than
+		# losing that coverage when the per-fragment writer that used to
+		# handle it (in _lagging_render_fragment_backbone()) is removed.
+		if frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone):
+			frag.primer_backbone.modulate.a = 0.0 if lagging_strand_active else strand_dim
 		for mark in frag.bond_marks:
-			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
+			if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
 		for mark in frag.get("primer_bond_marks", []):
-			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
+			if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
 	if lagging_current_fragment != null:
 		if lagging_current_fragment.backbone != null and is_instance_valid(lagging_current_fragment.backbone):
-			lagging_current_fragment.backbone.modulate.a = strand_dim
+			lagging_current_fragment.backbone.modulate.a = 0.0 if lagging_strand_active else strand_dim
+		if lagging_current_fragment.get("primer_backbone", null) != null and is_instance_valid(lagging_current_fragment.primer_backbone):
+			lagging_current_fragment.primer_backbone.modulate.a = 0.0 if lagging_strand_active else strand_dim
 		for mark in lagging_current_fragment.bond_marks:
-			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim
+			if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
+		for mark in lagging_current_fragment.get("primer_bond_marks", []):
+			if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
 
 # ==========================================
 # QUERY FUNCTIONS
@@ -927,7 +967,15 @@ func get_synthesized_nucleotides() -> Array[Dictionary]:
 			result.append({
 				slot = i,
 				strand = "leading",
-				base_type = sim.dna_sequence.get_complement(i),
+				# Watson-Crick fix (docs/MolecularStructure_BasePairExpansion.md):
+				# leading's real template is template_top (confirmed via
+				# docs/SKILL.md's polarity table — leading's 3'-left/5'-right
+				# orientation is antiparallel to template_top's 5'-left/3'-right,
+				# not template_bottom's). template_top's own letter is
+				# get_complement(i), so leading (complementary TO template_top)
+				# must be get_base(i) — was get_complement(i), which duplicated
+				# template_top's letter instead of complementing it.
+				base_type = sim.dna_sequence.get_base(i),
 				world_position = base.position,
 			})
 	for i in range(lagging_synthesized_bases.size()):
@@ -936,7 +984,10 @@ func get_synthesized_nucleotides() -> Array[Dictionary]:
 			result.append({
 				slot = i,
 				strand = "lagging",
-				base_type = sim.dna_sequence.get_base(i),
+				# Watson-Crick fix, symmetric to leading's above: lagging's
+				# real template is template_bottom (get_base(i)), so lagging
+				# must be get_complement(i) — was get_base(i).
+				base_type = sim.dna_sequence.get_complement(i),
 				world_position = base.position,
 			})
 	return result
@@ -1061,7 +1112,10 @@ func _leading_scrub_rebuild(ctx: Dictionary) -> void:
 
 	for i in range(leading_synth_count):
 		if leading_synthesized_bases[i] == null:
-			leading_synthesized_bases[i] = _spawn_leading_base(i, sim.dna_sequence.get_complement(i))
+			# Watson-Crick fix — see get_synthesized_nucleotides()'s matching
+			# comment: leading's real template is template_top, so leading
+			# must be get_base(i), not get_complement(i).
+			leading_synthesized_bases[i] = _spawn_leading_base(i, sim.dna_sequence.get_base(i))
 			leading_hydrogen_bonds[i] = _spawn_leading_hydrogen_bonds(i)
 
 func _leading_render(ctx: Dictionary) -> void:
@@ -1078,6 +1132,16 @@ func _leading_render(ctx: Dictionary) -> void:
 			var world_x = nucleotide_original_x[i]
 			var leading_y = new_top_template_y - dna_ribbons_gap + wobble_y
 			leading_synthesized_bases[i].position = Vector2(world_x, leading_y)
+			# Bug A fix (MolecularStructure_BasePairExpansion.md): per-slot,
+			# live occlusion of the bead circle whenever the molecule
+			# renderer is drawing this residue in skeletal mode. Backbone
+			# line/marks/hydrogen-bond suppression is now handled in
+			# _apply_highlight() instead (single-writer fix — this file used
+			# to also write those same properties here, racing against
+			# _apply_highlight()'s own strand_dim write later in the same
+			# render() call and losing).
+			var molecular_active: bool = molecule_renderer != null and molecule_renderer.is_slot_active("leading", i)
+			leading_synthesized_bases[i].modulate.a = 0.0 if molecular_active else 1.0
 			if leading_hydrogen_bonds[i] != null:
 				var top_template_y = new_top_template_y + wobble_y
 				leading_hydrogen_bonds[i].position = Vector2(world_x, top_template_y)
@@ -1140,8 +1204,13 @@ func _spawn_leading_base(index: int, base_type: String, start_pos = null) -> Nod
 	return base
 
 func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
-	var template_base = sim.dna_sequence.get_base(index)
-	var bond_count = 3 if (template_base == "C" or template_base == "G") else 2
+	# Watson-Crick fix: leading's real template is template_top, whose own
+	# letter is get_complement(index) — was get_base(index) (template_
+	# bottom's formula). Was invisible before since hydrogen_bond_count()/
+	# bond color only depend on AT-vs-GC family, which a base and its
+	# complement always share.
+	var template_base = sim.dna_sequence.get_complement(index)
+	var bond_count = NitrogenBaseDeriver.hydrogen_bond_count(template_base)
 	var bond_color = tm.cg_bond_color if (template_base == "C" or template_base == "G") else tm.at_bond_color
 	var container = Node2D.new()
 	container.position = Vector2(sim.nucleotide_original_x[index], sim.new_top_template_y)
@@ -1474,7 +1543,11 @@ func _convert_primer_base_to_dna(index: int) -> void:
 	var node = lagging_synthesized_bases[index]
 	if node == null or node.shape != "rounded_square":
 		return  # already converted, or nothing there yet
-	var base_type = sim.dna_sequence.get_base(index)  # real letter — converting back to DNA, T not U
+	# Watson-Crick fix (docs/MolecularStructure_BasePairExpansion.md):
+	# lagging's real template is template_bottom (get_base(i)), so lagging
+	# must be get_complement(i) — was get_base(i), which duplicated
+	# template_bottom's letter instead of complementing it.
+	var base_type = sim.dna_sequence.get_complement(index)  # real letter — converting back to DNA, T not U
 	node.set_base_type(base_type)
 	node.set_shape("circle")
 	node.set_colors(sim._get_base_fill(base_type), tm.base_label_color)
@@ -1589,7 +1662,8 @@ func _primase_place_primer_base(index: int, is_first: bool, is_last: bool, seq: 
 		_primase_place_sequence(seq, seq_pos + 1)
 		return
 	_primase_ensure_pending_backbone(_primase_tile_end(index))
-	var base_type = sim.dna_sequence.get_base(index)
+	# Watson-Crick fix — see _convert_primer_base_to_dna()'s comment.
+	var base_type = sim.dna_sequence.get_complement(index)
 	if base_type == "T":
 		base_type = "U"  # rendering-layer only — real RNA has no thymine. The
 		# underlying sequence data (re-read via get_base() by anything else,
@@ -2107,7 +2181,8 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 				break  # this tile's anchor isn't exposed yet — neither is any later tile's
 			var primer_start = max(k, this_tile_end - span)
 			for i in range(primer_start, this_tile_end):
-				var base_type = sim.dna_sequence.get_base(i)
+				# Watson-Crick fix — see _convert_primer_base_to_dna()'s comment.
+				var base_type = sim.dna_sequence.get_complement(i)
 				var rna_letter = base_type
 				if rna_letter == "T":
 					rna_letter = "U"
@@ -2174,7 +2249,8 @@ func _lagging_scrub_rebuild(ctx: Dictionary) -> void:
 func _lagging_scrub_spawn_fragment(frag: Dictionary) -> void:
 	var primer_still_present: bool = _pol1_enabled() and not frag.get("primer_removed", false)
 	for i in frag.slots:
-		var base_type = sim.dna_sequence.get_base(i)
+		# Watson-Crick fix — see _convert_primer_base_to_dna()'s comment.
+		var base_type = sim.dna_sequence.get_complement(i)
 		if primer_still_present and _is_primer_slot(i):
 			var rna_letter = base_type
 			if rna_letter == "T":
@@ -2421,8 +2497,12 @@ func _spawn_lagging_base(index: int, base_type: String, start_pos = null, color_
 	return base
 
 func _spawn_lagging_hydrogen_bonds(index: int) -> Node2D:
-	var template_base = sim.dna_sequence.get_complement(index)
-	var bond_count = 3 if (template_base == "C" or template_base == "G") else 2
+	# Watson-Crick fix: lagging's real template is template_bottom, whose
+	# own letter is get_base(index) — was get_complement(index)
+	# (template_top's formula). See _spawn_leading_hydrogen_bonds()'s
+	# matching comment for why this was invisible before.
+	var template_base = sim.dna_sequence.get_base(index)
+	var bond_count = NitrogenBaseDeriver.hydrogen_bond_count(template_base)
 	var bond_color = tm.cg_bond_color if (template_base == "C" or template_base == "G") else tm.at_bond_color
 	var container = Node2D.new()
 	container.position = Vector2(sim.nucleotide_original_x[index], sim.new_bottom_template_y)
@@ -2527,10 +2607,20 @@ func _lagging_render(ctx: Dictionary) -> void:
 			var template_y = _lagging_template_y_at(world_x)
 			var lagging_y = template_y + dna_ribbons_gap + wobble_y
 			lagging_synthesized_bases[i].position = Vector2(world_x, lagging_y)
+			# Bug A fix — see the matching comment in _leading_render().
+			# Primer (RNA) slots are excluded: get_synthesized_nucleotides()
+			# never reports them (molecule renderer models DNA incorporation
+			# only, per that method's own comment), so they can never be
+			# molecular-active and should stay fully opaque in bead mode.
+			var molecular_active: bool = molecule_renderer != null and not _is_still_primer(i) and molecule_renderer.is_slot_active("lagging", i)
+			lagging_synthesized_bases[i].modulate.a = 0.0 if molecular_active else 1.0
 			if lagging_hydrogen_bonds[i] != null:
 				var bottom_template_y = template_y + wobble_y
 				lagging_hydrogen_bonds[i].position = Vector2(world_x, bottom_template_y)
 				sim._update_hydrogen_bond_height(lagging_hydrogen_bonds[i], lagging_y - bottom_template_y)
+				# H-bond suppression now handled in _apply_highlight()
+				# (single-writer fix) — see the matching comment in
+				# _leading_render().
 
 	# Primase-placed bases can exist for a tile BEFORE Pol III has opened
 	# that fragment at all — primase fires the instant the helicase passes
@@ -2852,6 +2942,12 @@ func _lagging_render_fragment_backbone(frag: Dictionary, wobble_t: float, dna_ri
 	if frag.get("primer_backbone", null) != null:
 		frag.primer_bond_marks = _update_bond_marks_generic(frag.get("primer_bond_marks", []), primer_points, sim._create_bond_mark_sprite_rna_reversed)
 
+	# Bug A suppression for this fragment's visuals now lives in
+	# _apply_highlight() (single-writer fix) instead of here — this
+	# function runs before render()'s own _apply_highlight() call, so a
+	# write here would have been clobbered by strand_dim just like the
+	# other cases this fix addresses.
+
 ## Shared grow/shrink/position loop for a fragment's bond-mark holders —
 ## `sprite_fn` is whichever mark shape this segment needs (filled triangle
 ## for DNA, open chevron for RNA), so the same loop serves both without
@@ -3041,7 +3137,8 @@ func _capture_on_leading_slot_reached(index: int) -> void:
 	# it to paper over the same gap.
 	var prev = target - 1
 	if prev >= 0 and leading_synthesized_bases[prev] == null and leading_capture_target_slot != prev:
-		leading_synthesized_bases[prev] = _spawn_leading_base(prev, sim.dna_sequence.get_complement(prev))
+		# Watson-Crick fix — see get_synthesized_nucleotides()'s comment.
+		leading_synthesized_bases[prev] = _spawn_leading_base(prev, sim.dna_sequence.get_base(prev))
 		leading_hydrogen_bonds[prev] = _spawn_leading_hydrogen_bonds(prev)
 
 	if leading_synthesized_bases[target] != null:
@@ -3053,7 +3150,8 @@ func _capture_begin_leading(index: int, duration: float) -> void:
 		return
 	if leading_capture_node != null:
 		_capture_finish_leading(leading_capture_target_slot, leading_capture_node)
-	var base_type = sim.dna_sequence.get_complement(index)
+	# Watson-Crick fix — see get_synthesized_nucleotides()'s comment.
+	var base_type = sim.dna_sequence.get_base(index)
 	var fallback_pos = Vector2(sim.nucleotide_original_x[index], sim.new_top_template_y - sim.dna_ribbons_gap)
 	var start_pos = leading_halo.capture_particle(base_type) if leading_halo != null else fallback_pos
 	leading_capture_node = _spawn_leading_base(index, base_type, start_pos)
@@ -3100,7 +3198,8 @@ func _capture_begin_lagging(index: int, duration: float) -> void:
 		return
 	if lagging_capture_node != null:
 		_capture_finish_lagging(lagging_capture_target_slot, lagging_capture_node)
-	var base_type = sim.dna_sequence.get_base(index)
+	# Watson-Crick fix — see _convert_primer_base_to_dna()'s comment.
+	var base_type = sim.dna_sequence.get_complement(index)
 	var fallback_pos = Vector2(sim.nucleotide_original_x[index], sim.new_bottom_template_y + sim.dna_ribbons_gap)
 	var start_pos = lagging_halo.capture_particle(base_type) if lagging_halo != null else fallback_pos
 	lagging_capture_node = _spawn_lagging_base(index, base_type, start_pos)

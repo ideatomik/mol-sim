@@ -203,6 +203,18 @@ func _ready():
 		zoom_mgr.register_target("helicase", {2: _zoom_frame_helicase_level2, 3: _zoom_frame_helicase_level3}, "ENZYME_HELICASE", _zoom_helicase_visible)
 		_swap_in_vertical_player_ui(zoom_mgr)
 
+	# Molecular Structure (Growth Session 2, base-pair expansion): the
+	# renderer needs a read-only feed of the ORIGINAL template strand's own
+	# nucleotides — simulation.gd is the only script that owns those (see
+	# get_template_nucleotides()). molecule_renderer is a persisted scene
+	# node (always present, unlike replication_mgr which is lazily
+	# .new()'d on first sequence load), and Godot calls child _ready()
+	# before parent _ready(), so molecule_renderer.tm/zoom_mgr are already
+	# set by the time this runs — safe to wire here rather than in
+	# initialize_simulation().
+	if molecule_renderer != null:
+		molecule_renderer.set_template_source(self)
+
 	# Startup gate (v76): complexity toggles first, then sequence selection —
 	# replaces the old auto-random-sequence boot. See OkazakiMaturationDesign.md
 	# for the toggle set this screen exposes.
@@ -353,10 +365,18 @@ func _apply_zoom_highlight() -> void:
 		helicase_ring.modulate.a = zoom_mgr.get_enzyme_highlight_dim("helicase")
 
 	# Template-strand visuals: plain modulate.a is safe here — nothing else
-	# writes it.
+	# writes it, EXCEPT molecular-structure occlusion (bug A,
+	# MolecularStructure_BasePairExpansion.md), folded in directly below
+	# rather than living as a second writer in the render loop — this
+	# function is called mid-_process(), and a write placed before this
+	# call (as the bottom-template one originally was) got silently
+	# clobbered back to strand_dim right here every frame. Molecular
+	# suppression always wins over strand_dim (0.0, not multiplied).
 	var strand_dim = zoom_mgr.get_strand_highlight_dim()
-	if backbone_line != null: backbone_line.modulate.a = strand_dim
-	if top_strand_backbone_line != null: top_strand_backbone_line.modulate.a = strand_dim
+	var template_bottom_active: bool = molecule_renderer != null and molecule_renderer.is_strand_active("template_bottom")
+	var template_top_active: bool = molecule_renderer != null and molecule_renderer.is_strand_active("template_top")
+	if backbone_line != null: backbone_line.modulate.a = 0.0 if template_bottom_active else strand_dim
+	if top_strand_backbone_line != null: top_strand_backbone_line.modulate.a = 0.0 if template_top_active else strand_dim
 	if hydrogen_bonds_container != null: hydrogen_bonds_container.modulate.a = strand_dim
 	if template_hydrogen_bonds_container != null: template_hydrogen_bonds_container.modulate.a = strand_dim
 	if template_strand_original_track != null: template_strand_original_track.modulate.a = strand_dim
@@ -426,6 +446,7 @@ func initialize_simulation(sequence: String):
 		add_child(replication_mgr)
 		replication_mgr.initialize(self)
 		molecule_renderer.set_replication_manager(replication_mgr)
+		replication_mgr.set_molecule_renderer(molecule_renderer)
 
 	replication_mgr.connect_helicase(helicase_mgr)
 
@@ -712,6 +733,16 @@ func _process(delta):
 		if near_top or near_bottom:
 			wobble_y = get_wobble_y(i, wobble_t)
 		nucleotide_bases[i].position.y = wobble_y
+		# Bug A fix (MolecularStructure_BasePairExpansion.md): suppress the
+		# bead-glyph circle per-slot, live, whenever the molecule renderer
+		# is actually drawing this residue in skeletal mode — never cached,
+		# polled fresh every frame via a public accessor rather than a
+		# second independent hysteresis check. Backbone Line2D suppression
+		# (whole-strand, since Line2D has no per-point alpha) is applied
+		# further down, once backbone_points/bond_marks are finalized —
+		# see the reversed decision noted there.
+		if molecule_renderer != null:
+			nucleotide_bases[i].modulate.a = 0.0 if molecule_renderer.is_slot_active("template_bottom", i) else 1.0
 
 		var mid_y = template_strand_y + (new_bottom_template_y - template_strand_y) * 0.5
 		var on_bonded = slot_y < mid_y
@@ -727,6 +758,11 @@ func _process(delta):
 
 	backbone_line.points = backbone_points
 	backbone_line.width = %ThemeManager.backbone_line_width
+	# Bug A suppression now lives in _apply_zoom_highlight() (single-writer
+	# fix) — a write here was silently clobbered by that function's own
+	# strand_dim write later in the same _process() call. bond_marks
+	# suppression below is unaffected by this (that function never touches
+	# bond_marks), so it stays where it is.
 
 	# ---- Lagging + leading synthesis rendering ----
 	if replication_mgr != null:
@@ -749,6 +785,10 @@ func _process(delta):
 	_apply_zoom_highlight()
 
 	_update_bond_marks(backbone_points)
+	if molecule_renderer != null:
+		var template_bottom_active: float = 0.0 if molecule_renderer.is_strand_active("template_bottom") else 1.0
+		for mark in bond_marks:
+			if mark != null and is_instance_valid(mark): mark.modulate.a = template_bottom_active
 
 	# ---- Top template strand ----
 	var top_strand_points = PackedVector2Array()
@@ -765,6 +805,11 @@ func _process(delta):
 
 		var wobble_y = get_wobble_y(i, wobble_t)
 		top_strand_bases[i].position = Vector2(0, wobble_y)
+		# Bug A fix (bead circle) — see the matching comment on the bottom
+		# template loop above. Backbone line suppression is below, once
+		# top_strand_points/its bond marks are finalized.
+		if molecule_renderer != null:
+			top_strand_bases[i].modulate.a = 0.0 if molecule_renderer.is_slot_active("template_top", i) else 1.0
 
 		var mid_y = new_top_template_y + (template_strand_y - dna_ribbons_gap - new_top_template_y) * 0.5
 		var on_bonded = slot_y > mid_y
@@ -786,9 +831,22 @@ func _process(delta):
 			var bond_height = (slot_y + wobble_y) - container_y
 			_update_hydrogen_bond_height(template_hydrogen_bonds[i], bond_height)
 			template_hydrogen_bonds[i].visible = (world_x >= helicase_x) and not is_done
+			# Bug A fix — modulate.a, not .visible, so this composes with
+			# the helicase-progress visibility above rather than fighting
+			# it (two writers on the same property would be a real bug;
+			# modulate.a is untouched elsewhere on this node).
+			if molecule_renderer != null:
+				template_hydrogen_bonds[i].modulate.a = 0.0 if (molecule_renderer.is_slot_active("template_bottom", i) or molecule_renderer.is_slot_active("template_top", i)) else 1.0
 	top_strand_backbone_line.points = top_strand_points
 	top_strand_backbone_line.width = %ThemeManager.backbone_line_width
 	_update_bond_marks_top_strand(top_strand_points)
+	# Backbone-line suppression now lives in _apply_zoom_highlight()
+	# (single-writer fix) — bond_marks suppression stays here since that
+	# function never touches bond_marks (no conflict).
+	if molecule_renderer != null:
+		var template_top_active: float = 0.0 if molecule_renderer.is_strand_active("template_top") else 1.0
+		for mark in top_strand_bond_marks:
+			if mark != null and is_instance_valid(mark): mark.modulate.a = template_top_active
 
 	# ---- Marker positions: template strands (owned by simulation.gd) ----
 	if marker_template_5p:
@@ -1019,6 +1077,35 @@ func get_sequence_rich_text(hover_index: int = -1) -> String:
 		return replication_mgr.get_sequence_rich_text(helicase_x, nucleotide_original_x, hover_index)
 	return "5' [empty] 3'"
 
+## Read-only view over nucleotide_bases / top_strand_bases for
+## molecule_structure_renderer.gd — the ORIGINAL template strand's own
+## counterpart to replication_manager.gd's get_synthesized_nucleotides().
+## world_position uses global_position, NOT position: these nodes are
+## children of PathFollow2D slots riding rail_path/top_rail_path (see
+## _spawn_nucleotide_slots()/_spawn_top_strand()), so .position is local to
+## a moving parent, not a world position.
+func get_template_nucleotides() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for i in range(nucleotide_bases.size()):
+		var base = nucleotide_bases[i]
+		if base != null and is_instance_valid(base):
+			result.append({
+				slot = i,
+				strand = "template_bottom",
+				base_type = dna_sequence.get_base(i),
+				world_position = base.global_position,
+			})
+	for i in range(top_strand_bases.size()):
+		var base = top_strand_bases[i]
+		if base != null and is_instance_valid(base):
+			result.append({
+				slot = i,
+				strand = "template_top",
+				base_type = dna_sequence.get_complement(i),
+				world_position = base.global_position,
+			})
+	return result
+
 func get_max_scrub_index() -> int:
 	var catchup_needed = 0
 	if replication_mgr != null and not lagging_gap_enabled:
@@ -1226,6 +1313,23 @@ func _update_hydrogen_bond_height(container: Node2D, height: float) -> void:
 			var p1_y = sign * max(inset, abs_h - inset)
 			child.set_point_position(0, Vector2(p1.x, p0_y))
 			child.set_point_position(1, Vector2(p1.x, p1_y))
+
+## Curve Y only (not a full atom position) at a given world-x, for
+## molecule_structure_renderer.gd's curve-following polyline mode — see
+## docs/MolecularStructure_BasePairExpansion.md's Option C decision. The
+## caller combines this with each endpoint's own known vertical offset
+## from the curve, so the resulting polyline stays exactly continuous with
+## the real atom positions it already computed — this returns only the
+## template rail's own shape, not a claim about where any atom sits.
+## Reuses _sample_curve_y_at_x() (single source of truth for curve
+## sampling — the same function the bead-glyph template rendering already
+## depends on) rather than duplicating the lookup.
+func sample_template_curve_y(strand: String, world_x: float) -> float:
+	var curve: Curve2D = rail_path.curve if strand == "template_bottom" else top_rail_path.curve
+	var fallback_y: float = template_strand_y if strand == "template_bottom" else (template_strand_y - dna_ribbons_gap)
+	if curve == null:
+		return fallback_y
+	return _sample_curve_y_at_x(curve.get_baked_points(), world_x, fallback_y)
 
 func _sample_curve_y_at_x(baked: PackedVector2Array, x: float, fallback_y: float) -> float:
 	if baked.size() < 2:
