@@ -131,20 +131,52 @@ static func derive_ring(topology: MoleculeTopology, role_prefix: String, bond_le
 ## from the ring centroid at each anchor vertex, which is the simplest
 ## idealized choice consistent with "the backbone must not visibly shift
 ## when something attached to it changes."
-static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float) -> Dictionary:
+##
+## `pairing_direction` (Bug J fix, docs/MolecularStructure_
+## BasePairExpansion.md): real, world-space, points TOWARD the partner —
+## same convention molecule_structure_renderer.gd already computes for base
+## placement. Without it, "outward" was purely a function of the ring's own
+## antiparallel-pucker rotation sign (apply_strand_direction, owned by the
+## caller) — correct for leading/lagging only by coincidence, backwards for
+## template_top/template_bottom, confirmed via a live screenshot: their
+## chain reached TOWARD the real partner instead of away. Left at the
+## default zero vector (unpaired, or a caller that hasn't been updated),
+## behaves exactly as before — there's no real partner to be wrong
+## relative to, so nothing needs correcting.
+static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float, pairing_direction: Vector2 = Vector2.ZERO) -> Dictionary:
 	var positions: Dictionary = {}
+
+	# Decided ONCE from C4' and applied to both substituent groups (O3' via
+	# C3', and the C5'/O5'/alpha-phosphate chain via C4') so they flip
+	# together rather than independently — C3' and C4' always agree on
+	# which way is "toward the partner" in this ring's construction (same Y
+	# sign, only X differs), so a single decision keeps the existing
+	# left/right branching shape intact and just mirrors it vertically.
+	# Negating the WHOLE outward vector (both components), not just one
+	# axis, is a proper 180-degree ROTATION of the substituent group around
+	# its own fixed attachment point on the ring — never a mirror, per the
+	# same rule apply_strand_direction() already documents (a mirror would
+	# silently flip the chain's own chirality while looking like a fix).
+	var flip: bool = false
+	if pairing_direction.length() > 0.0:
+		var c4_id_probe: int = topology.find_by_role(role_prefix + "c4_prime")
+		if c4_id_probe != -1 and ring_positions.has(c4_id_probe):
+			var natural_outward: Vector2 = ring_positions[c4_id_probe].normalized()
+			flip = natural_outward.dot(pairing_direction.normalized()) > 0.0
 
 	var c3_id: int = topology.find_by_role(role_prefix + "c3_prime")
 	var o3_id: int = topology.find_by_role(role_prefix + "o3_prime")
 	if c3_id != -1 and o3_id != -1 and ring_positions.has(c3_id):
-		var outward: Vector2 = ring_positions[c3_id].normalized()
-		positions[o3_id] = ring_positions[c3_id] + outward * bond_length
+		var c3_pos: Vector2 = ring_positions[c3_id]
+		var outward: Vector2 = -c3_pos.normalized() if flip else c3_pos.normalized()
+		positions[o3_id] = c3_pos + outward * bond_length
 
 	var c4_id: int = topology.find_by_role(role_prefix + "c4_prime")
 	var c5_id: int = topology.find_by_role(role_prefix + "c5_prime")
 	if c4_id != -1 and c5_id != -1 and ring_positions.has(c4_id):
-		var outward: Vector2 = ring_positions[c4_id].normalized()
-		var c5_pos: Vector2 = ring_positions[c4_id] + outward * bond_length
+		var c4_pos: Vector2 = ring_positions[c4_id]
+		var outward: Vector2 = -c4_pos.normalized() if flip else c4_pos.normalized()
+		var c5_pos: Vector2 = c4_pos + outward * bond_length
 		positions[c5_id] = c5_pos
 
 		var o5_id: int = topology.find_by_role(role_prefix + "o5_prime")
@@ -193,7 +225,51 @@ static func derive_substituents(topology: MoleculeTopology, role_prefix: String,
 static func apply_strand_direction(local_positions: Dictionary, pivot: Vector2, direction_sign: float) -> Dictionary:
 	if direction_sign >= 0.0:
 		return local_positions
+	return _rotate_180(local_positions, pivot)
+
+static func _rotate_180(local_positions: Dictionary, pivot: Vector2) -> Dictionary:
 	var rotated: Dictionary = {}
 	for id in local_positions:
 		rotated[id] = 2.0 * pivot - local_positions[id]
 	return rotated
+
+## Bug L fix (docs/MolecularStructure_BasePairExpansion.md): apply_strand_
+## direction()'s rotation is a FIXED per-strand convention (real 5'->3'
+## reading direction, confirmed against SKILL.md's polarity table) — it
+## must NOT vary per residue based on live pairing state, or consecutive
+## residues along the same strand would visibly zigzag. derive_substituents()'s
+## chain-flip (Bug J), however, IS driven by live pairing_direction. Before
+## Bug J both used the ring's own as-derived local frame and so always
+## agreed (even though the chain pointed at the partner — Bug J's original
+## problem). Bug J fixed the chain alone, leaving the ring's fixed-sign
+## orientation unchanged — for leading/lagging this is invisible (their
+## chain's needed flip is always false, so nothing diverges), but for
+## template_top/template_bottom the ring now bulges one way while the
+## chain reaches the opposite way within the SAME residue — confirmed via
+## the F9 dump: ring-bulge-direction dot chain-reach-direction is strongly
+## POSITIVE (aligned) for leading (+555) and lagging (+492), strongly
+## NEGATIVE (opposed) for template_top (-110) and template_bottom (-173).
+##
+## Fixed by moving the SAME flip decision Bug J already computes (does the
+## ring's natural C4' direction, in its OWN local frame, face toward the
+## real partner?) onto the RING itself, applied as an ADDITIONAL rotation
+## on top of the fixed-sign one — then reverting derive_substituents() to
+## always use natural/unflipped outward again (the caller now passes
+## Vector2.ZERO for its pairing_direction argument), since the chain
+## naturally follows wherever the ring ends up. Two 180-degree rotations
+## around the same pivot (C1') compose correctly either way: a strand
+## whose fixed-sign rotation already applied gets it CANCELLED (net
+## identity) when this test also fires, a strand whose fixed-sign
+## rotation didn't apply gets this one ADDED — verified by hand against
+## the dump for both template_top (0+1=1, bulge flips to match chain) and
+## template_bottom (1+1=2=identity, bulge flips back to match chain).
+## Easy revert: delete the call site in molecule_structure_renderer.gd and
+## restore its derive_substituents() call to pass real pairing_direction
+## again — this function is additive, nothing else changes.
+static func apply_partner_flip(local_positions: Dictionary, pivot: Vector2, probe_id: int, pairing_direction: Vector2) -> Dictionary:
+	if pairing_direction.length() <= 0.0 or not local_positions.has(probe_id):
+		return local_positions
+	var natural_outward: Vector2 = local_positions[probe_id].normalized()
+	if natural_outward.dot(pairing_direction.normalized()) <= 0.0:
+		return local_positions
+	return _rotate_180(local_positions, pivot)

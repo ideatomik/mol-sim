@@ -201,12 +201,50 @@ static func derive_fused_ring(shared_edge_a: Vector2, shared_edge_b: Vector2, re
 	return positions
 
 ## Number of candidate rotation angles tried by the clearance-maximizing
-## search in derive_base_layout() (below) — 5-degree resolution. Cheap:
-## skeletal mode only ever renders a handful of residues at once (deep-zoom
-## cull window, confirmed ~3-4 nucleotides — see molecule_structure_
-## renderer.gd's culling note), so a few thousand distance checks per
-## residue per frame is negligible.
+## search in derive_base_layout() (below), across the FULL search window
+## (BASE_ROTATION_SEARCH_WINDOW_DEG below) — 5-degree resolution at the
+## window's original 360-degree span. Cheap: skeletal mode only ever
+## renders a handful of residues at once (deep-zoom cull window, confirmed
+## ~3-4 nucleotides — see molecule_structure_renderer.gd's culling note),
+## so a few thousand distance checks per residue per frame is negligible.
 const BASE_ROTATION_SEARCH_STEPS: int = 72
+
+## Half-width of the rotation search window, centered on the angle that
+## points the H-BOND ANCHOR atom exactly at pairing_direction (or the
+## unpaired fallback direction) — NOT a full 360-degree sweep.
+##
+## History: the FIRST version of this search pinned the ANCHOR atom at its
+## exact target and rotated the whole ring FREELY (360 degrees) to
+## maximize clearance from the ribose's own substituent chain — this
+## stretched the ATTACHMENT atom's real covalent bond to C1' (Bug F
+## correction, see derive_base_layout()'s comments). The FIX for that —
+## pinning the ATTACHMENT instead and letting the ANCHOR float freely —
+## introduced a WORSE regression: with nothing pinning the anchor to a
+## consistent position, a paired residue's own search (which only knows
+## about ITS OWN chain, not its partner's) could land the anchor anywhere
+## in a full circle, independently of where the PARTNER residue's own
+## search left ITS anchor. Confirmed via a live screenshot AND a live F9
+## dump: the H-bond anchor-to-anchor span, previously a stable 81-84,
+## collapsed to 6.4-11.25 — both strands' entire base rings landing almost
+## on top of each other, non-monotonically unstable across window sizes
+## (one sweep example: 12.5 -> 16.6 -> 7.5 -> 6.3; another: 12.5 -> 13.2 ->
+## 19.5 -> 19.5 -> 1.1). Reverted to pinning the ANCHOR (restores the
+## exactly-correct, provably-stable H-bond span at every window size, by
+## construction — translation is always solved so the anchor lands exactly
+## on anchor_target regardless of which angle within the window wins) and
+## moved the window constraint onto the ATTACHMENT's stretch instead: it's
+## now BOUNDED rather than eliminated, a smaller but real regression
+## accepted deliberately since a wrong/unstable H-bond span is far more
+## visible than a somewhat-stretched invisible glycosidic bond length.
+## Swept clearance-vs-stretch (diagnosis/) at increasing window sizes: 0
+## degrees reproduces the original Bug D overlap (worst-case clearance
+## 0.56, zero stretch); 15 degrees already escapes the worst overlap
+## (0.56 -> 3.31+) for a modest, bounded stretch (+1.6 to +3.7, i.e.
+## bond_length effectively 10.8 -> ~12.4-14.5); stretch grows much faster
+## than clearance improves past that, especially for purines (+19.7 at 45
+## degrees, +43.0 at 90). 15 chosen as the point that clears the worst
+## overlap for the smallest acceptable stretch.
+const BASE_ROTATION_SEARCH_WINDOW_DEG: float = 15.0
 
 ## Places the base's full ring system (same local frame the ribose ring
 ## occupies, so a single later translation carries both into world space
@@ -325,46 +363,44 @@ static func derive_base_layout(topology: MoleculeTopology, role_prefix: String, 
 	# tuned constant — same "derive, don't hardcode" principle as every
 	# other fix this session, expressed as a search instead of closed-form
 	# trig because the shape genuinely doesn't reduce to one.
-	# Attachment-fixed search (follow-up, docs/MolecularStructure_
-	# BasePairExpansion.md, Bug F correction): the search below used to pin
-	# the ANCHOR atom (N1/N3, the H-bond point) at a fixed target and let
-	# the whole ring rotate freely around it. That silently let the
-	# ATTACHMENT atom (N9/N1) drift off `bond_length` from C1' — the
-	# glycosidic bond is a real covalent bond in the topology
-	# (_attach_glycosidic_bond()) and, like the phosphodiester backbone
-	# bond elsewhere in this codebase, must not stretch. Confirmed via a
-	# live screenshot: the C1'-to-base line's length visibly varied
-	# residue-to-residue, tracking exactly where the old anchor-pinned
-	# search happened to rotate the ring to win clearance. Fixed by pinning
-	# the search on the ATTACHMENT atom instead — algebraically identical
-	# to the old formula whenever avoid_points is empty (both the
-	# no-search fallback below and this branch converge on the same
-	# attachment_target when local_reach ends up parallel to dir), so the
-	# already-verified paired/unpaired clearance numbers are unaffected.
-	# The tradeoff, accepted deliberately: the H-bond anchor's exact
-	# position (and therefore its span) is no longer perfectly fixed
-	# across every paired case — it now varies with whatever angle the
-	# search picks. That's the correct atom to let flex: an H-bond is not
-	# a rigid covalent bond the way the glycosidic bond is.
+	# Anchor-pinned, window-bounded search (re-correction, docs/
+	# MolecularStructure_BasePairExpansion.md — see
+	# BASE_ROTATION_SEARCH_WINDOW_DEG's own comment above for the full
+	# history of why this went attachment-pinned-unbounded then back to
+	# anchor-pinned-bounded). Pinning the ANCHOR means `translation` is
+	# always solved so the anchor lands exactly on `anchor_target`
+	# regardless of which angle the search picks — the H-bond span this
+	# produces is therefore exactly as stable/correct as it was before any
+	# search existed at all, for every window size, every base letter,
+	# every strand sign. The window only bounds how far the ATTACHMENT
+	# atom (and therefore the real covalent glycosidic bond to C1') is
+	# allowed to drift from `bond_length` while the search looks for
+	# clearance from the ribose's own substituent chain.
 	var local_attachment: Vector2 = local_positions[attachment_id]
 	var local_anchor: Vector2 = local_positions[anchor_id]
 	var local_reach: Vector2 = local_anchor - local_attachment
 	var reach_length: float = local_reach.length()
-	var attachment_target: Vector2 = c1_position + dir * bond_length
+	var anchor_target: Vector2 = c1_position + dir * (bond_length + reach_length)
+
+	# The angle that points the anchor exactly at `dir` — also the CENTER
+	# of the clearance search's window (see BASE_ROTATION_SEARCH_WINDOW_DEG),
+	# not just the one candidate it used to be.
+	var local_dir: Vector2 = local_reach.normalized() if reach_length > 0.0 else Vector2.DOWN
+	var aligned_angle: float = dir.angle() - local_dir.angle()
 
 	var best_angle: float
 	if avoid_points.is_empty():
 		# No chain data supplied (e.g. a caller that hasn't been updated) —
 		# fall back to the previous behavior (align attachment->anchor with
 		# pairing_direction) rather than searching over nothing.
-		var local_dir: Vector2 = local_reach.normalized() if reach_length > 0.0 else Vector2.DOWN
-		best_angle = dir.angle() - local_dir.angle()
+		best_angle = aligned_angle
 	else:
+		var window: float = deg_to_rad(BASE_ROTATION_SEARCH_WINDOW_DEG)
 		var best_clearance: float = -INF
-		for i in range(BASE_ROTATION_SEARCH_STEPS):
-			var angle: float = TAU * float(i) / float(BASE_ROTATION_SEARCH_STEPS)
-			var candidate_attachment: Vector2 = local_attachment.rotated(angle)
-			var candidate_translation: Vector2 = attachment_target - candidate_attachment
+		for i in range(BASE_ROTATION_SEARCH_STEPS + 1):
+			var angle: float = aligned_angle - window + (2.0 * window) * float(i) / float(BASE_ROTATION_SEARCH_STEPS)
+			var candidate_anchor: Vector2 = local_anchor.rotated(angle)
+			var candidate_translation: Vector2 = anchor_target - candidate_anchor
 			var clearance: float = INF
 			for id in local_positions:
 				var world: Vector2 = local_positions[id].rotated(angle) + candidate_translation
@@ -377,7 +413,7 @@ static func derive_base_layout(topology: MoleculeTopology, role_prefix: String, 
 	var rotated_positions: Dictionary = {}
 	for id in local_positions:
 		rotated_positions[id] = local_positions[id].rotated(best_angle)
-	var translation: Vector2 = attachment_target - rotated_positions[attachment_id]
+	var translation: Vector2 = anchor_target - rotated_positions[anchor_id]
 	for id in rotated_positions:
 		positions[id] = rotated_positions[id] + translation
 

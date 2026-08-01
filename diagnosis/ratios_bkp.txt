@@ -1,0 +1,46 @@
+RATIOS/TUNABLE-VALUES BACKUP — snapshot taken 2026-07-31, right after committing
+the working tree to GitHub (Refactor branch), before tweaking
+molecular_ring_bond_length_ratio to fix the same-strand chain/neighbor overlap
+("PLL mess" screenshot, pre-fork template DNA).
+
+Restore any of these by re-setting the field on the listed script's @export
+var (or the scene override, where noted) if the new value turns out worse.
+
+--- scripts/simulation.gd ---
+nucleotide_slot_spacing            = 54.0    (script default, no scene override)
+dna_ribbons_gap                    = 90.0    (script default) — SCENE OVERRIDE: 60.0 (scenes/simulation.tscn)
+polymerase_x_offset_slots          = 4.0     (script default, no scene override)
+
+--- scripts/theme_manager.gd ---
+molecular_zoom_enter_threshold     = 6.5     (script default, no scene override)
+molecular_zoom_exit_threshold      = 5.5     (script default, no scene override)
+molecular_ring_bond_length_ratio   = 0.287   (script default) — SCENE OVERRIDE: 0.2 (scenes/simulation.tscn)
+                                              -> live bond_length = 0.2 * 54.0 = 10.8
+                                              (0.287 default would give bond_length = 15.498)
+molecular_bond_width               = 2.5     (script default, no scene override)
+molecular_atom_radius              = 6.0     (script default, no scene override)
+molecular_cull_bbox_padding        = 20.0    (script default, no scene override)
+molecular_pair_span_padding        = 0.0     (script default, no scene override)
+molecular_h_bond_dash_length       = 4.0     (script default, no scene override)
+molecular_h_bond_gap_length        = 3.0     (script default, no scene override)
+zoom_free_camera_max_zoom_in       = 8.0     (script default, no scene override)
+
+--- Derived quantities measured at live bond_length = 10.8 (2026-07-31 F9 dumps) ---
+Ribose ring diameter (widest extent)               = 17.4748  (constant, both strand signs)
+Purine base ring diameter (fused, widest extent)    = 46.4262  (worst case)
+Pyrimidine base ring diameter (widest extent)       = 43.2000  (worst case)
+Substituent chain (O3'/C5'/O5'/alpha-P) reach from C1' = 58.1368 (sign +1) / 58.1936 (sign -1)
+  -> EXCEEDS nucleotide_slot_spacing (54.0) — this is the root cause of the
+     "PLL mess" screenshot (same-strand neighbor overlap), confirmed
+     2026-07-31. Independent of dna_ribbons_gap (pairing_direction is
+     normalized before use, so its magnitude never reaches this
+     calculation).
+Real post-fork H-bond anchor-to-anchor span (leading/template_top, previously
+confirmed correct at ratio=0.287/bond_length=15.5)  = 12.5484
+  -> Reference point for the OTHER constraint theme_manager.gd's own comment
+     already documents: H-bond span must clear 2 full dash+gap cycles
+     (molecular_h_bond_dash_length + molecular_h_bond_gap_length = 7.0 units
+     per cycle, so >= 14.0) to render as visibly dashed rather than a solid
+     blur. Shrinking bond_length further to fix the chain-overlap problem
+     above will shrink this span too (same linear scaling) — a real
+     trade-off between the two constraints, not a free fix.

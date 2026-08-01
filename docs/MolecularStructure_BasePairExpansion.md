@@ -563,6 +563,606 @@ diagnostic can't silently drift from the renderer's real behavior again.
 Awaiting a live screenshot to confirm the ghost lines are gone and no
 longer flicker with zoom.
 
+## Bug H — same-strand backbone/chain overlaps its own neighbor (pre-fork "mess")
+
+Flagged from a live atom-zoom screenshot of still-duplexed template DNA
+(right of the helicase, not yet unwound): backbone bonds crossing diagonally
+through the *next* residue's ring, base rings encroaching on their neighbor.
+Confirmed numerically, not just visually, from the live F9 dump: each
+residue's substituent chain (O3'/C5'/O5'/alpha-P) reaches **58.1368–58.1936
+units** from its own C1', while consecutive residues along a strand are only
+**54.0 units** (`nucleotide_slot_spacing`) apart. The chain is longer than
+the gap to the next residue — an unavoidable overlap regardless of how well
+any single residue's own geometry is derived, since (per `ribose_deriver.gd`'s
+stated design principle) residues are never rotated to face their neighbor,
+only translated along the strand with a fixed local orientation. Distinct
+from Bug F (which only keeps a residue's chain clear of its OWN base, not
+its neighbor's geometry) and independent of `dna_ribbons_gap` (checked
+directly: `pairing_direction` is normalized before use in
+`derive_base_layout()`, so at pre-fork — where it's purely vertical, same
+slot x on both templates — its magnitude never reaches the placement math;
+the base only ever travels one `bond_length` from C1', regardless of how far
+the real partner is).
+
+Since ring/base/chain geometry all scale linearly with `bond_length` (pure
+derived trig, no fixed additive terms), the fix is shrinking
+`molecular_ring_bond_length_ratio` — but this is a real trade-off, not a
+free fix: the same shrink also shrinks the H-bond anchor-to-anchor span,
+already measured at only ~8.17 units for real post-fork pairs (leading/
+template_top) at the live ratio (0.2) — barely more than one dash+gap cycle
+(7.0 units, `molecular_h_bond_dash_length` + `molecular_h_bond_gap_length`),
+nowhere near the "2 full cycles" goal `molecular_ring_bond_length_ratio`'s
+own comment records from when it was last tuned (0.287, chosen for the
+ring-diameter-vs-dash-cycle trade-off at THAT time). A sweep (linear
+scaling from the live measurements) found no ratio clears both the
+chain-overlap margin and the 2-cycle dash target simultaneously — genuinely
+a balance point. Picked the 5%-chain-margin row: `molecular_ring_bond_length_ratio`
+0.2 -> **0.1763** (`bond_length` 10.8 -> 9.52), giving chain reach ~51.3
+(under the 54.0 slot spacing with real margin) at the cost of post-fork
+H-bond span shrinking further to ~7.2 (barely over one cycle).
+
+Values backed up before changing anything: `diagnosis/ratios_bkp.txt` (every
+tunable value touched or considered this session, plus the live-measured
+derived quantities that justified this ratio, so the trade-off can be
+re-evaluated or reverted without re-deriving it from scratch).
+
+**Dots instead of dashes** (same change, requested alongside): since the
+post-fork H-bond span is now this close to a single dash+gap cycle, a
+dashed line (`draw_line` segments) degrades to reading as one short solid
+blur rather than a visibly dashed line. Switched `_draw_dashed_line()` ->
+`_draw_dotted_line()` (`molecule_structure_renderer.gd`) to draw fixed-radius
+dots (`draw_circle`) at a fixed pitch instead of dash segments — a dot is a
+fixed-size mark regardless of how few fit along a short span, so it doesn't
+have the same failure mode. `theme_manager.gd`'s `molecular_h_bond_dash_length`/
+`molecular_h_bond_gap_length` renamed to `molecular_h_bond_dot_radius`
+(2.0)/`molecular_h_bond_dot_gap` (3.0) — center-to-center pitch
+(2*radius + gap = 7.0) deliberately kept equal to the old dash+gap total, so
+the "clears N cycles" reasoning above still applies unchanged to dot count.
+Neither field had a scene override, so the rename is safe.
+
+Awaiting a live screenshot to confirm the same-strand overlap is gone (or
+at least substantially reduced) and the H-bond dots read cleanly at the new,
+shorter post-fork span.
+
+## Bug F, second correction — clearance search could flip the H-bond anchor to face away from its partner
+
+Flagged from the SAME Bug H screenshot, by direct visual inspection (user's
+own hypothesis, confirmed before any code was touched): every nucleotide
+looked "flipped" — top-strand residues showing ribose below and base above,
+bottom-strand residues the reverse. Confirmed numerically, not just
+visually, using the new world-space diagnostic dump fields (below): for a
+real paired residue, `pairing_direction` (toward the real partner) was
+`(0, 60)` — straight down — while the H-bond anchor atom sat at local
+`(-10.73, -13.71)`, i.e. ABOVE its own C1', on the opposite side from the
+partner. Dot product of the two directions: **-271.4** — strictly negative,
+not just off-axis.
+
+Root cause: the attachment-fixed clearance search (this doc's Bug F
+correction, above) pins the ATTACHMENT atom toward `pairing_direction`
+(correctly fixing the glycosidic-bond stretch) but was left free to rotate
+the rest of the ring through the FULL 360-degree sweep to maximize distance
+from the ribose's own substituent chain — with nothing keeping the ANCHOR
+atom (a different atom, on the far side of the ring) anywhere near the
+intended direction. Since the ribose's own chain and the real partner
+routinely sit on the same general side (both point "outward" from the
+strand), the search's clearance-maximizing angle often flips the anchor to
+the opposite side entirely — visually indistinguishable from the whole
+nucleotide being mirrored, even though the ribose and attachment point were
+both correctly placed the whole time.
+
+Diagnostic improvement (requested alongside root-causing this): the F9 dump
+already grouped atoms by molecule (`ring_named`/`base_named`/`chain_named`)
+but only ever printed LOCAL coordinates, forcing a manual conversion to see
+what's actually overlapping on screen. `_derive_full_residue()`/
+`_write_residue_block()` (`molecule_structure_renderer.gd`) now print WORLD
+coordinates alongside local for every atom in all three groups, plus a new
+`DIRECTION CHECK` line per residue: `pairing_direction` and an
+`anchor_alignment_dot` that explicitly flags "anchor faces AWAY from
+partner" when negative — this is exactly what caught the -271.4 case above
+directly off the dump, no manual arithmetic needed.
+
+Fixed by bounding the search instead of leaving it unconstrained: swept
+worst-case clearance AND worst-case `anchor_alignment_dot` across every
+base letter x strand sign combination at increasing window half-widths
+around the "aligned" angle (the one that points the anchor exactly at
+`dir`, same formula the no-avoid_points fallback already used):
+
+| window | worst-case clearance | worst-case alignment dot |
+|---|---|---|
+| 0 deg (old Bug D behavior) | 0.558 | 1.000 |
+| 30 deg | 6.12-7.31 | 0.923 |
+| **45 deg** | **6.45-8.09** | **0.864** |
+| 60 deg | 6.85-8.09 | 0.779 |
+| 90 deg | 9.47-10.88 | 0.32-0.50 |
+| 120 deg | 14.6-18.0 | -0.187 (already flipped) |
+| 180 deg (unconstrained, the bug) | 15.9-18.7 | -0.39 to -0.87 |
+
+Almost all the real clearance win happens by 45 degrees (0.56 -> 6.45-8.09,
+a 10-14x improvement over the original Bug D overlap); purines (A/G)
+actually plateau exactly at 40 degrees in this sweep, so a 45-degree cap
+costs them nothing, while pyrimidines keep finding marginal extra clearance
+out to 90+ degrees — exactly the region where alignment collapses toward
+sideways/flipped, so that extra clearance isn't worth taking. 45 degrees
+picked as the point that captures essentially all the achievable clearance
+without paying for any flip risk. Implemented as
+`BASE_ROTATION_SEARCH_WINDOW_DEG` (`nitrogen_base_deriver.gd`) — the search
+still spans `BASE_ROTATION_SEARCH_STEPS` (72) samples, now distributed
+across `aligned_angle +/- window` instead of the full circle. The
+no-avoid_points fallback branch is unaffected (it always used exactly
+`aligned_angle`, now just named and shared instead of recomputed inline).
+
+Awaiting a live screenshot to confirm nucleotides no longer read as
+flipped.
+
+## Bug F, third correction — windowed search still let the H-bond span collapse
+
+The 45-degree window above fixed the flip, but the very next screenshot
+(same session, still atom zoom) looked WORSE, not better — user reported
+"can't make out what's what anymore." Confirmed via a fresh F9 dump: the
+H-bond anchor-to-anchor span, previously a stable 81-84 for this pre-fork
+template-template case, had collapsed to **6.4-11.25** — both strands'
+entire base rings (diameter up to 46.4) landing almost on top of each
+other.
+
+Root cause: pinning the ATTACHMENT atom (the second correction, above)
+means each residue's search runs completely independently — it only knows
+about its OWN substituent chain, never about where the PARTNER residue's
+own search left ITS anchor. The window (however wide) gave both sides
+freedom to drift toward each other with nothing coordinating the two
+searches. Swept the resulting cross-strand span at increasing window sizes
+and found it genuinely unstable, not just off by a fixed amount:
+non-monotonic, and in one combination collapsing to 1.127 at exactly the
+window size (60 degrees) that looked fine for a different base combination
+at the same window. There is no window value that fixes this under
+attachment-pinning — the instability is structural, not a tuning problem.
+
+Fixed by reverting to anchor-pinned placement (the design this doc's Bug D
+follow-up originally shipped, before the second correction changed it) and
+moving the window constraint onto the ATTACHMENT's stretch instead of the
+anchor's rotation freedom. Anchor-pinning means `translation` is always
+solved so the anchor lands exactly on `anchor_target` — by construction,
+this is now stable and correct for every window size, base letter, and
+strand sign, exactly as it always was pre-Bug-F. The window instead bounds
+how far the attachment (and the real covalent glycosidic bond it
+represents) is allowed to drift from `bond_length` while searching for
+ribose-chain clearance — a smaller, bounded regression accepted
+deliberately, since an unstable/collapsed H-bond span is far more visually
+disruptive than a somewhat-stretched invisible bond length. Swept
+clearance-vs-stretch (not clearance-vs-alignment this time, since alignment
+is no longer a concern under anchor-pinning) and picked **15 degrees**:
+already escapes the worst original overlap (0.56 -> 3.31+ worst case) for a
+modest, bounded stretch (+1.6 to +3.7); stretch grows much faster than
+clearance improves past that point, especially for purines. Implemented as
+`BASE_ROTATION_SEARCH_WINDOW_DEG = 15.0` (`nitrogen_base_deriver.gd`) —
+same constant, same window mechanism as the second correction, just now
+governing the OTHER atom's drift, with the pinned/free roles swapped back.
+
+This is the third distinct fix to the same rotation search this session
+(Bug F core -> Bug F attachment-pin correction -> this anchor-pin
+re-correction). Recorded explicitly as a caution for any future change
+here: this function has exactly one free rotation DOF and at least three
+things that would each like to own it (glycosidic bond length, H-bond
+anchor position/span, ribose-chain clearance) — any future "fix" that
+moves which atom is pinned needs to re-verify ALL THREE, not just the one
+that prompted the change, ideally via the same kind of live F9 dump this
+session repeatedly needed to catch the two regressions above.
+
+Awaiting a live screenshot to confirm this actually looks better this
+time — both the flip (should still be fixed, anchor-pinning cannot flip by
+construction) and the span collapse (should now be fixed too).
+
+**Confirmed fixed, but a genuinely new problem surfaced from the same
+screenshot**: `anchor_alignment_dot = 1.0000` on every residue and a
+rock-stable `12.5484`/`12.5485` H-bond span — the flip and the collapse are
+both gone. But the render still looked wrong, and the "compare against
+leading/lagging" idea the user proposed to triangulate it turned out to
+rest on a false premise worth recording: in that dump, `leading`/`lagging`
+had NO real partner yet (`pairing_direction = (0,0)`, every entry routed
+through the UNPAIRED fallback path) — they looked clean because they were
+using the roomy chain-away fallback with no cross-strand constraint, not
+because there's a second, better-behaved code path. Once a synthesized
+strand actually pairs with its template, it goes through the exact same
+anchor-pinned search and will show the exact same crowding.
+
+## Bug I — base rings overlap because dna_ribbons_gap doesn't leave room for them
+
+The real cause: each base ring sits at a FIXED offset from its own C1'
+(`anchor_target = c1_position + dir * (bond_length + reach_length)`,
+`dir` normalized — `dna_ribbons_gap`'s magnitude never reaches this
+calculation, confirmed in Bug H's investigation). The only place
+`dna_ribbons_gap` actually enters the picture is how far apart the two
+strands' C1' anchors themselves are. Ring diameter (up to 46.4) is much
+larger than the anchor-to-anchor H-bond span this produces (12.5484) —
+so at `dna_ribbons_gap = 60`, the worst-case "ring atom closest to the
+opposite strand's own C1'" was `16.9577`, already inside the opposite
+ring's own ~23-unit radius: guaranteed overlap, independent of anything
+in the rotation search.
+
+Since the ring's offset from its own C1' is fixed, "closest ring atom to
+opposite center" scales 1:1 with `dna_ribbons_gap`. Solved directly:
+target clearance ~40 (ring radius + margin) - current worst case
+(16.9577) = +23.04 needed -> `dna_ribbons_gap` 60 -> **85** (scene
+override, `scenes/simulation.tscn`; old value already recorded in
+`diagnosis/ratios_bkp.txt`).
+
+Known tradeoff, flagged before applying: `dna_ribbons_gap` is shared with
+the normal-zoom bead-glyph rendering (row spacing) and several other
+systems (polymerase clamp, ligase drop, etc.) — raising it for the
+molecular view also widens the bead-glyph ribbon gap. Applied anyway per
+explicit instruction, to check the result first; decoupling the molecular
+renderer's spacing from the shared value is the planned follow-up if this
+works but the bead-glyph-mode side effect isn't acceptable.
+
+Awaiting a live screenshot to confirm the base rings clear each other at
+the new gap.
+
+**Confirmed working** at `dna_ribbons_gap = 100` — base rings clear, no
+overlap. Follow-up needed: span was still tight, raised further to
+`100` (from `85`) for real breathing room (`27.45` H-bond span,
+comfortably past the ~72.5 combined-reach floor) — confirmed working via
+live screenshot, user requested only minor further fine-tuning of the dot
+styling after this.
+
+**Decoupling** (requested from the start of Bug I, deferred until the fix
+was confirmed working): `dna_ribbons_gap = 100` is far too wide for the
+normal-zoom bead-glyph ribbon, which shares the same value. Reverted
+`dna_ribbons_gap` to its original `60` and moved the extra separation
+into a render-only offset that lives entirely inside
+`molecule_structure_renderer.gd`, never touching the real simulated
+positions:
+
+- `theme_manager.gd`: new `molecular_extra_ribbons_gap` (`40.0` = the
+  `100 - 60` this session already validated).
+- `molecule_structure_renderer.gd`: new `MOLECULAR_ROW_PUSH` table and
+  `_molecular_render_pos()` helper — adds a per-strand, render-only Y
+  offset (`push * extra_gap / 2`) applied uniformly to every residue of a
+  strand, never conditional on pairing state (so the backbone never kinks
+  at a pairing/unpairing boundary). The two templates push apart from
+  each other symmetrically (`template_top: -1`, `template_bottom: +1`);
+  leading/lagging push an ADDITIONAL unit further in the same direction
+  their own template partner already moved (`leading: -2`, `lagging:
+  +2`) — mirrors how `simulation.gd`'s own row formulas cascade
+  (`leading_y` is defined relative to `template_top`'s row), so the
+  leading-vs-template_top separation grows by the same total amount as
+  the template-vs-template separation, not half of it. A single fixed
+  push per strand is sufficient even though a strand can be involved in
+  two different real pairings over its lifetime, since `_pair_for_slot()`
+  guarantees those pairings are never simultaneous.
+- Applied consistently in both the real renderer (`_rebuild_layout()`)
+  and the F9 diagnostic (`_derive_full_residue()`, all its call sites) —
+  this session hit the "diagnostic silently drifts from the renderer's
+  real behavior" trap more than once (Bug G, the unzip-check dump logic)
+  and it's cheap to avoid here by routing both through the same
+  `_molecular_render_pos()` helper.
+
+Awaiting a live screenshot to confirm the molecular view still looks
+correct with the decoupled offset, and that normal zoom looks right again
+now that `dna_ribbons_gap` is back to 60.
+
+**Confirmed working.** `molecular_extra_ribbons_gap` live-tuned from the
+initial 40 up to **80** — every ring, base, and H-bond fully
+distinguishable at atom zoom, not merely non-overlapping. `dna_ribbons_gap`
+stays at 60 throughout (bead-glyph ribbon untouched). Script default
+updated to match (80) so a fresh scene starts from the tuned value.
+
+## Bug J — ribose/phosphate chain reaches toward the partner instead of away, on the two template strands
+
+Flagged from a side-by-side pair of live screenshots the user set up
+deliberately: one confirmed-correct "DNA copy" (leading strand) residue,
+phosphate above the ribose ring and base below it, cleanly separated, H-bond
+dots continuing further down past the base; then the equivalent
+template_top residue, phosphate **below** the ribose ring instead — user's
+exact words: "the ribose ring and phosphate are upside down."
+
+Root cause, confirmed by tracing the actual local coordinates rather than
+guessing: `RiboseDeriver.derive_substituents()` places the O3'/C5'/O5'/
+alpha-phosphate chain radially outward from the ring, using whatever
+direction the ring's own antiparallel-pucker rotation
+(`apply_strand_direction`, driven by `STRAND_DIRECTION_SIGN`) happens to
+leave it in — never told which way the real partner actually is, unlike
+the base (which already gets `pairing_direction`). Worked out where each
+strand's chain actually points relative to where its own real partner sits
+on screen:
+
+| strand | sign | partner is | chain points | correct? |
+|---|---|---|---|---|
+| leading | -1 (rotated) | below | up (away) | yes |
+| lagging | +1 (identity) | above | down (away) | yes |
+| template_top | +1 (identity) | below | down (toward) | no |
+| template_bottom | -1 (rotated) | above | up (toward) | no |
+
+Leading/lagging come out correct only as a side effect of sharing the same
+rotation sign as their own case happens to need; the two templates come
+out backwards — chain reaching straight into the H-bond zone toward the
+partner, which is the same-strand mess visible in every template
+screenshot this whole investigation, and invisible in every leading/
+lagging screenshot. Confirmed this isn't fixable by touching
+`STRAND_DIRECTION_SIGN` or the ring rotation itself — that sign is the
+same one protecting the already-verified-correct ring chirality/nesting
+(`docs/Handout_AntiparallelStrandOrientation.md`), and lagging proves the
+correction can't be a fixed per-strand or per-sign table anyway: lagging
+and template_top share the identical rotation sign (`+1`, identity) yet
+need opposite corrections, since lagging's real partner is above it while
+template_top's is below.
+
+Fixed by giving the chain the same treatment the base already has:
+`derive_substituents()` now takes an optional `pairing_direction` (real,
+world-space, points toward the partner — same value/convention the caller
+already computes for base placement, now computed earlier in
+`_rebuild_layout()` so both consumers share it). When the chain's natural
+outward direction agrees with `pairing_direction` (i.e. reaches toward the
+partner), the whole substituent group is flipped by negating every local
+position — a proper 180-degree rotation around the ring's own fixed
+attachment point (C3' for O3', C4' for the C5' chain), verified
+algebraically to be identical to that rotation for every atom in the
+chain including the branching alpha-O1/alpha-O2 pair, never a single-axis
+mirror (would silently invert the chain's own chirality while looking
+like a fix — same rule `apply_strand_direction()` already documents).
+Verified numerically against all four strands' real local coordinates:
+leading/lagging (already correct) come out `flip=False`, unaffected;
+template_top/template_bottom (confirmed backwards) come out `flip=True`.
+Left at the default zero vector (unpaired residues, or any caller that
+hasn't been updated), behaves exactly as before.
+
+Awaiting a live screenshot to confirm the template strands' chains now
+point away from their partner like leading/lagging always did.
+
+**Confirmed via screenshot** (atom-zoom, template DNA): both strands now
+show phosphate/ribose pointing away from the pairing partner and base
+toward it, matching leading/lagging's known-correct orientation. Sequence
+cross-checked against the H-bond dot color pattern (2 dots/green = AT
+family, 3 dots/cyan = GC family) and matched exactly.
+
+### Bug K: base ring crowds its own ribose ring (paired residues only)
+
+Follow-up CQA, found via a deliberate before/after visual comparison (same
+technique as Bug J): comparing a leading-strand nucleotide (unpaired,
+fallback-direction rendering) against a template nucleotide (paired, real
+H-bond rendering) side by side, flipped to a common orientation. The
+leading one shows a clean "neck" — real background space — between the
+ribose ring and the base ring below it. The template one shows the base
+ring's own atoms crowded directly against the ribose ring's own atoms, no
+visible gap, reading as one fused mass.
+
+Verified quantitatively against the F9 dump (not assumed from the
+screenshot alone): for template PAIR 1 slot 0 (top nucleotide), the
+closest base-ring atom to a ribose-ring atom (excluding the attachment
+bond itself) is C2 (218.8, 309.2) to C3' (221.4, 306.8) — distance ≈3.5
+units, well inside two `molecular_atom_radius = 4.0` circles' combined
+radius, i.e. genuinely overlapping on screen. The equivalent unpaired
+leading-strand nucleotide's closest base-to-ribose distance is ≈23.5
+units, ~7x more clearance, for structurally analogous atoms.
+
+Root cause: `NitrogenBaseDeriver.derive_base_layout()`'s clearance-
+maximizing rotation search (see its own extensive comment history — one
+free rotation DOF, multiple competing needs) only ever receives
+`avoid_points = substituent_positions.values()` from both call sites in
+`molecule_structure_renderer.gd` (`_rebuild_layout()` and
+`_derive_full_residue()`) — the ribose's own substituent chain
+(O3'/C5'/O5'/alpha-P). The ribose RING itself (C1'-C4', O4') was never
+included in `avoid_points`, so the search is structurally blind to base-
+vs-ribose-ring collisions — it can (and does) happily maximize clearance
+from the phosphate chain while rotating the base straight into its own
+ribose ring, exactly the fused-mass overlap seen in the template
+screenshot. This never showed up for leading/lagging's unpaired fallback
+path because that path (`avoid_points.is_empty()` branch) doesn't run the
+search at all — it just uses the natural `aligned_angle`, which happens to
+leave enough clearance without ever having to defend against anything.
+
+Fixed by passing `ring_positions.values() + substituent_positions.values()`
+as `avoid_points` at both call sites, so the existing search (unchanged
+otherwise) now also treats the ribose ring's own atoms as something to
+maximize distance from. No change to `derive_base_layout()` itself, no
+change to the anchor-pinning/window-bounding architecture — the search
+mechanism was already correct, it was just being fed an incomplete
+picture of what to avoid.
+
+Awaiting a live screenshot to confirm the base ring now clears its own
+ribose ring for paired (template) residues, without regressing
+leading/lagging's already-correct unpaired spacing (their code path is
+unaffected — `avoid_points.is_empty()` no longer applies once ring atoms
+are always included, so this DOES now run the search for previously-
+unpaired residues too once real chain/ring data exists; needs a live
+check, not just an assumption).
+
+**Follow-up CQA:** re-checked numerically against the next F9 dump — the
+fix reduced crowding only marginally (closest base-to-ribose distance went
+from ~3.5 to ~3.9 units, essentially noise). Root cause: the clearance
+search is still bounded to the same ±15-degree window
+(`BASE_ROTATION_SEARCH_WINDOW_DEG`) chosen to limit glycosidic-bond
+stretch — feeding it the ribose ring as something to avoid didn't help
+because no angle within that narrow window actually escapes the overlap.
+This confirmed a separate, deeper issue (Bug L, below) was the real
+source of what visually read as continued crowding.
+
+### Bug L: ribose ring bulges toward the base while the phosphate chain reaches away (template strands only)
+
+Found via the user's own before/after visual comparison (same technique
+as Bug J): a leading-strand nucleotide (unpaired) shows a clean "neck"
+between ribose and base; the equivalent template nucleotide shows the
+sugar and base reading as one fused mass with no gap — described as "the
+ribose pentagon's point is aiming the wrong way."
+
+Verified quantitatively, not just visually: computed the ring's own
+"bulge direction" (average of C2'/C3'/C4'/O4' relative to C1') and the
+chain's own "reach direction" (alpha-phosphate relative to C1'), then
+their dot product. Leading: +555 (aligned — ring and chain form one
+continuous backbone shape). Lagging: +492 (aligned). Template_top: -110
+(opposed). Template_bottom: -173 (opposed). Both template strands
+specifically have the ring bulging one way and the chain reaching the
+opposite way within the SAME residue — exactly what reads as a
+wrong-facing pentagon.
+
+Root cause: `RiboseDeriver.apply_strand_direction()`'s ring rotation is
+driven by a FIXED per-strand sign (`STRAND_DIRECTION_SIGN` in
+`molecule_structure_renderer.gd`, representing real 5'->3' reading
+direction, checked against SKILL.md's polarity table) — it must stay
+fixed regardless of live pairing state, or consecutive residues along the
+same strand would zigzag. Bug J's chain flip, by contrast, is driven by
+live `pairing_direction`. Before Bug J both used the ring's own
+as-derived local frame and so always agreed (even though the chain
+pointed at the partner — Bug J's original problem). Bug J fixed the chain
+alone; for leading/lagging this was invisible (their needed flip is
+always `false`, so nothing diverges from the ring), but for
+template_top/template_bottom the chain's flip is always `true` while the
+ring's fixed-sign rotation never changed — breaking their mutual
+consistency specifically for the two strands Bug J touched.
+
+**Options considered** (laid out for the user before implementing):
+(A) apply the SAME flip decision to the ring too, as an additional
+rotation on top of the fixed-sign one; (B) revert Bug J's chain flip
+entirely and solve the original toward-partner overlap via spacing
+instead; (C) check whether `STRAND_DIRECTION_SIGN`'s template_top/
+template_bottom values are themselves wrong and swap them. Chosen: **A**
+— most targeted, doesn't touch the separately-verified reading-direction
+property, and keeps Bug J's confirmed-correct "chain away from partner"
+behavior intact.
+
+**Implementation** (`scripts/ribose_deriver.gd`): extracted the shared
+180-degree point-reflection into `_rotate_180()` (used by both
+`apply_strand_direction()` and the new function). Added
+`apply_partner_flip(local_positions, pivot, probe_id, pairing_direction)`
+— reuses Bug J's exact dot-product test (does the ring's own C4' local
+position, un-normalized-relative-to-pivot, face toward the real partner?)
+but applies the resulting 180-degree rotation to the RING instead of
+negating the chain. Verified by hand against the dump that composing this
+with the existing sign-rotation produces the correct net result for both
+cases: template_top (sign-rotation off, this rotation fires: 0+1=1,
+bulge flips to match chain) and template_bottom (sign-rotation on, this
+rotation also fires: 1+1=2=identity, bulge flips back to match chain) —
+two 180-degree rotations around the same pivot (C1') compose exactly as
+expected either way. `derive_substituents()` itself is left completely
+unchanged (still supports its own `pairing_direction` parameter) — the
+call sites in `molecule_structure_renderer.gd` now call
+`apply_partner_flip()` on the ring immediately after the existing
+`apply_strand_direction()` call, then pass `Vector2.ZERO` to
+`derive_substituents()` instead of the real `pairing_direction`, since
+the chain now inherits the correct direction for free from wherever the
+ring ends up.
+
+**Easy revert** (explicitly requested): delete the two
+`apply_partner_flip()` call sites in `molecule_structure_renderer.gd` and
+restore their `derive_substituents()` calls to pass real
+`pairing_direction` again — `apply_partner_flip()` itself is purely
+additive and can be left in place unused. **Easy test of Option C**
+instead: swap `STRAND_DIRECTION_SIGN`'s `template_top`/`template_bottom`
+values — fully independent of this change, no interaction.
+
+Awaiting a live screenshot to confirm the ring now visually reads as one
+continuous piece with the chain for template strands, without regressing
+leading/lagging (their flip decision is unaffected — always `false`, so
+`apply_partner_flip()` is a no-op for them by construction, verified
+above via the dot-product check staying positive).
+
+**Confirmed via screenshot**: ring and chain now read as one continuous backbone unit for template strands, matching leading/lagging's known-correct shape. Remaining known issue (separate from this fix): the inter-residue phosphodiester backbone line (connecting one residue's O3' to the next residue's alpha-phosphate) crosses diagonally through the ring/base glyphs rather than routing cleanly around them — not yet investigated.
+
+### Bug M: chain outward direction driven by ring-vertex angle, not by pairing_direction directly (EXPERIMENTAL)
+
+Root cause of the crossing (identified by code inspection, not fresh
+numeric verification — the diagnostic dumps on hand predate Bug L and are
+stale for this specific check): `derive_substituents()`'s `outward`
+direction was derived from wherever C3'/C4' happen to sit on the regular
+pentagon — never purely vertical, since a 5-fold-symmetric shape has no
+vertex exactly opposite the start angle. Over the chain's 3 bond-lengths
+(C4'->C5'->O5'->alpha-phosphate) that unavoidable horizontal drift
+compounds enough to land alpha-phosphate close to/past the NEXT residue's
+own ring — the direct cause of the inter-residue backbone line crossing
+through neighboring ring/base glyphs.
+
+User proposed mirroring the ribose+phosphate group horizontally. Flagged
+a real risk instead of implementing literally: a per-axis negate (mirror)
+of just the chain would invert its shape relative to the ring's own,
+already-chirality-correct orientation (the ring itself is untouched by
+this), reintroducing the same category of problem Bug L just fixed — two
+independently-oriented parts of one residue disagreeing with each other.
+
+Implemented a chirality-safe alternative achieving the same practical
+goal instead: since Bug L already established `pairing_direction` as the
+reliable "away from partner" vector, `derive_substituents()` now uses
+`-pairing_direction.normalized()` directly as `outward` for BOTH
+substituent groups (when paired; unpaired residues keep the old
+C3'/C4'-derived fallback), rather than deriving direction from wherever
+the ring vertices happen to sit. This does not negate any axis or reflect
+anything — it is a different, still-legitimate choice for what "outward"
+means (documented in the original Bug J comment as "the simplest
+idealized choice," never a hard constraint), so it cannot reintroduce the
+mirror/chirality bug. Both call sites in
+`molecule_structure_renderer.gd` (`_rebuild_layout()` and
+`_derive_full_residue()`) now pass the real `pairing_direction` into
+`derive_substituents()` again (previously `Vector2.ZERO`, disabled by
+Bug L's redesign) since it's now load-bearing for direction, not just a
+flip toggle.
+
+**Explicitly experimental** (user: "if it doesn't work, we'll revert and
+try to gather data from numbers"): easy revert is restoring the
+`flip`-boolean block this replaced (preserved in git history) and
+switching the two call sites back to `Vector2.ZERO`. Awaiting a live
+screenshot to confirm the backbone line no longer crosses through
+neighboring ring/base glyphs, without regressing anything Bug L already
+fixed (base placement is untouched — `derive_base_layout()` never reads
+`derive_substituents()`'s output, only the final positions via
+`avoid_points`).
+
+
+**REVERTED** — user tested it live and it did not fix the crossing; reverted immediately (git diff confirmed clean, both call sites back to Vector2.ZERO, flip-boolean logic restored verbatim). Per the original plan, next step is gathering real numbers (fresh F9 dump against the current Bug-L-fixed geometry) rather than reasoning from code alone.
+
+**Fresh F9 dump provided, decisive test run**: temporarily forced
+straight-chord mode unconditionally in `_build_bond_points()`
+(bypassing curve-following entirely) and had the user screenshot. **The
+crossing persisted** — ruling out curve-following as the cause (reverted
+immediately after, one line, confirmed clean).
+
+Re-verified with a proper point-to-line-segment distance check (not just
+axis-aligned bounding-box overlap, which can miss a non-axis-aligned
+pentagon) against every real atom of both the current and next residue,
+using the fresh dump's actual coordinates. Result: the bond line never
+comes within 10.8 units of the NEXT residue's ring, and not within range
+of its base at all. The only atoms it passes near (4-15 units) are the
+O3'/C5'/O5'/alpha-phosphate cluster it actually connects — i.e., its own
+chain and the chain it terminates at, which is geometrically unavoidable.
+
+**Conclusion so far**: the crossing is not the bond line passing through
+a NEIGHBORING residue's ring or base — that hypothesis is now
+conclusively ruled out by two independent checks (bounding-box and
+point-to-segment) against real, current, post-Bug-L coordinates. The
+visible crossing more likely reads as the bond passing near/behind its
+OWN chain's tightly-clustered O5'/C5'/alpha-P atoms at the top of each
+residue (a real proximity, ~4-15 units, plausible to misread as crossing
+at deep zoom with rendered atom circles). Confirming this precisely needs
+clearer atom-identity ground truth in the screenshot than pixel-position
+guessing can provide — deferred to the atom-labeling work, which the user
+independently wants to do next and should directly resolve this question
+too.
+
+### Atom identity labels (user request, unblocks the crossing-diagonal question directly)
+
+Rendering previously labeled every atom with its bare element symbol only
+("C", "N", "O", "P") — impossible to tell C3' from C1' from a base-ring
+carbon at a glance, or which oxygen is the 3'-OH vs. the one that actually
+bonds the alpha-phosphate, purely from the screen.
+
+Added `ATOM_DISPLAY_LABELS` (`molecule_structure_renderer.gd`) — a pure
+display lookup keyed by the atom's own role suffix (topology roles are
+always `"incoming.<suffix>"` / `"chain.<suffix>"`, per
+`molecule_topology.gd`'s `add_atom()`), mapping to real atom names:
+ribose ring stays C1'-C4'/O4'; substituent chain O3' (this residue's own
+3'-OH, its outgoing connection point) vs. O5' (the one that actually bonds
+alpha-phosphate) are now visually distinct; triphosphate atoms get Greek-
+letter labels (Pα/O1α/O2α/Oαβ etc., matching real biochemistry notation);
+base-ring atoms use their real purine/pyrimidine numbering (N1, C2, N3...).
+Falls back to the bare element for anything not in the table. Wired via a
+new `_atom_display_label(role, element)` helper, stored as `label` in
+`_atom_layout` alongside the existing `element` field (kept, still used
+for circle coloring), and the draw loop now renders `a.label` instead of
+`a.element`. Purely a rendering/display change — does not touch
+topology, layout, or any geometry-derivation code from Bugs J-M.
+
+Motivated directly by the crossing-diagonal investigation: prior analysis
+narrowed the crossing down to "passes near the O5'/C5'/alpha-P cluster,
+can't tell which atom exactly without real labels" — this should let the
+next screenshot answer that precisely instead of guessing from pixel
+positions.
+
 ---
 
 ## Culling note

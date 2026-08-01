@@ -581,14 +581,41 @@ extends Node
 ## TUNED (defaults to sim.dna_ribbons_gap at the renderer call site if left
 ## at 0.0).
 @export var molecular_pair_span_padding: float = 0.0
-## Growth Session 2: dash length for the dotted hydrogen-bond lines drawn
-## between paired bases' named pairing-anchor atoms (Tier 2 per the
-## addendum doc — one anchor atom per base, existing AT=2/CG=3 line count
-## reused from replication_manager.gd, not recomputed). NOT YET TUNED.
-@export var molecular_h_bond_dash_length: float = 4.0
-## Growth Session 2: gap length between dashes for the same dotted
-## hydrogen-bond lines. NOT YET TUNED.
-@export var molecular_h_bond_gap_length: float = 3.0
+## Dot radius for the dotted hydrogen-bond lines drawn between paired
+## bases' named pairing-anchor atoms (Tier 2 per the addendum doc — one
+## anchor atom per base, existing AT=2/CG=3 line count reused from
+## replication_manager.gd, not recomputed). Was rendered as dashes
+## (draw_line segments) through Growth Session 2 despite this field
+## already being named/commented as "dotted" — switched to actual dots
+## (docs/MolecularStructure_BasePairExpansion.md) once the ratio-shrink
+## fix (Bug H) pushed the real post-fork H-bond span down near a single
+## dash+gap cycle, where a dashed line reads as one short blur; dots don't
+## have that failure mode since each one is a fixed-size mark regardless
+## of how many fit along the span. Center-to-center pitch (2*radius + gap)
+## kept equal to the old dash+gap total (7.0) so this rename doesn't
+## silently change the constraint used when tuning molecular_ring_bond_
+## length_ratio. NOT YET TUNED beyond that.
+@export var molecular_h_bond_dot_radius: float = 2.0
+## Gap between dots (edge to edge) for the same hydrogen-bond lines.
+## NOT YET TUNED beyond preserving the old dash+gap pitch — see
+## molecular_h_bond_dot_radius's comment.
+@export var molecular_h_bond_dot_gap: float = 3.0
+
+## Extra vertical separation (Bug I decoupling, docs/MolecularStructure_
+## BasePairExpansion.md), added ONLY inside the molecular renderer's own
+## row placement — never touches sim.dna_ribbons_gap, the value shared
+## with the normal-zoom bead-glyph ribbon spacing and several other
+## systems (polymerase clamp, ligase drop, etc.). Confirmed empirically
+## (live F9 dumps + live screenshots): raising sim.dna_ribbons_gap to 100
+## gave every base ring comfortable clearance from its paired partner's
+## ring (~85 was still short; base rings up to 46.4 in diameter need real
+## room), i.e. 100-60 = 40 as a starting point for this same fix applied
+## only to this renderer's own per-strand offset
+## (molecule_structure_renderer.gd's MOLECULAR_ROW_PUSH table). Live-tuned
+## up from there to 80 for full legibility at atom zoom (every ring/base/
+## H-bond distinguishable, not just non-overlapping) — the bead-glyph
+## ribbon gap stays at its own tuned value (60) throughout, unaffected.
+@export var molecular_extra_ribbons_gap: float = 80.0
 
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:
