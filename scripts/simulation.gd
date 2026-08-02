@@ -512,6 +512,9 @@ func teardown_simulation():
 	if replication_mgr != null:
 		replication_mgr.teardown()
 
+	if molecule_renderer != null:
+		molecule_renderer.clear_fold_cache()
+
 	var nodes_to_free: Array[Node] = []
 
 	# Collect template-owned nodes only

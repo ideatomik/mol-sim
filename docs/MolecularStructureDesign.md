@@ -1,10 +1,12 @@
 # Molecular Structure — Design (pre-implementation)
 
-_Lattice-phase doc per the Crystal Building Method. Nothing here has
-shipped; no As-Built section yet. **This is a cross-cutting subsystem doc,
-a peer of `COMPLEXITY_MODEL.md` and `SHARED_BASE_SEAM.md` — not a companion
-to any single module.** It is foundational to both DNA replication's deep
-zoom and to Krebs, which is why it belongs to neither._
+_Lattice-phase doc per the Crystal Building Method. **This is a
+cross-cutting subsystem doc, a peer of `COMPLEXITY_MODEL.md` and
+`SHARED_BASE_SEAM.md` — not a companion to any single module.** It is
+foundational to both DNA replication's deep zoom and to Krebs, which is
+why it belongs to neither. See the status note below on what has and has
+not shipped — this is no longer accurate as a blanket "nothing has
+shipped" statement for the DNA slice specifically._
 
 _**Partially grounded.** `nitrogen_base.gd` and `zoom_manager.gd` were read
 after the first draft; five assumptions died on contact and are recorded in
@@ -21,6 +23,19 @@ corrections** below for all three passes; the third found no new
 contradictions, only confirmation of corrections #3, #6, and #7. Nothing
 left unread does not mean nothing left unresolved — see **Open questions**
 below for what's still undecided regardless of file-reading status._
+
+_**"Nothing here has shipped" is now stale for the DNA slice.** The DNA
+milestone's scope fence (ribose + phosphodiester operator + skeletal
+rendering, see "First milestone" below) has substantially built and
+shipped, across Growth Session 1 and the base-pair expansion pass —
+`MolecularStructure_BasePairExpansion.md` is the As-Built-style record of
+that work (bugs A through M, all root-caused via code trace or live
+diagnostic dump, not guessed). This doc's own Lattice-phase status
+survives for what it actually governs — the cross-cutting layer Krebs will
+also depend on — but should no longer be read as describing unbuilt DNA
+work. See the new Layout-rule subsection below and Open Question 2's
+update for two places the growth session fed real findings back up into
+this cross-cutting doc, per the project's own Annealing discipline._
 
 ---
 
@@ -79,6 +94,96 @@ deterministic.** Force-directed layout is disqualified outright — it is
 iterative and seed-dependent, so it would render a different picture on
 each scrub. That is a direct violation of the instant-snap invariant at the
 most fundamental level available, and no amount of caching rescues it.
+
+### Layout rule: substituent direction must be grounded, not shared
+
+A layout function is deterministic by construction the moment it is a pure
+function of topology — but determinism alone does not make it *correct*.
+A layout can compute the same wrong answer every time, reproducibly, and
+pass every scrub-safety check while still not describing the molecule it
+claims to.
+
+**The failure mode, found repeatedly enough in the DNA milestone to name
+as a rule rather than a one-off:** when an atom has more than one
+substituent branching off it toward different real neighbors, each
+branch's direction must be derived independently — grounded in either (a)
+real reference geometry for that specific bond, or (b) real position data
+for whatever it actually connects to. **Never a single shared direction,
+sign, or flag applied to more than one substituent on the assumption that
+ring symmetry, or a nearby real constraint, makes them equivalent.**
+
+This is not a hypothetical risk. `MolecularStructure_BasePairExpansion.md`
+records the same underlying failure surfacing at least twice under
+different names, at different layers of the same nucleotide, across a
+single growth session:
+
+- **Bug D/F** (base ring placement): `NitrogenBaseDeriver`'s rotation was
+  fully consumed aligning the attachment atom toward the real partner,
+  leaving the anchor atom's own facing an unconstrained side effect —
+  correct for some strand/pairing sign combinations, wrong for others,
+  purely because two chemically distinct atoms (attachment, anchor) were
+  governed by one shared rotation decision.
+- **Bug J/L** (ribose ring and substituent chain): `RiboseDeriver`'s ring
+  rotation is correctly tied to a *fixed* per-strand sign (the
+  antiparallel-orientation fix, confirmed correct and never touched by
+  the bugs below it); the substituent chain was originally derived from
+  that same ring-local frame with no awareness of the real partner
+  direction, then patched (Bug J) to flip based on
+  `pairing_direction`, which broke the ring/chain's own mutual
+  consistency for exactly the two strands the patch touched (Bug L) —
+  two independently-oriented parts of one residue disagreeing with each
+  other, the identical shape of bug as Bug D/F one layer up.
+
+**Verified against real measured geometry, not assumed to be true:**
+Gelbin, A.; Schneider, B.; Clowney, L.; Hsieh, S.-H.; Olson, W. K.; Berman,
+H. M. *Geometric Parameters in Nucleic Acids: Sugar and Phosphate
+Constituents.* J. Am. Chem. Soc. **1996**, 118, 519–529 — the standard
+statistical survey (~127 high-resolution crystal structures) for this
+geometry. In deoxyribose, the bond angle at C4' (C5'-C4'-C3') averages
+114.7°; the bond angle at C3' (C4'-C3'-O3') averages 110.3°. These are two
+separately measured quantities, not one value read from two symmetric
+ring positions — external confirmation that C5' and O3' are governed by
+independent torsion angles in the real molecule (γ for C5'-C4', ε for
+C3'-O3'), never a mirrored or shared pair. This also supersedes this
+doc's own Open Question 2 placeholder of "~109.5° tetrahedral angles" with
+real per-bond values; see that question's update below.
+
+**Named exception, not silently resolved:** the shipped Bug J/L fix
+derives substituent direction from `pairing_direction` — the vector
+toward the real H-bond partner on the *other* strand — and verifies
+itself by checking whether the result faces the partner correctly. That
+is a real, working, screenshot-and-diagnostic-confirmed fix for the
+symptoms it targeted, and it is **confirmed chemically inaccurate**, not
+merely unconfirmed: Gelbin's data says C5'/O3' are governed by the real
+*same-strand* neighbor (the previous/next residue along the backbone),
+independent of which base is paired to what, and `pairing_direction` is
+not that reference. The two only produce the same answer by coincidence
+of this milestone's specific antiparallel duplex topology, not by
+construction. Carried forward as a named exception (same treatment as
+the aconitase exception below) rather than a silent one — see Open
+Question 10. Whether to spend the effort re-deriving C5'/O3' from real
+same-strand neighbor positions now, given the shipped version already
+passes its own verification and nothing currently visible depends on the
+difference, is the only part left open; Krebs will need its own answer
+regardless, since it has no "previous/next residue" to borrow this exact
+mechanism from. Bug M attempted a related direction change (deriving
+outward directly from `-pairing_direction` rather than ring-vertex
+position) and was tested live and reverted — the crossing it targeted
+turned out not to be a neighbor-collision at all, per
+`MolecularStructure_BasePairExpansion.md`'s own concluding investigation,
+which is a useful caution against assuming a direction fix is required
+before checking what the symptom actually is.
+
+**Practical check before shipping any future substituent-direction
+derivation:** ask whether two or more branches share a computed direction,
+sign, or boolean flag. If yes, ask whether that sharing is justified by
+the branches actually being the same thing chemically (rare) or is a
+convenience inherited from a nearby but different constraint (the failure
+mode above, twice). When in doubt, verify against a cited source or real
+position data before trusting the geometry to look right — this class of
+bug can render as plausible-looking crowding for a long time before
+anyone traces it back to the actual direction math, which is exactly what
+happened across Bugs D through M.
 
 **Render mode.** Bead-glyph (what the ATP cofactor beads already do),
 skeletal / line-angle (the organic-chemistry standard), ball-and-stick.
@@ -691,17 +796,27 @@ milestone-relevant slice._
 2. **Layout authoring format — DECIDED.** Canonical vertex positions for
    each template ring (starting with the furanose/ribose ring) are
    **derived from published bond geometry** — idealized bond
-   lengths/angles (e.g. ~109.5° tetrahedral angles for the sp3 ring
-   carbons, standard C–C/C–O bond-length ratios) computed programmatically,
-   not hand-placed in an editor. This is the doc's own Nucleation-section
-   argument applied to itself: "hand-placing those vertices would be
-   *worse* than deriving them" (problem 2) rules out hand-authoring for the
-   same reason it motivated this whole subsystem. Substituents (5'-CH₂-
-   phosphate, 3'-OH) then hang off the derived ring at known
-   positions/angles, per the existing Layout section's stability rule.
-   Scale is relative (bond-length *ratios* preserved), not literal
-   Ångströms — the absolute unit matches whatever visual scale
-   `nucleotide_slot_spacing` already establishes.
+   lengths/angles computed programmatically, not hand-placed in an editor.
+   This is the doc's own Nucleation-section argument applied to itself:
+   "hand-placing those vertices would be *worse* than deriving them"
+   (problem 2) rules out hand-authoring for the same reason it motivated
+   this whole subsystem. Substituents (5'-CH₂-phosphate, 3'-OH) then hang
+   off the derived ring at known positions/angles, per the existing Layout
+   section's stability rule. Scale is relative (bond-length *ratios*
+   preserved), not literal Ångströms — the absolute unit matches whatever
+   visual scale `nucleotide_slot_spacing` already establishes.
+
+   **Superseded, real numbers now in hand — no longer a generic
+   placeholder.** The earlier version of this question estimated "~109.5°
+   tetrahedral angles" as a stand-in. Verified against Gelbin et al.
+   (1996), *Geometric Parameters in Nucleic Acids: Sugar and Phosphate
+   Constituents*, J. Am. Chem. Soc. 118, 519–529 (statistical survey,
+   ~127 crystal structures) — the standard reference for this geometry,
+   not a generic chemistry approximation. Real deoxyribose values used:
+   C5'-C4'-C3' bond angle averages 114.7°; C4'-C3'-O3' averages 110.3°.
+   These two angles are measurably different from each other (not a
+   symmetric pair), which is the direct evidence behind the new Layout
+   rule subsection above.
 
    **The "Inkscape in the pipeline" framing was moot, not decided against.**
    The SVG-authoring pipeline (`polymerase_shape.gd`,
@@ -788,6 +903,30 @@ milestone-relevant slice._
    pulled out. Migrating it would validate the model against shipped code;
    it would also be a refactor of working visuals for no user-visible
    gain. Not obviously worth it, and nothing depends on it.
+10. **`pairing_direction`-based substituent flipping (Bug J/L, in
+    `MolecularStructure_BasePairExpansion.md`) is confirmed NOT chemically
+    accurate — carried as a named exception, not an open toss-up.** Real
+    measured geometry (Gelbin et al., 1996, cited above) ties C5'/O3''s
+    direction to the real previous/next residue on the *same* strand,
+    governed by independent bond angles (114.7° / 110.3°) with no
+    relationship to which base is paired across the helix. The shipped
+    fix derives direction from `pairing_direction` — the cross-strand
+    H-bond vector — which is the wrong reference by construction, not an
+    approximation of the right one. The two only agree visually for this
+    milestone's specific antiparallel-duplex topology, coincidentally, not
+    because the code is built to reflect real same-strand connectivity.
+
+    **What's actually open is narrower: whether to spend the effort
+    replacing it now.** The shipped heuristic passes its own verification
+    (screenshots, dot products) for every symptom it was built against,
+    and nothing currently visible depends on the difference. Not fixing
+    it yet is a legitimate call — but only if this exception stays named
+    and visible, the same treatment as the aconitase exception, rather
+    than being quietly assumed correct because it looks right on screen.
+    Krebs will need its own literature-grounded direction derivation
+    regardless (it has no "previous/next residue" to borrow this
+    mechanism from), so revisiting this is not purely a DNA cleanup item
+    whenever it does happen.
 
 ---
 

@@ -127,55 +127,42 @@ static func derive_ring(topology: MoleculeTopology, role_prefix: String, bond_le
 ## Substituent positions (5'-CH2-phosphate chain's first atom, 3'-OH),
 ## merged into the same local frame as derive_ring()'s output — the
 ## backbone (ring) stays anchored; substituents hang off it at derived
-## angles, per the Layout section's stability rule. Placed radially outward
-## from the ring centroid at each anchor vertex, which is the simplest
-## idealized choice consistent with "the backbone must not visibly shift
-## when something attached to it changes."
+## angles, per the Layout section's stability rule.
 ##
-## `pairing_direction` (Bug J fix, docs/MolecularStructure_
-## BasePairExpansion.md): real, world-space, points TOWARD the partner —
-## same convention molecule_structure_renderer.gd already computes for base
-## placement. Without it, "outward" was purely a function of the ring's own
-## antiparallel-pucker rotation sign (apply_strand_direction, owned by the
-## caller) — correct for leading/lagging only by coincidence, backwards for
-## template_top/template_bottom, confirmed via a live screenshot: their
-## chain reached TOWARD the real partner instead of away. Left at the
-## default zero vector (unpaired, or a caller that hasn't been updated),
-## behaves exactly as before — there's no real partner to be wrong
-## relative to, so nothing needs correcting.
-static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float, pairing_direction: Vector2 = Vector2.ZERO) -> Dictionary:
+## Real same-strand-neighbor direction (supersedes Bug J/L,
+## docs/MolecularStructureDesign.md's Layout rule + Open Question 10,
+## docs/MolecularStructure_BasePairExpansion.md): C5' (via O5'/alpha-
+## phosphate) and O3' are governed by two INDEPENDENT real bond angles in
+## actual deoxyribose (Gelbin et al. 1996 — C5'-C4'-C3' averages 114.7°,
+## C4'-C3'-O3' averages 110.3°, two separately measured quantities) and
+## point at DIFFERENT real neighbors: C5' bonds toward the previous
+## residue on the SAME strand (this residue's own alpha-phosphate bonds
+## the more-5' neighbor's O3'); O3' bonds toward the next residue on the
+## SAME strand. Neither has anything to do with which base is paired
+## across the helix. `toward_previous`/`toward_next` are real, world-space
+## vectors the caller computes from actual neighbor positions (same
+## established pattern as the old `pairing_direction` parameter — this
+## file stays strand-agnostic, the renderer owns strand/slot identity).
+## Left at the default zero vector for either (no such neighbor — e.g. a
+## terminal residue, or an unpaired/uninitialized caller), falls back to
+## the ring's own raw vertex direction (c3_pos.normalized() /
+## c4_pos.normalized()) — the same fallback shape this function has always
+## used when it had no real reference to work from.
+static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float, toward_next: Vector2 = Vector2.ZERO, toward_previous: Vector2 = Vector2.ZERO) -> Dictionary:
 	var positions: Dictionary = {}
-
-	# Decided ONCE from C4' and applied to both substituent groups (O3' via
-	# C3', and the C5'/O5'/alpha-phosphate chain via C4') so they flip
-	# together rather than independently — C3' and C4' always agree on
-	# which way is "toward the partner" in this ring's construction (same Y
-	# sign, only X differs), so a single decision keeps the existing
-	# left/right branching shape intact and just mirrors it vertically.
-	# Negating the WHOLE outward vector (both components), not just one
-	# axis, is a proper 180-degree ROTATION of the substituent group around
-	# its own fixed attachment point on the ring — never a mirror, per the
-	# same rule apply_strand_direction() already documents (a mirror would
-	# silently flip the chain's own chirality while looking like a fix).
-	var flip: bool = false
-	if pairing_direction.length() > 0.0:
-		var c4_id_probe: int = topology.find_by_role(role_prefix + "c4_prime")
-		if c4_id_probe != -1 and ring_positions.has(c4_id_probe):
-			var natural_outward: Vector2 = ring_positions[c4_id_probe].normalized()
-			flip = natural_outward.dot(pairing_direction.normalized()) > 0.0
 
 	var c3_id: int = topology.find_by_role(role_prefix + "c3_prime")
 	var o3_id: int = topology.find_by_role(role_prefix + "o3_prime")
 	if c3_id != -1 and o3_id != -1 and ring_positions.has(c3_id):
 		var c3_pos: Vector2 = ring_positions[c3_id]
-		var outward: Vector2 = -c3_pos.normalized() if flip else c3_pos.normalized()
+		var outward: Vector2 = toward_next.normalized() if toward_next.length() > 0.0 else c3_pos.normalized()
 		positions[o3_id] = c3_pos + outward * bond_length
 
 	var c4_id: int = topology.find_by_role(role_prefix + "c4_prime")
 	var c5_id: int = topology.find_by_role(role_prefix + "c5_prime")
 	if c4_id != -1 and c5_id != -1 and ring_positions.has(c4_id):
 		var c4_pos: Vector2 = ring_positions[c4_id]
-		var outward: Vector2 = -c4_pos.normalized() if flip else c4_pos.normalized()
+		var outward: Vector2 = toward_previous.normalized() if toward_previous.length() > 0.0 else c4_pos.normalized()
 		var c5_pos: Vector2 = c4_pos + outward * bond_length
 		positions[c5_id] = c5_pos
 

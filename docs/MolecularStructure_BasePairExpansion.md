@@ -1200,3 +1200,230 @@ ceiling. Recorded as a parameter tweak, not a Q9 re-decision; if still
 insufficient, the next lever is tightening `molecular_cull_bbox_padding`/
 `molecular_pair_span_padding`, and the one after that is finally building
 the deferred per-atom culling tier.
+
+### Bug N: chain reach now collides with slot spacing (same-strand-neighbor direction follow-up)
+
+Confirmed via fresh dump + live screenshot (2026-08-01T18:46:47) that the
+same-strand-neighbor direction fix (Steps 1-4, prior entry) works as
+designed. But it surfaced a pre-existing, already-measured mismatch: Bug
+H recorded the chain's total reach (51.5-58.1 units, a fixed property of
+`bond_length`, unrelated to direction) exceeding `nucleotide_slot_spacing`
+(54.0) "months ago," calling it "an unavoidable overlap... independent of
+how well any single residue's own geometry is derived." It never
+mattered visibly because the chain used to reach mostly perpendicular to
+the strand (toward/away from the paired base) — accidental protection
+the same-strand-neighbor fix removed by making the chain reach mostly
+ALONG the strand instead, landing almost exactly on the next residue's
+own ring/base at the stock slot spacing.
+
+**Explicitly not `apply_partner_flip()`'s job** — that mechanism fixes
+ring/chain rotation disagreement, not distance. Not touched.
+
+**Fix**: `theme_manager.gd`'s new `molecular_extra_slot_spacing` field
+(default 30.0), applied only inside `molecule_structure_renderer.gd`'s
+`_molecular_render_pos()` — same architectural pattern as
+`molecular_extra_ribbons_gap` (Bug I): additive, molecular-render-only,
+never touches real `nucleotide_slot_spacing` (bead-glyph mode, real
+backbone-bond distances, cull math all still depend on the untouched
+value).
+
+**Architectural hazard avoided**: a naive per-slot cumulative offset
+(`extra * slot_index`) would diverge unboundedly across a 57-slot strand
+— invisible in a 3-residue screenshot near slot 0, silently broken past
+slot 30+. Implemented instead as a push relative to the CURRENT
+VIEWPORT's own horizontal center (`cull_rect`'s center in
+`_rebuild_layout()`, passed as `cluster_center_x`), clamped to ±5 slots:
+`extra_x = molecular_extra_slot_spacing * clamp((x - center_x) / slot_spacing, -5, 5)`.
+Bounded by construction — magnitude depends only on distance from the
+current view, never on absolute slot index, so slot 2 and slot 52 behave
+identically. Diagnostic-path call sites (7 of 9 call sites) pass no
+`cluster_center_x` (defaults to the `INF` sentinel, push skipped
+entirely) — there is no live camera in that context, and none of the
+diagnostic's existing clearance checks depend on a NEIGHBOR's pushed
+position, only the residue's own.
+
+**Cross-strand pair alignment**: automatic, not separately handled —
+`extra_x` depends only on `world_pos.x` and the shared `cluster_center_x`
+(computed once per `_rebuild_layout()` call, identical for every strand),
+and every F9 dump this session shows world-X is exactly identical
+between cross-strand pairs at the same slot. Both inputs match, so the
+push matches.
+
+**Camera-pan/zoom invariance, proved algebraically** (verify against real
+dumps before fully trusting — see below):
+`extra_x(x2) - extra_x(x1) = molecular_extra_slot_spacing * (x2 - x1) / slot_spacing`
+— `center_x` cancels out of the DIFFERENCE regardless of its value, so
+relative spacing between any two residues depends only on their own real
+separation, never on where the camera is. Holds identically whether
+`center_x` moves from a pan (translation) or a zoom (`cull_rect`'s size
+changing) — either way it's a single scalar that cancels in the
+subtraction.
+
+**H-bond anchor/span**: also unaffected by the same argument — two
+same-slot cross-strand partners get the identical `extra_x` (proven
+above), and a uniform shift of both anchor points by the same vector
+does not change the distance between them.
+
+Awaiting: two live F9 dumps at different camera pan positions (and
+ideally different zoom) to verify the invariance proof against real
+numbers rather than trusting the algebra alone; a live screenshot
+confirming residue boundaries read as distinct; and leading/lagging data
+once synthesis has progressed, since their figures were extrapolated
+rather than dump-confirmed in the prior pass.
+
+## Bug O — `_fold_cache` never invalidated across a sequence reload, stale topology reused for slots that changed base class
+
+Found while trying to verify Bug N from a fresh F9 dump: the dump's
+sequence differed from every earlier dump this session (a sequence
+reload had happened without a scene reload), and several residues showed
+`base ring diameter = 0.0000` / an empty base position dict, not the
+"unpaired fallback" shape any prior bug in this doc produced.
+
+Root cause, confirmed by code trace, not guessed:
+`molecule_structure_renderer.gd`'s `_fold_cache` (keyed `"strand:slot"`)
+caches a `MoleculeTopology` forever per its own design comment — correct
+WITHIN one simulation run, since a given slot's base letter never
+changes mid-run. But `simulation.gd`'s `initialize_simulation()` — the
+single canonical entry point for every sequence load (initial `_ready()`
+load, popup-triggered reload via `player_ui.gd`'s
+`_on_sequence_loaded()`, both `trailer.gd` call sites) — resets
+simulation state IN PLACE and never recreates the
+`MoleculeStructureRenderer` node, so `_fold_cache` survives untouched
+across a reload. If the new sequence reuses a slot number with a
+DIFFERENT base letter (different purine/pyrimidine class) than the old
+sequence had there, the stale cached topology gets reused — purines have
+`n9`/`c8`/`n7` atoms, pyrimidines don't (or vice versa), so
+`NitrogenBaseDeriver.derive_base_layout()`'s role lookups
+(`attachment_id == -1`, `not local_positions.has(attachment_id)`, etc.)
+silently fail and return an empty positions dict for that residue —
+exactly the `0.0000`-diameter symptom seen in the dump.
+
+Unrelated to Bug N and to the same-strand-neighbor-direction fix — pure
+lifecycle bug, pre-existing before either of those changes, only
+surfaced now because it happened to corrupt the same dump being used to
+verify Bug N.
+
+Fixed by adding `clear_fold_cache()` to `molecule_structure_renderer.gd`
+(`_fold_cache.clear()`) and calling it from `simulation.gd`'s
+`teardown_simulation()` — the same function that already clears every
+other per-sequence dynamic state (bead-glyph nodes/arrays via
+`replication_mgr.teardown()`), and which every reset path already
+funnels through via `initialize_simulation()`. No new reset entry point
+introduced; this slots into the existing lifecycle rather than adding a
+second one.
+
+**Confirmed fixed** via two fresh F9 dumps taken 32 seconds apart
+(2026-08-01T22:23:36 and 2026-08-01T22:24:08), spanning a sequence
+reload mid-session (top-strand sequence changed from
+`GTACTACGTCGAGTGTACTCTTAAACGATCAAACCGCTTGCTAGGTGACGAGATTAA` to
+`CGGACTGGCCTCTGCGTAGGCGCGGCGAGAAGACAAGTTGCTGGAATTGCGGCGTGT` — a real
+reload, not the same dump twice). Every one of the 20 residues across
+both dumps (10 pairs each) shows a nonzero base ring diameter
+(37.4123-46.4262 depending on purine/pyrimidine) and a sane attachment-
+atom-to-C1' distance (10.8000-14.5332) — the exact `0.0000`-diameter /
+empty-position-dict symptom this bug produced is gone. Bug N's
+invariance verification (blocked by this corruption) can now resume.
+
+## Bug P — diagnostic dump's helicase-unzip check wrongly applied to leading/lagging pairing sections, not just template-template
+
+Flagged by the user from a dump of a finished simulation (all 57 slots
+synthesized on every strand, confirmed complementary via the same-letter
+scan): every entry in the `leading (top) / template_top (bottom)` and
+`lagging (top) / template_bottom (bottom)` sections printed through the
+UNPAIRED fallback path (`pairing_direction = (0,0)`), despite being
+real, fully-synthesized, complementary Watson-Crick pairs.
+
+Root cause, confirmed by code trace: `_dump_pairing()`'s helicase-based
+unzip check (added for Bug G, "ghost H-bond past helicase") ran
+unconditionally over `top_by_slot`/`bottom_by_slot` regardless of which
+pairing was being dumped. Written correctly for the template_top-vs-
+template_bottom self-pairing case (are the two original template strands
+still physically duplexed, i.e. not yet past the helicase?), but the
+same block also ran when the call was `_dump_pairing(..., "leading",
+"template_top", ...)`, where `top_by_slot` is LEADING entries — testing
+a synthesized strand's position against the helicase's position is
+meaningless, since synthesis pairing is governed by whether the
+nucleotide exists at all (`_pair_for_slot()`'s real logic, see below),
+never by helicase proximity. In a finished simulation the helicase has
+advanced past the entire sequence, so `world_x < helicase_x` is true for
+every slot on every strand — forcing every leading/lagging slot into
+"unzipped."
+
+**The live renderer was never affected.** `_pair_for_slot()`
+(`molecule_structure_renderer.gd:625`) checks `PARTNER_STRAND.has(strand)`
+FIRST — true for `leading`/`lagging` — and returns unconditionally
+(line 626-628) without ever reaching the helicase check, which is
+reached only for `strand == "template_top" or "template_bottom"` (line
+629). What renders on screen was correct the whole time; only the
+diagnostic's report of it was wrong — the same "diagnostic silently
+drifts from the renderer's real behavior" trap as Bug G itself, this
+time in the fix that was written to prevent exactly that trap.
+
+Fixed by gating the helicase-unzip block to `is_template_self_pairing`
+(`top_strand`/`bottom_strand` being the two template strands, in either
+order) — mirrors `_pair_for_slot()`'s real branch order exactly, so the
+diagnostic can never again apply a check that the live renderer itself
+never runs for that strand pairing.
+
+**Confirmed fixed** via a normal-length-sequence dump pair (2026-08-01,
+before-play and mid-play with the helicase at the sequence midpoint):
+`leading (top) / template_top (bottom)` and `lagging (top) /
+template_bottom (bottom)` both report real paired data across all 10
+sampled pairs (`pairing_direction = (0, ±100)`, `anchor_alignment_dot =
+1.0000`, H-bond span a stable 27.4515-27.4516 throughout), while
+`template_top (top) / template_bottom (bottom)` at those same slots
+(already passed by the helicase) correctly still shows UNPAIRED — the
+gate did not overcorrect. Same-letter scan shows leading at 28
+synthesized slots, lagging at 16 (expected asymmetry from Okazaki-
+fragment lag), zero violations.
+
+## Bug Q — `_pair_for_slot()` (the LIVE render path) never considers leading/lagging as a template strand's partner, unlike the diagnostic's own assumption
+
+User traced this independently of Bug P, from a live screenshot showing
+real, severe overlap on template-strand thymines/adenines past the
+helicase — while every F9 dump this session showed clean,
+clearance-searched geometry for the same residues. Root cause: two
+functions disagree about who a template strand's real partner is once
+that slot has been synthesized on the complementary strand, and only one
+of them was right.
+
+`PARTNER_STRAND` (`molecule_structure_renderer.gd:123-126`) maps only
+`leading -> template_top` and `lagging -> template_bottom` — no reverse
+entries. `_pair_for_slot()` (line 625) checks `PARTNER_STRAND.has(strand)`
+first; for `strand == "template_top"` or `"template_bottom"` this is
+always false, so it falls into the second branch, which considers ONLY
+the other template strand as a possible partner and returns `""` once
+the slot's `world_position.x` has passed `template_sim.helicase_x` — it
+never looks at leading/lagging at all, even after real synthesis. Fed
+directly into `_rebuild_layout()`'s `pairing_direction` (line 407-409),
+this sends every already-synthesized template-strand residue through
+`derive_base_layout()`'s UNPAIRED fallback branch in the LIVE renderer —
+never the real clearance-searched placement aimed at its actual partner.
+
+Meanwhile `_dump_pairing()` (used only by the F9 diagnostic) never calls
+`_pair_for_slot()` for the `leading`/`template_top` or
+`lagging`/`template_bottom` sections at all — it just pairs top-slot-N
+with bottom-slot-N directly whenever both exist (no `unzip_check_entries`
+passed for these two calls, so `unzipped_slots` stays empty and
+`really_paired` is unconditionally true). The diagnostic's assumption —
+a synthesized template residue pairs with its real complementary
+residue — was the biologically correct one the whole time; `_dump_pairing()`
+itself needed no fix. This is why every dump this session showed clean
+numbers for these residues while screenshots showed the real overlap:
+the dump was reporting geometry the live renderer never actually computes.
+
+Fixed by making `_pair_for_slot()`'s template-strand branch check the
+synthesized complementary strand FIRST — `leading` for `template_top`,
+`lagging` for `template_bottom` — mirroring the leading/lagging branch's
+own `PARTNER_STRAND` lookup in the reverse direction, before falling back
+to the existing other-template-strand logic (which now only matters
+pre-fork, when nothing has synthesized yet). `_dump_pairing()` and
+`_derive_full_residue()` intentionally left untouched — they were never
+wrong.
+
+Awaiting: a fresh F9 dump plus a live screenshot of a template-strand
+residue past the helicase, confirming it now renders with real
+clearance-searched placement (finite, non-fallback `pairing_direction`,
+`anchor_alignment_dot` computed against a real partner) instead of the
+unpaired fallback.
+

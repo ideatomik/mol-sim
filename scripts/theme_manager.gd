@@ -617,6 +617,28 @@ extends Node
 ## ribbon gap stays at its own tuned value (60) throughout, unaffected.
 @export var molecular_extra_ribbons_gap: float = 80.0
 
+## Chain-vs-slot-spacing collision fix (docs/MolecularStructure_
+## BasePairExpansion.md, follow-up to the same-strand-neighbor direction
+## fix): the substituent chain's own reach (51.5-58.1 units, a fixed
+## property of bond_length — see Bug H, which already measured this
+## exact reach-vs-spacing mismatch) now points mostly ALONG the strand
+## (toward real same-strand neighbors) instead of mostly perpendicular to
+## it, so it lands almost exactly on the next residue's own ring/base at
+## the stock nucleotide_slot_spacing (54.0). Same architectural pattern
+## as molecular_extra_ribbons_gap directly above: an ADDITIONAL push
+## applied only inside the molecular renderer's own per-residue placement
+## (molecule_structure_renderer.gd's _molecular_render_pos()) — never
+## touches the real nucleotide_slot_spacing, which bead-glyph mode, real
+## backbone-bond distances, and cull math all depend on. Per-residue
+## amount is centered/bounded around the current viewport's own visible
+## cluster (not a cumulative per-slot offset — see that function's own
+## comment for why a cumulative version would silently diverge across a
+## 57-slot strand). Starting value chosen to comfortably clear the
+## largest measured chain reach (58.1936) added to the existing 54.0
+## spacing — live-tune from here against a real F9 dump, same as
+## molecular_extra_ribbons_gap was.
+@export var molecular_extra_slot_spacing: float = 30.0
+
 ## Convenience lookup: pass a base type string to get its fill color.
 func get_base_color(base_type: String) -> Color:
 	match base_type:
