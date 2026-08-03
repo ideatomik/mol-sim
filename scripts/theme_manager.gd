@@ -601,6 +601,39 @@ extends Node
 ## molecular_h_bond_dot_radius's comment.
 @export var molecular_h_bond_dot_gap: float = 3.0
 
+## Spacing between adjacent parallel dashed H-bond lines (a 3-line G:C pair
+## fans out around the anchor-to-anchor axis; a 2-line A:T pair fans out
+## half as far), as a RATIO of bond_length — the same "ratio of an
+## existing molecular-tier dimension" pattern molecular_ring_bond_length_
+## ratio already uses against _slot_spacing(). Previously this reused
+## sim.hydrogen_bond_spacing (4.0) directly — a bead-glyph-mode constant,
+## tuned for that mode's small circles, never decoupled for the atom-level
+## view. Confirmed via a live F9 dump (docs/MolecularStructure_
+## BasePairExpansion.md) that real exocyclic substituent atoms (O6/N2 for
+## G, O2/N4 for C, etc. — the atoms Tier-2 rendering deliberately does NOT
+## draw individual bonds to, see the addendum doc's Tier 2/3 decision) sit
+## 13-17 units off the anchor axis, while the OLD fixed 4.0 spacing
+## produced a 3-line G:C fan only 8 units wide total (outermost line at
+## 4.0) — clustered inside the base ring's own ~37-46 unit diameter, near/
+## through the ring's own atoms rather than reading as reaching between
+## the two bases. 1.0 (spacing = bond_length exactly) puts a 3-line G:C
+## pair's outermost dash at bond_length (10.8 at the live tuned ratio) and
+## a 2-line A:T pair's outermost at bond_length/2 (5.4) — comfortably
+## inside the ring diameter, proportionally scaled to whatever bond_length
+## is live-tuned to, so this can never again silently drift out of sync
+## with ring/base scale the way the flat constant did. sim.
+## hydrogen_bond_spacing (bead-glyph mode) is untouched — same decoupling
+## precedent as molecular_h_bond_dot_radius/_dot_gap above.
+##
+## DEAD CODE as of the real-atom-pair H-bond rewrite (docs/
+## MolecularStructure_BasePairExpansion.md): the Tier-2 "N parallel offset
+## lines from one shared anchor axis" approximation this field tuned was
+## itself replaced with real per-atom-pair segments (HBOND_OWN_TO_PARTNER_
+## ROLES, molecule_structure_renderer.gd) — there is no longer a fan/
+## offset to space. Left in place, unused, rather than silently deleted,
+## in case a future pass wants it back for some other purpose.
+@export var molecular_hydrogen_bond_spacing_ratio: float = 1.0
+
 ## Extra vertical separation (Bug I decoupling, docs/MolecularStructure_
 ## BasePairExpansion.md), added ONLY inside the molecular renderer's own
 ## row placement — never touches sim.dna_ribbons_gap, the value shared

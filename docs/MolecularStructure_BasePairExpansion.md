@@ -1421,9 +1421,860 @@ pre-fork, when nothing has synthesized yet). `_dump_pairing()` and
 `_derive_full_residue()` intentionally left untouched — they were never
 wrong.
 
-Awaiting: a fresh F9 dump plus a live screenshot of a template-strand
-residue past the helicase, confirming it now renders with real
-clearance-searched placement (finite, non-fallback `pairing_direction`,
-`anchor_alignment_dot` computed against a real partner) instead of the
-unpaired fallback.
+**Confirmed fixed** via a fresh dump pair (2026-08-02, pre-play and
+mid-play with the helicase past slot 9): `leading (top) / template_top
+(bottom)` now reports 38 real synthesized entries, `lagging (top) /
+template_bottom (bottom)` 26, both fully paired — every sampled pair
+shows a real, non-zero `pairing_direction` (`(0, ±110)`),
+`anchor_alignment_dot = 1.0000`, and a stable anchor-to-anchor span
+(37.4515-37.4516) — the exact clearance-searched, non-fallback placement
+Bug Q's fix was meant to produce. `template_top (top) / template_bottom
+(bottom)` at those same slots correctly still shows UNPAIRED (helicase
+has passed them, no template-template pairing left) — consistent with
+Bug Q only adding the missing synthesized-partner check, not disturbing
+the existing pre-fork/post-fork template-template logic.
 
+## Bug R — H-bond dash-line spacing reused a bead-glyph-mode constant, clustering the dashes inside the ring instead of fanning toward the real substituent atoms
+
+User's own screenshot cross-check (2026-08-02, lagging-strand DNA copy):
+"only the h-bonds are still wonky, everything else checks out." Traced
+to `_draw()`'s H-bond dash loop (`molecule_structure_renderer.gd`, near
+line 1235): the offset between a pair's parallel dashed lines
+(`hydrogen_bond_count()` = 2 for A:T, 3 for G:C) used `sim.
+hydrogen_bond_spacing` directly — a value tuned for the bead-glyph mode's
+small circles, never decoupled for the atom-level view, same
+"two-independently-tuned-numbers" trap as Bug I/Bug H.
+
+Confirmed by the numbers, not just visual impression: with `spacing =
+4.0` and G:C's 3-line fan, the outermost dash sits only 4.0 units from
+the anchor axis (total spread 8.0) — but the real exocyclic substituent
+atoms newly visible in the dump (added earlier this session:
+`_DIAG_BASE_ROLE_SUFFIXES`) sit 13.0-17.4 units off that same axis (G's
+N2/O6, C's O2/N4, measured directly from a real leading/template_top
+G:C pair, slot 0). The base ring itself is 37-46 units in diameter. So
+the three dashes were clustered well inside the ring, near/through its
+own C2/C6 atoms, never spreading out toward where a real 3-way G:C
+interaction visually reads as spanning — invisible as a numeric mismatch
+until the substituent atoms became visible in the dump for direct
+comparison (Bug R's diagnosis literally depended on that earlier,
+unrelated addition).
+
+Fixed by adding `molecular_hydrogen_bond_spacing_ratio` (`theme_manager.gd`,
+default 1.0) next to `molecular_h_bond_dot_radius`/`_dot_gap` — same
+decoupling precedent, `sim.hydrogen_bond_spacing` (bead-glyph mode)
+untouched. Deliberately NOT a flat new constant (a repeat of the exact
+mistake being fixed): applied as a RATIO of `bond_length`
+(`tm.molecular_ring_bond_length_ratio * _slot_spacing()`) — the same
+"ratio of an existing molecular-tier dimension" shape
+`molecular_ring_bond_length_ratio` itself already uses against
+`_slot_spacing()`, so this can never again silently drift out of sync
+with ring/base scale the way the flat constant did; it scales
+automatically with any future `bond_length` retune. At ratio 1.0 and the
+live `bond_length` (10.8): G:C's 3-line fan reaches an outermost dash at
+10.8 (within the requested 8-12 range, comfortably under the 37-46 ring
+diameter); A:T's 2-line fan reaches 5.4.
+
+**Confirmed fixed.** Added two diagnostic-only lines to `_dump_pairing()`'s
+H-BOND section (dash spacing and outermost offset, computed with the
+exact same formula as `_draw()`'s live loop) and re-ran F9: every A:T
+pair reports `dash spacing = 10.8000 (ratio=1.0, bond_length=10.8000)`,
+`outermost dash offset (2-line pair) = 5.4000`; every G:C pair reports
+the same spacing, `outermost dash offset (3-line pair) = 10.8000` —
+exactly the predicted values, confirming the runtime is actually reading
+the new ratio-based computation, not a stale/cached one. A follow-up
+screenshot shows the G:C pairs' three dot columns now visibly fanned out
+(~21.6 units total span) instead of clustered inside the ring.
+
+**SUPERSEDED by Bug S below, same session.** The fan-of-parallel-lines
+approximation Bug R retuned was itself still chemically wrong at
+atom-level zoom (real H-bonds don't run parallel from one shared axis) —
+Bug S replaces the whole mechanism with real per-atom-pair segments,
+making `molecular_hydrogen_bond_spacing_ratio` dead code (left in place,
+flagged, not deleted).
+
+## Bug S — H-bond rendering replaced entirely: real per-atom-pair segments, not parallel offset lines from one shared anchor axis
+
+Bug R fixed the SPACING of the parallel-offset-line approximation but
+never questioned the approximation itself. User's own visual check (same
+screenshot review that caught Bug R) found the deeper issue: for a real
+G:C pair, only the N1-N3 line (the ring's own named pairing anchor,
+already computed) ever landed on real atoms — the other two dashes were
+just parallel offsets of that one line, with no relationship to where
+the real N2-O2 and O6-N4 bonds (or A:T's N6-O4) actually sit. Spacing
+tuning (Bug R) could never fix this — it was always going to be
+approximately right by luck at best, for whichever base letter happened
+to place its exocyclic atoms symmetrically around the anchor axis.
+
+Root cause: `_rebuild_layout()` only ever captured ONE named atom per
+residue into `anchor_by_key` (`NitrogenBaseDeriver.pairing_anchor_suffix()`
+— N1 for A/G, N3 for T/C) — every other base atom's world position was
+computed into `local_positions` that same frame but discarded once the
+loop moved to the next residue. `_build_hydrogen_bonds()`/`_draw()` had
+no way to draw real bonds because the data literally wasn't kept.
+
+Fixed by capturing every H-bond-relevant atom's world position per
+residue (`base_bond_atoms_by_key`, replacing `anchor_by_key`, built via
+`HBOND_ROLE_SUFFIXES` — a flat try-lookup list, same "try find_by_role,
+skip if absent" pattern already used for O3'/alpha-phosphate), then a
+new table (`HBOND_OWN_TO_PARTNER_ROLES`) giving each base letter's real
+own-role -> partner-role pairs:
+
+```
+A: [[n1,n3], [n6,o4]]
+T: [[n3,n1], [o4,n6]]
+G: [[n1,n3], [n2,o2], [o6,n4]]
+C: [[n3,n1], [o2,n2], [n4,o6]]
+```
+
+`_build_hydrogen_bonds()` now builds `_h_bond_layout` entries as
+`{segments: [{a, b}, ...], color}` — one segment per real atom pair
+(2 for A:T, 3 for G:C, matching `NitrogenBaseDeriver.hydrogen_bond_count()`'s
+count without reading it directly, since the segment list's own size now
+carries that information). `_draw()`'s loop draws each segment directly
+via `_draw_dotted_line()` — no `perp`, no offset, no dash-spacing
+constant of any kind.
+
+`molecular_hydrogen_bond_spacing_ratio` (Bug R) is now dead code —
+flagged in its own doc comment (`theme_manager.gd`) rather than deleted,
+in case a future pass wants the field back for something else. The two
+`_dump_pairing()` diagnostic lines Bug R added (dash spacing / outermost
+offset) are similarly flagged stale rather than removed — still
+mathematically real numbers, just no longer describing anything the
+renderer reads.
+
+Bead-glyph tier (`replication_manager.gd`'s
+`_spawn_leading_hydrogen_bonds()`/`_spawn_lagging_hydrogen_bonds()`,
+`NitrogenBaseDeriver.hydrogen_bond_count()` itself) intentionally
+untouched — this is a molecular-tier-only rewrite, per the file's own
+established Tier 1/Tier 2 separation.
+
+Awaiting: a live screenshot confirming G:C pairs now show three visibly
+distinct dashed lines landing on real N1/N3, N2/O2, and O6/N4 atom
+positions (not just fanned out, but actually terminating AT those
+atoms), and A:T pairs show two lines landing on N1/N3 and N6/O4.
+
+## Bug T — strand-boundary residues' substituent chain falls back to the ring's own (mostly-vertical) local direction instead of the strand's real direction
+
+Found from two live atom-zoom screenshots of the same leading-strand DNA
+copy, panned to different positions: a G:C pair at the newest end
+(closest to the polymerase) and, separately, an A:T pair at the oldest
+end (closest to the primer) both showed their O3'/C5'/O5'/alpha-P
+substituent chain reaching almost straight vertically — visibly
+different from every interior residue's chain, which reaches roughly
+horizontally, matching the real slot-to-slot spacing direction.
+
+Root cause: `RiboseDeriver.derive_substituents()` (`ribose_deriver.gd`)
+falls back to `c3_pos.normalized()`/`c4_pos.normalized()` — the ring
+atom's own LOCAL-frame vertex direction — whenever `toward_next`/
+`toward_previous` (the real same-strand-neighbor direction,
+`molecule_structure_renderer.gd`'s `_rebuild_layout()`/
+`_derive_full_residue()`) is zero, i.e. no such neighbor exists in
+`position_by_key` yet. This is the exact same ring-vertex direction the
+original same-strand-neighbor-direction fix (earlier this session,
+superseding Bug J/L) measured and documented as "dominated by its
+Y-component (~0.8-0.98), while the real same-strand-neighbor direction
+is almost purely horizontal" — i.e. already known to point mostly
+vertically, back when it was the PRIMARY mechanism. It was never
+revisited as a fallback once the real-neighbor-direction fix landed.
+
+Every strand has exactly two residues missing one same-strand neighbor
+at any given moment: the newest-synthesized (no neighbor yet on the
+growing/3' side) and the oldest-synthesized (no neighbor beyond the
+primer boundary on the other side) — which side is missing depends on
+`STRAND_DIRECTION_SIGN` (for `leading`, sign `-1`: `more_3prime_key`
+resolves to the lower-slot neighbor, `more_5prime_key` to the
+higher-slot neighbor). Both boundary residues were confirmed showing the
+bug in the two screenshots, at opposite ends of the same strand — not a
+one-off, a systematic consequence of the fallback never being updated.
+
+Fixed by making the fallback direction-aware rather than ring-relative:
+if one side (`toward_next` or `toward_previous`) is missing but the
+OTHER side has a real same-strand neighbor, the missing side now falls
+back to the negation of the real one — continuing in a straight line
+along the strand's own actual local direction, since consecutive
+nucleotides run essentially straight. Same "derive from whatever real
+data IS available, don't invent an arbitrary direction" principle as the
+Bug F unpaired-residue fallback (chain-away-from-centroid instead of a
+fixed `Vector2.DOWN`). Only the genuine both-sides-missing case (a fully
+isolated residue — should not occur in practice) still falls back to the
+original ring-vertex direction.
+
+Awaiting: a live screenshot re-confirming both strand-boundary residues
+(newest and oldest ends) now show their substituent chain reaching
+roughly along the strand direction like every interior residue, not
+vertically.
+
+## Bug U — `_rebuild_layout()` ran its full per-residue cost every frame regardless of whether the molecular renderer was active
+
+User reported a major, session-long performance drop since atom-zoom
+work began (tracked earlier in a memory note, "not yet profiled or
+root-caused" — see `perf_molecular_renderer.md`), severe enough that
+short (~34-slot) test sequences were being used instead of normal-length
+ones just to keep iteration fast.
+
+Root cause, found by direct code reading (no profiler needed — the
+control flow itself was wrong): `_process()` (line ~309) calls
+`_rebuild_layout()` unconditionally, every frame, with no `if not
+_active: return` anywhere in either function — the only other `_active`
+guard in the whole file is inside `_draw()`. So every frame,
+`_rebuild_layout()` did its full per-residue work (fold-cache lookup,
+ring/base derivation, same-strand-neighbor direction, substituent
+placement, and — the expensive part —
+`NitrogenBaseDeriver.derive_base_layout()`'s clearance-maximizing
+rotation search, `BASE_ROTATION_SEARCH_STEPS = 72` samples, each
+measuring distance from every ring/base atom to every `avoid_points`
+entry) for every residue inside `cull_rect`, regardless of whether
+`_active` was true — i.e. regardless of whether the molecular renderer
+was even switched on, or anything from the pass would ever be drawn.
+None of this is cached; the file's own dump header already documents
+ring/base local geometry as "recomputed FRESH every
+`_process()`/`_rebuild_layout()` call, every frame" — by design, for the
+active case, but paid unconditionally either way.
+
+Made worse by `_current_viewport_world_rect()` (`cull_rect`'s source):
+`world_size = viewport_pixels / zoom.x` — SMALLER `zoom.x` (zoomed OUT,
+ordinary bead-glyph play, nowhere near molecular mode) produces a
+LARGER `world_size`, so ordinary play at normal zoom put MORE residues
+inside `cull_rect`, not fewer, scaling the wasted cost directly with how
+much of the strand was visible on screen. This matches the reported
+symptom exactly: normal-length sequences (more on-screen strand) got
+slow; short test sequences didn't.
+
+Fixed by clearing the per-frame layout arrays (unchanged) then returning
+immediately when `not _active`, before any of the per-residue work.
+Confirmed safe: `_draw()` already independently guards on `_active`
+before ever reading `_atom_layout`/`_bond_layout`/`_h_bond_layout`, and
+`is_slot_active()`/`is_strand_active()` already short-circuit on `not
+_active` before consulting `_active_slots` at all — nothing downstream
+depends on these being freshly rebuilt while inactive.
+
+Awaiting: confirmation from the user that normal-length-sequence
+playback speed is restored outside molecular/free-camera mode, and that
+molecular-mode rendering itself (when actually active) is visually
+unchanged.
+
+## Bug V — self-paired template_top/template_bottom ribose ring bulges TOWARD the partner instead of away, C1' facing backwards
+
+User traced this via a fresh F9 dump: for every self-paired template
+residue (pre-fork, partner still the other template strand — not yet
+touched by either polymerase), the ribose ring's own bulge direction
+(average of C2'/C3'/C4'/O4' relative to C1') measured a dot product of
+exactly +1.000 against `pairing_direction` on BOTH `template_top` and
+`template_bottom` — meaning the ring bulges TOWARD the real partner and
+C1' sits on the far side, facing away. Confirmed visually too (C1'
+facing away from the paired strand, base looking pulled outward). A
+related asymmetry was also measured: base-ring-to-own-next-residue-
+alphaP distance ~31 units on `template_top` vs. ~11 units on
+`template_bottom` at the same slots — real, unequal crowding between two
+structurally symmetric strands.
+
+Root cause: `RiboseDeriver.apply_strand_direction()` rotates the ring
+180 degrees around C1' based purely on a caller-supplied fixed sign —
+`STRAND_DIRECTION_SIGN` (`leading: -1, lagging: 1, template_bottom: -1,
+template_top: 1`) — with zero input from `pairing_direction`; it's
+called in `_rebuild_layout()` BEFORE `pairing_direction` is even
+computed, and the function is explicitly "strand-agnostic by design" per
+its own doc comment. Traced the fixed sign's origin to
+`docs/Handout_AntiparallelStrandOrientation.md` — written specifically
+about this exact self-paired template case (its stated symptom:
+"template_bottom and template_top ribose rings are both facing/puckering
+the same visual direction, so adjacent strands' sugar rings bulge into
+each other instead of nesting into the gaps"). But that handout's only
+verification criterion was "do the rings stop overlapping" — never which
+of the two equally-valid 180-degree-apart rotations was chosen, and
+never checked against a signed `pairing_direction` dot product (a
+concept that didn't exist yet when the handout was written). Both
+rotation choices equally solve "stop pointing the same direction," so
+the fixed sign convention happened to land on the wrong one without
+anyone knowing to check.
+
+Fixed narrowly, scoped to exactly the self-paired case
+(`(strand == "template_top" or "template_bottom") and partner_key.begins_with("template_")`):
+`pairing_direction` is now computed BEFORE the ring-rotation decision
+(reordered from its old post-rotation position; feeds the same
+downstream uses — `derive_substituents()`, `derive_base_layout()` —
+unchanged). For that case only, the ring's natural (unrotated) bulge
+direction is measured, its dot product against `pairing_direction` is
+checked, and whichever rotation state (identity vs. 180 degrees) makes
+the FINAL dot product negative is chosen — grounded in the mathematical
+fact that a 180-degree rotation around the fixed pivot C1' negates every
+other point's offset from it exactly, so only `+natural_dot` or
+`-natural_dot` are achievable; this picks the one that's negative rather
+than trusting the fixed table. Leading, lagging, and any template
+residue with a real synthesized partner (post-`_pair_for_slot()`-fix,
+already confirmed clean this session) keep the exact original
+`STRAND_DIRECTION_SIGN` value — `direction_sign` defaults to it and is
+only overridden inside the `is_self_paired_template` branch. Mirrored
+identically in `_derive_full_residue()` (the diagnostic path), which
+receives the equivalent `is_self_paired_template` flag from
+`_dump_pairing()`'s own existing `is_template_self_pairing` (already
+computed there for Bug P) rather than re-deriving it — this function
+only ever receives a partner world position, not a partner key it could
+classify itself.
+
+The base_to_own_alphaP crowding asymmetry (31 vs. 11 units) was NOT
+assumed to share this root cause — flagged explicitly as a possibly
+separate `MOLECULAR_ROW_PUSH` question, to be re-measured after this fix
+rather than folded in speculatively.
+
+Awaiting: fresh F9 dump confirming (1) self-paired template residues now
+show `bulge_vs_pairing_direction` near -1.0, (2) whether the
+base-to-own-alphaP asymmetry flattened or remains (separate question if
+so), (3) leading/lagging and post-fork template residues completely
+unaffected — same `anchor_alignment_dot = 1.0`, same clean numbers as
+before this fix — and a live screenshot of self-paired template DNA.
+
+## Bug W — Bug V's ring rotation left the substituent chain reaching through the ring for the self-paired case
+
+Discovered via two new diagnostic lines added specifically to check this
+(`bulge_vs_pairing_dot`, unconditional/post-rotation; and
+`chain_closest_to_own_ribose`, mirroring the existing
+`chain_closest_to_own_base` pattern), because the dump's pre-existing
+`anchor_alignment_dot` measures a different, unrelated thing (the BASE
+ring's own anchor-vs-partner check) and could not have caught this. A
+fresh F9 dump confirmed Bug V's rotation itself was working exactly as
+intended (`bulge_vs_pairing_dot = -1.0000` at every self-paired slot
+sampled) — but `chain_closest_to_own_ribose` read 0.04-0.21 units
+(essentially a chain atom sitting on top of a ring atom) at every single
+self-paired template residue sampled, universal within that section, not
+slot-0-specific. The same field on `leading`/`template_top` and
+`lagging`/`template_bottom` — real-partner-paired residues Bug V's branch
+structurally cannot touch — read a clean, uniform 10.8000 (one full
+`bond_length`) at every sampled slot in the SAME dump, proving via a
+direct before/after comparison that this is a Bug V side effect, not a
+pre-existing universal bug.
+
+Root cause: `RiboseDeriver.derive_substituents()`'s `outward` direction
+for C3'/C4' comes from `toward_next`/`toward_previous` — real, WORLD-
+SPACE, same-strand-neighbor vectors computed by the caller entirely
+independently of ring rotation state (`molecule_structure_renderer.gd`'s
+`neighbor_sign` uses `_strand_direction_sign(entry.strand)`, the
+ORIGINAL fixed convention, never the Bug-V-adjusted `direction_sign`).
+For leading/lagging/template-with-real-partner, `direction_sign` always
+equals that fixed convention, so ring position and chain direction stay
+exactly as originally tuned (10.8-unit clearance). For self-paired
+template residues where Bug V's dot-product check picked the OPPOSITE
+rotation from the fixed convention, the ring took an extra 180-degree
+turn around C1' that the chain's target directions never received — so
+C3'/C4' ended up on the far side of C1' from where the untouched
+`toward_next`/`toward_previous` vectors were still aiming the chain,
+putting the chain on a collision course with the ring's own atoms.
+
+Three approaches were tried, in order, before landing on the fix that
+shipped:
+
+**Attempt 1 (negate toward_next/toward_previous) — implemented, then
+REVERTED.** A `chain_rotation_flip` flag recorded whether Bug V's branch
+chose a `direction_sign` different from `_strand_direction_sign(entry.strand)`;
+when true, `toward_next`/`toward_previous` were negated before
+`derive_substituents()`, with the mutual-fallback resolved first (a
+subtlety the user caught in review: negating a still-zero vector stays
+zero, so `derive_substituents()`'s own fallback would rebuild it from the
+already-negated other vector, silently undoing half the flip). This
+provably preserved every internal ring-vs-chain distance (a 180-degree
+rotation about a fixed pivot applied to both the ring and the chain's
+target directions is a rigid-body rotation, an isometry) — but a live
+dump caught a more fundamental problem: `toward_next`/`toward_previous`
+are supposed to point at the REAL neighboring residue's actual world
+position, and negating them breaks that unconditionally. Confirmed:
+slot 0's O3' landed at world `(199.8, 263.56)` while slot 1's alpha-P —
+the atom it needs to connect to — sat at `(307.8, 263.33)`, 108 units
+away (2x slot spacing) in the wrong direction, producing a long diagonal
+line across the frame instead of a backbone connection. Reverted in
+full; `toward_next`/`toward_previous` must never be modified from the
+real neighbor-pointing vectors, non-negotiable.
+
+**Attempt 2 (reflect the ring across the pairing_direction axis) —
+investigated, rejected before implementation.** The idea: replace
+Bug V's 180-degree rotation with a reflection that flips only the
+component along `pairing_direction`, leaving the along-strand component
+(and therefore `toward_next`/`toward_previous`'s relationship to
+C3'/C4') untouched — worked out algebraically against real pentagon
+vertex coordinates (`derive_regular_ring()`'s `start_angle=-90`, `bond_length=10.8`)
+and confirmed it resolves the collision (reflected C3' stays on the same
+side of C1' the chain already reaches toward, instead of Bug V's full
+180-degree rotation swapping it to the wrong side). Checked
+`NitrogenBaseDeriver.derive_fused_ring()` (the purine imidazole-ring
+attachment) specifically for a "mirrored parent ring" risk — cleared:
+`derive_base_layout()` never consumes the ribose ring's positions or
+frame, only a translation anchor (`c1_position`) and scalar distances
+(`avoid_points`), so the base ring's own winding is structurally
+independent of anything done to the ribose ring. But a more fundamental
+problem killed this approach anyway: ANY single-axis 2D reflection has
+determinant -1 (orientation-reversing), unlike a rotation (determinant
++1) — confirmed with a concrete reflection matrix. That means the
+reflection would silently mirror the ribose ring's own local chirality
+(D-ribose into L-ribose winding) for every residue it fired on — exactly
+the defect `apply_strand_direction()`'s own doc comment and
+`ribose_deriver.gd`'s "HARDCODED HANDEDNESS" note (on `derive_ring()`)
+both explicitly rule out ("a correctness bug masquerading as a layout
+fix"). Not implemented.
+
+**Attempt 3 (bounded rotation search) — implemented, shipped.** Key
+realization: Bug V's actual requirement was always DIRECTIONAL
+(`bulge_vs_pairing_dot < 0`, "bulge faces away from partner") — the
+diagnostic's own descriptive text already phrased it that way, and a
+grep across the codebase confirmed `-1.0` was never load-bearing
+anywhere downstream; it was purely what the old identity/180-degree
+binary happened to produce, never read back as an exact value by
+anything else. That means the binary choice's real cost was giving up
+ALL rotational freedom the moment the bulge constraint was satisfied —
+freedom that could otherwise have been spent avoiding the chain
+collision. Replaced with `RiboseDeriver.resolve_self_paired_ring_rotation()`:
+a bounded search over the ring's rotation angle around the fixed C1'
+pivot (same "maximize real clearance via search" idiom
+`NitrogenBaseDeriver.derive_base_layout()` already uses for its own
+rotation search), constrained to `bulge_vs_pairing_dot <= -SELF_PAIRED_BULGE_DOT_MARGIN`
+(a small margin, 0.05, below exactly zero — not `< 0.0` — so the winning
+angle can't land on the constraint's exact boundary where floating-point
+noise across residues/frames could flip the sign) and maximizing the
+minimum distance between the candidate ring and the chain built fresh
+per candidate from the real, untouched `toward_next`/`toward_previous`.
+Sweeps the FULL 360 degrees (`SELF_PAIRED_ROTATION_SEARCH_STEPS = 72`,
+same resolution/cost as `BASE_ROTATION_SEARCH_STEPS`) rather than reusing
+`derive_base_layout()`'s narrow `BASE_ROTATION_SEARCH_WINDOW_DEG` —
+that window is deliberately narrow because it hunts for local
+improvements near an already-good starting angle; this search has no
+such starting point, since the valid (constraint-satisfying) region is
+an arc roughly 180 degrees wide, roughly centered on the angle directly
+opposite wherever the ring naturally starts. Chirality-safe BY
+CONSTRUCTION, unlike Attempt 2: every candidate is a proper rotation
+(`Vector2.rotated()`, determinant +1) around the fixed pivot, never a
+reflection, so the enantiomer concern doesn't apply to any candidate,
+not just the winner. Falls back to the old binary choice only if no
+candidate in the sweep satisfies the margin (not expected in practice,
+since the constraint region is roughly half the circle). Applied
+identically in both `_rebuild_layout()` and `_derive_full_residue()` —
+both required reordering `toward_next`/`toward_previous`'s computation
+to run BEFORE the ring-rotation decision (they don't depend on rotation
+state, so the reorder changes nothing about what they mean), since the
+search needs them to evaluate candidates.
+
+`NitrogenBaseDeriver.derive_base_layout()`'s `avoid_points` parameter
+(`ring_positions.values() + substituent_positions.values()`) needed no
+separate handling in any of the three attempts — it already consumes
+whatever `substituent_positions` the shipped fix produces, and its own
+72-step clearance-search rotation adapts automatically.
+
+Awaiting: fresh F9 dump confirming (1) self-paired template section's
+`chain_closest_to_own_ribose` now reads a healthy value (not necessarily
+exactly 10.8000 — the search may land on a different valid angle for
+different residues), (2) `leading`/`template_top` and
+`lagging`/`template_bottom` still read 10.8000 unchanged, (3)
+`bulge_vs_pairing_dot` reads some negative value (not necessarily
+-1.0000, per this fix's whole premise) for self-paired residues, (4)
+O3'-to-next-residue-alpha-P distance reads a normal, connected value
+(the real regression test from Attempt 1's failure), and (5) a live
+screenshot of the same tip/boundary region from before, showing the
+chain no longer overlapping the ring.
+
+## Bug W addendum — cross-agent check: does the bead-glyph "copy" spawn path offer a reusable partner-relative orientation mechanism? (No.)
+
+Prompted by user frustration that the leading/lagging bead-glyph spawn code
+("the code that builds the DNA copies with the polymerases... works
+flawlessly") looked like it should already solve the self-paired ribose
+orientation problem and was being ignored in favor of "bending a line"
+(Attempt 3's bounded rotation search). Asked as a direct question to a
+second agent (Claude Code, working the same repo) rather than assumed away
+in this session: does `replication_manager.gd`'s `_spawn_leading_base()` /
+`_spawn_lagging_base()` (the functions that place a newly-synthesized
+nucleotide next to its template partner) contain a partner-relative
+rotation/reflection transform that Bug V/W's ribose-ring problem could
+reuse instead of a search?
+
+**Finding: no such mechanism exists to reuse.** Bead-glyph nucleotides are
+flat, non-rotating circles — `nucleotide_slot.rotates = false` is set
+explicitly (`simulation.gd`) — placed via a fixed additive offset from a
+fixed template baseline (`template_y ± dna_ribbons_gap`), never a computed
+transform. `set_label_rotation()` exists on the same objects but only
+counter-rotates on-screen text to stay upright; it has no relationship to
+molecular orientation. A `rotation|rotate|orient` grep across
+`replication_manager.gd` and `simulation.gd` (60 hits) turned up nothing
+else — every hit is either that label counter-rotation, the helicase ring,
+or a marker's `segment.angle()` for a tick mark. The bead-glyph tier has
+no ring geometry, so it never needed an orientation concept in the first
+place; "reuse it" had no real referent.
+
+**The mechanism actually being asked for already exists, and is not
+sitting unused elsewhere.** `pairing_direction` (computed from real live
+positions via `_pair_for_slot()`, not a fixed table) and
+`RiboseDeriver.resolve_self_paired_ring_rotation()` — i.e. exactly Bug
+V/W's own shipped fix — are already the partner-relative, non-fixed-table
+computation. This was independently re-derived by the second agent reading
+`molecule_structure_renderer.gd`/`ribose_deriver.gd` cold, which is worth
+recording as a real (if informal) second read of the same code reaching
+the same structural conclusion — not a formal proof, but a second
+independent trace agreeing that the self-paired branch is not a
+duplicate of a working general-case mechanism sitting elsewhere; it IS
+the general-case mechanism, applied to the one case that needs it.
+
+**Independent corroboration, not new proof, of the two already-rejected
+approaches.** The second agent's own read of `ribose_deriver.gd`'s doc
+comments reached the same two conclusions this doc already recorded under
+Bug W's Attempts 1 and 2: negating `toward_next`/`toward_previous` breaks
+real backbone connectivity, and reflecting across `pairing_direction` is
+chirality-unsafe (determinant -1). Cited its own supporting numbers for
+the earlier `apply_partner_flip()` history (Bug J/L: leading +555, lagging
++492 vs. template_top -110, template_bottom -173) as evidence this
+ring-vs-chain mismatch shape was seen before Bug V/W under a different
+name. This is corroboration from a second reading of the same source
+comments, not a fresh independent derivation — recorded as such, not
+inflated.
+
+**Still not resolved by this exchange: the ~7.7-8 clearance figure
+referenced in conversation is NOT yet analytically confirmed anywhere in
+this document.** The second agent's own language was conditional — "if
+you've verified this is a hard geometric ceiling" — which is accurate:
+neither this doc's Bug W entry nor this addendum contains that
+verification. Bug W's own last entry still ends "Awaiting: fresh F9 dump
+confirming..." and that dump has not been logged. Before treating the
+ceiling as settled and choosing between "accept it" or "move O3'/C5' atom
+positions," the actual next step is the fresh F9 dump and screenshot Bug W
+already asked for — not a second opinion on code that was never going to
+contain the answer.
+
+**Bottom line for the open decision:** the two live options remain (1)
+accept whatever the bounded search's real, verified ceiling turns out to
+be, or (2) move O3'/C5' atom positions themselves (with the same
+O3'-to-next-alpha-P regression check Attempt 1's failure established as
+mandatory for touching this mechanism again). Reflection and vector
+negation are now corroborated twice as non-options, not open alternatives.
+Reusing the bead-glyph copy-spawn path is now a closed question, not an
+open one — recorded here so it isn't re-asked cold in a future session.
+## Bug W, Attempt 4 (role-swap in derive_substituents) — investigated analytically, REJECTED before implementation
+
+Hypothesis, prompted by a user observation about the STRAND_DIRECTION_SIGN
+table's own symmetry (leading/template_bottom share sign -1.0; lagging/
+template_top share sign +1.0 — confirmed real, `molecule_structure_renderer.gd:160-165`,
+and consistent with Bug V's own dot-product fix always landing on the
+OTHER template's sign for the self-paired case, not the residue's own
+default): since the self-paired branch's extra 180-degree flip swaps C3'
+and C4' to the opposite side of the ring relative to C1', would swapping
+which argument `derive_substituents()` receives (`toward_previous`,
+`toward_next` instead of `toward_next`, `toward_previous`) restore
+consistency, without touching the real vectors (Attempt 1's fatal flaw)
+or reflecting the ring (Attempt 2's fatal flaw)?
+
+**Tested analytically before any code was touched**, using the real
+pentagon geometry `derive_substituents()`/`resolve_self_paired_ring_rotation()`
+already establish (`bond_length = 10.8`, pivot-relative to C1').
+
+**The ring-collision half of the hypothesis is genuinely correct.** At
+the full 180-degree flip Bug V's case requires, swapping the arguments
+does move the chain to the correct side of the now-flipped ring — every
+non-bonded pair clears to >=12.7 units, so `chain_closest_to_own_ribose`
+comes out to a clean 10.8, matching leading/lagging exactly, with the
+binding constraint reducing to the trivial bonded O3'-to-C3' distance.
+Confirmed chirality-safe, same as reasoned (still a pure rotation, no
+reflection introduced).
+
+**It fails the real regression test anyway, for a chemistry reason, not a
+code reason.** `toward_next`/`toward_previous`'s role assignment is not a
+rendering convention tied to ring orientation — O3' bonds to C3' by a
+real covalent bond and, per the doc's own Gelbin-et-al-grounded rule,
+must extend toward the real more-3' neighbor, independent of which way
+the ring happens to be facing. That correspondence is exactly what
+`_build_backbone_bonds()` draws the inter-residue bond against
+(`o3_by_key[key] -> alpha_by_key[next_key]`). Swapping the arguments
+makes O3' extend toward the PREVIOUS neighbor's real-world direction
+instead — the same class of error as Attempt 1, just reached by
+permuting which real vector goes where instead of negating the vectors
+themselves.
+
+Computed the same way Attempt 1's regression was originally measured
+(adjacent residue also self-paired/flipped/swapped, real slot spacing
+~54 units): swapped O3' lands at world-relative `(-16.2, -16.6)`; the
+next residue's own alpha-phosphate (built via the same swapped rule)
+lands at `(91.8, -16.6)` — 108.0 units apart, exactly 2x slot spacing, in
+the wrong direction. Numerically identical in magnitude to Attempt 1's
+already-confirmed 108-unit failure.
+
+**Why this passed its own metric and would still have shipped a broken
+backbone if not caught here:** `chain_closest_to_own_ribose` is a
+same-residue-only metric — it was never built to see inter-residue
+connectivity at all, so it went clean (10.8) while the real backbone
+would have torn. The exact same trap named earlier in this document under
+a different bug: a metric that looks clean can just not be measuring the
+right thing. `chain_closest_to_own_ribose` needed a companion
+inter-residue check (the O3'-to-next-alpha-P distance) to be a complete
+regression test for anything touching this mechanism — which is why that
+check was already flagged as mandatory before Attempt 1 shipped, and
+caught this one too, this time before any code was written at all.
+
+**Not implemented.** The bounded rotation search (Bug W as shipped)
+remains the best real result: two structurally different escape hatches
+(reflection, Attempt 2; role-swap, Attempt 4) have now independently
+failed for two different, specific, documented reasons, plus the two
+approaches that mutate real vectors directly (Attempt 1; the discarded
+half of Attempt 4) share the same root failure mode. Ring rotation state
+and inter-residue backbone connectivity are independent facts about the
+molecule; no fix that couples them together (making one depend on the
+other) has yet survived the O3'-to-next-alpha-P check, and there's reason
+now to suspect none will, since the coupling itself is the recurring
+error, not any one specific way of expressing it.
+
+Whether the ~7.7-8 ceiling is FINAL (the two live options from before —
+accept it, or move O3'/C5' atom positions themselves, which changes
+`_atom_layout` rather than ring rotation and so isn't subject to this
+same objection) is still open, and still requires the fresh F9 dump this
+document has been asking for since Bug W's own last entry. Not
+provided by this addendum either.
+
+## Bug W, net-side constraint (resolve_self_paired_ring_rotation()'s search had no direction-net check) — FIXED
+
+Found while gathering real numbers for a separate uniform-local-scale
+plan (see that plan's own doc entry below) — a different, previously
+unnoticed defect in the SAME search, not related to scale.
+
+`resolve_self_paired_ring_rotation()`'s search constrains
+`bulge_vs_pairing_dot` (bulge away from partner) and self-clearance
+(chain doesn't hit its own ring), but nothing constrained which SIDE of
+the pivot (C1') the resulting O3'/C5' net out on relative to the real
+`toward_next`/`toward_previous` neighbor directions. Confirmed via real
+dump coordinates (2026-08-02, interior slot, not a boundary-fallback
+artifact): `template_top` slot 2, `world_pos=(324, 280.377)`, real next
+residue (slot 3) at `world_pos=(378, 279.631)` — `toward_next` points
+solidly `+X`. `O3' world = (318.09, ...)` — LESS than this residue's own
+C1' x (324), net on the wrong side of its own anchor from where the real
+neighbor actually is, despite C3'->O3' moving the mathematically-correct
+`+10.8` (`bond_length`) in `+X`. C3' itself starts far enough negative
+(local x -16.71) that one full bond-length pull in the correct direction
+isn't enough to net positive. Direction math was never wrong; the search
+just never checked where things netted out.
+
+Fixed by adding two more filter conditions to the existing search loop,
+alongside the `bulge_dot` check, using the algebraic identity (since
+`O3'(theta) = C3'(theta) + bond_length*toward_next_hat` and
+`toward_next_hat . toward_next_hat = 1`):
+```
+(O3'(theta) - pivot) . toward_next_hat = (C3'(theta) - pivot) . toward_next_hat + bond_length
+```
+Computed directly off the already-derived `candidate_substituents`
+(already built for the clearance check) rather than the algebraic
+shortcut silently, for auditability. Two independent checks, not one —
+O3' (via `toward_next`) and C5' (via `toward_previous`) can fail
+independently since the ring's single rotation angle moves C3'/C4'
+together but their outward pulls go in different real directions.
+Checking only the FIRST hop of each sub-chain (O3', C5') is sufficient
+and proven, not assumed: every further hop (O5', alpha-P) continues in
+the exact same direction, so its projection is strictly more positive
+once the first hop already clears the margin.
+
+`effective_toward_next`/`effective_toward_previous` resolved once before
+the loop via the same one-line mutual-fallback `derive_substituents()`
+already applies internally (duplicated here, not shared —
+`RiboseDeriver` stays a pure geometry library with no caller-awareness,
+same precedent as the reverted Attempt 1's duplicated fallback check),
+so boundary residues (one real same-strand neighbor missing) are checked
+against the effective, fallback-resolved direction rather than skipped.
+
+New constant `SELF_PAIRED_NET_SIDE_MARGIN_RATIO = 0.1` (`ribose_deriver.gd`)
+— a margin in WORLD UNITS (a projection distance, not a normalized
+cosine like `SELF_PAIRED_BULGE_DOT_MARGIN`), expressed as a ratio of
+`bond_length` rather than a flat constant specifically so it stays
+proportionally correct if `bond_length` is ever scaled for self-paired
+residues specifically (see the uniform-scale plan below) — a flat
+constant would silently drift out of proportion in that case. Starting
+value, flagged for verification against a real dump, same as every other
+self-paired constant in this file.
+
+Existing `found_valid`/fallback-to-binary-choice logic needed no change
+— the new checks are just additional `continue` conditions inside the
+same loop; a residue where the bulge constraint and the new net-side
+constraint together have no valid angle falls through to the existing
+fallback exactly as an all-constraints-fail case already did.
+
+Awaiting: fresh F9 dump confirming (1) O3'/alpha-P now have opposite
+signs (local and world) for self-paired residues at both strands, not
+just one interior example, (2) `bulge_vs_pairing_dot` still satisfies
+its margin — confirm the new constraint doesn't shrink the feasible
+region to empty for any sampled residue (report real numbers if it
+does, don't silently fall back and move on), (3) `chain_closest_to_own_ribose`'s
+real number now that the search has one more simultaneous constraint —
+may be worse than the pre-fix 7.7-7.9 ceiling, needs re-measuring, not
+assumed unchanged, and (4) a live screenshot confirming the chain reads
+as reaching toward two different, real neighbors rather than bunched
+toward one side.
+
+**Partially confirmed via a fresh dump (2026-08-02T23:53:12):** (1) O3'
+and alpha-P now have opposite local-x signs, e.g. `template_top` slot 0:
+O3' local x = +1.2820, alpha-P local x = -31.4839 — confirmed for
+multiple pairs, both strands. (2) `bulge_vs_pairing_dot` still reads
+-0.9659 to -1.0000 across all sampled self-paired residues, comfortably
+inside its margin — undisturbed. (3) `chain_closest_to_own_ribose` now
+reads 1.7-2.9 across sampled residues — WORSE than the pre-fix 7.7-7.9
+ceiling, confirming the "may be worse" warning above rather than the
+optimistic case; the net-side constraint genuinely competes with
+clearance for the achievable angle range. (4) Screenshot still not
+provided — not yet fully verified.
+
+## Bug W, deterministic tie-break for resolve_self_paired_ring_rotation() (frame-to-frame ring-rotation flicker) — FIXED
+
+User-reported real-time flicker: two screenshots of the same residue
+(last nucleotide of `template_bottom`, pre-fork/self-paired) moments
+apart showed a visibly different rotation angle. Confirmed root cause
+via a purpose-built diagnostic before proposing any fix.
+
+**Diagnostic built to get real data**, since neither attached screenshot
+nor a live game session were available to inspect directly:
+`RiboseDeriver.debug_self_paired_candidates()` — a full-trace twin of
+`resolve_self_paired_ring_rotation()` (kept in sync by hand, same
+duplication convention as `molecule_structure_renderer.gd`'s
+`_rebuild_layout()`/`_derive_full_residue()` pair), returning every one
+of the 72 candidates' `bulge_dot`, `o3_side`, `c5_side`, and `clearance`
+instead of just the winner. Wired into F9 via a new, TEMPORARY
+`_dump_self_paired_boundary_trace()` section printing this full table
+plus the winner and runner-up clearance gap, for the first and last slot
+of both `template_top`/`template_bottom` (the strand's own hard
+boundary — confirmed structurally, without needing new data, to be the
+same as the self-paired region's own boundary in this run: the sequence
+footer already showed 57 slots and zero synthesized leading/lagging
+residues).
+
+**Confirmed with two real F9 dumps, 3 seconds apart, at all four
+boundary residues:** the winning angle flips between an exact mirror
+pair. `template_top` slot 0: dump 1 winner=165 deg (clearance 2.9244),
+runner-up=195 deg (2.7143), gap=0.210; dump 2 (3s later) winner=195 deg
+(2.8395), runner-up=165 deg (2.7992), gap=0.040 — winner flipped. Same
+flip pattern at `template_top` slot 56 (195<->165), `template_bottom`
+slot 0 (345<->15) and slot 56 (15<->345) — always the exact mirror pair
+around 180 (or 0/360 on the strand using the opposite sign convention),
+matching the mirror symmetry the exact-antiparallel boundary condition
+predicts (toward_previous or toward_next is exactly the other's
+negation whenever the mutual fallback fires, confirmed printed directly
+in both dumps: `present=false` on the missing side).
+
+**Root cause is NOT floating-point noise in the search's own math** — a
+real, sound distinction confirmed by the data: `toward_next`'s
+y-component itself genuinely differs between the two dumps (+0.5299 to
+-0.1017 at `template_top` slot 0), i.e. the underlying template curve
+sampling has real, small frame-to-frame jitter. That's enough to flip
+which of two near-mirror-symmetric candidates truly has the larger
+clearance. Since the two candidates are never EXACTLY tied (only
+near-tied, by a variable, real amount depending on that frame's exact
+jitter), the loop's existing `>` comparison (which already picks
+whichever candidate is encountered first on an EXACT tie) does not fix
+this — the true winner really does change, marginally, frame to frame.
+
+**Fix: make the winner SELECTION itself insensitive to differences
+below a fixed epsilon**, not just tie-break exact ties. Every valid
+candidate is now collected (in the loop's existing fixed
+increasing-angle order) instead of tracking a running best; after the
+sweep, find the best clearance among all of them, then return the FIRST
+(smallest-angle) candidate within `SELF_PAIRED_TIE_BREAK_EPSILON_RATIO *
+bond_length` of that best — deterministic regardless of which frame's
+exact numbers technically edge out the other. New constant
+`SELF_PAIRED_TIE_BREAK_EPSILON_RATIO = 0.05` (ratio of `bond_length`,
+same convention as the file's other self-paired margins) — chosen
+comfortably above the largest observed real gap (0.21) while staying
+well below the gap to the third-place candidate (observed ~0.9 in the
+same real dumps), so it only merges the genuinely near-tied pair, not
+the wider field.
+
+**Verified against the real numbers before shipping** (not assumed):
+re-ran the tie-break rule by hand against all four boundary residues'
+real dump values (both frames) — every one now picks the same angle in
+both frames (`template_top` slot 0/56 -> 165 deg both times;
+`template_bottom` slot 0/56 -> 15 deg both times).
+
+Awaiting: two more F9 dumps, back-to-back, confirming byte-identical
+`SELF-PAIRED BOUNDARY ROTATION TRACE` winner output now that the fix is
+live (not just the hand-verified re-derivation above), and a live
+screenshot confirming visual stability.
+
+**Diagnostic bug found (2026-08-03), self-inflicted — the dump's own
+`WINNER` line was never updated to reflect this fix.** User reported the
+flicker "very much still there" after three fresh F9 dumps, ~15s apart.
+Checked by hand against the real numbers: `template_top`/`template_bottom`
+slot 56 (and others) DID still show the raw `WINNER` line flip between
+dumps (e.g. 165 -> 195 -> 165). But `_dump_self_paired_boundary_trace()`'s
+`WINNER`/`RUNNER-UP` lines were computed by a SEPARATE, simple
+running-max loop written purely to visualize the raw trace — never
+updated to apply `resolve_self_paired_ring_rotation()`'s own tie-break
+after that fix shipped. Re-derived the tie-break by hand against the new
+real numbers: `template_top` slot 56, dump1 raw winner=165 (2.6099),
+runner-up=190 (2.0928), gap=0.517 (within the 0.54 epsilon, tie-break
+picks the smaller angle, 165); dump3 raw winner=195 (2.8416),
+runner-up=165 (2.7971), gap=0.045 (also within epsilon, tie-break again
+picks 165). **Both resolve to 165 once tie-broken** — same pattern held
+for every residue checked. The actual fix, in the actual live-rendering
+function, appears to be working; the diagnostic DISPLAY was just lying
+about it by continuing to show the pre-fix raw argmax.
+
+Fixed the display in `_dump_self_paired_boundary_trace()`: it now prints
+the RAW best/runner-up (relabeled to make clear it does NOT reflect the
+live result) AND a separate "ACTUAL live result (post-tie-break)" line
+that reproduces `resolve_self_paired_ring_rotation()`'s exact tie-break
+logic (same epsilon, same first-in-fixed-order rule) — so a future dump
+can be read directly without this same hand-recalculation.
+
+Awaiting: a fresh F9 dump with the corrected display, confirming the
+"ACTUAL live result" line is byte-identical across consecutive dumps —
+and, more importantly, a live screenshot/direct visual check, since the
+hand-verification above is now the second time this fix has needed
+manual re-derivation against real numbers rather than trusting the
+dump's own summary at face value.
+
+## L-ribose mirror DEMO ONLY — NOT a candidate fix, reverted after use
+
+**THIS PRODUCES L-RIBOSE, NOT D-RIBOSE. NEVER SHIPPED. If a future
+session finds `reverse=true` anywhere, that is a bug — revert it.**
+
+Purpose: visually confirm, once, the analytic proof (worked out during
+the O4'-proximity feasibility investigation, real coordinates matching
+`derive_regular_ring()`'s actual formula) that reversing the ribose
+ring's vertex walk order around the fixed C1' pivot is mathematically a
+mirror reflection, not a rotation — exactly the defect
+`derive_ring()`'s own "HARDCODED HANDEDNESS" comment already warns
+against. Not a fix attempt; nothing here was intended to resolve Bug W's
+open questions (the O4' feasibility conflict, the scale-ratio plan's
+base-pair crowding block) — those remain exactly where they were.
+
+**Scope, as implemented:**
+- `NitrogenBaseDeriver.derive_regular_ring()` (`nitrogen_base_deriver.gd`)
+  gained an optional `reverse: bool = false` parameter — when true,
+  walks `angle = start_angle - i*angle_step` instead of `+`. Defaults
+  false, so every call site that doesn't pass it explicitly is a
+  provable no-op (reduces to the original expression exactly).
+- `RiboseDeriver.derive_ring()` (`ribose_deriver.gd`) gained the same
+  passthrough `reverse: bool = false` parameter.
+- Wired ONLY into the self-paired branch in both `_rebuild_layout()` and
+  `_derive_full_residue()` (`molecule_structure_renderer.gd`):
+  `partner_key`/`is_self_paired_template` computation moved earlier
+  (before `derive_ring()`, since the demo needs it to choose `reverse`
+  before the ring exists — real shipped code didn't need this
+  reordering, it's demo-only plumbing) and `derive_ring(..., is_self_paired_template)`
+  passes the mirror flag straight through. `resolve_self_paired_ring_rotation()`
+  is skipped entirely for the self-paired branch during the demo — the
+  mirrored ring needs no rotation search, it's a fixed construction —
+  replaced with a `pass` and a comment. The non-self-paired branch
+  (`apply_strand_direction()` with the fixed sign) is untouched.
+- `derive_substituents()` and `derive_base_layout()` were NOT touched —
+  per the demo's own premise, both already consume ring positions by
+  role/atom-ID lookup (`c3_id`, `c4_id`, `c1_position`, etc.), not raw
+  coordinate assumptions, so they should read off the mirrored positions
+  automatically. **Not yet confirmed against a live screenshot** — if
+  either function turns out to need an actual change to keep working
+  correctly against mirrored input, that's a separate, real finding to
+  report, not something to patch around silently.
+
+**Status: DONE and REVERTED.** User ran it and confirmed the visual
+against the mirrored ring. Both `_rebuild_layout()` and
+`_derive_full_residue()` reverted to their exact pre-demo form: ring
+derivation back to the plain `RiboseDeriver.derive_ring(topology,
+"incoming.", bond_length)` call (no `reverse` argument),
+`partner_key`/`pairing_direction` computation back to its original
+post-ring position, and the self-paired branch back to calling
+`RiboseDeriver.resolve_self_paired_ring_rotation()` — byte-identical to
+the code before this demo started. Confirmed via grep across
+`scripts/`: no call site anywhere passes `reverse=true` (only the
+parameter definitions in `derive_regular_ring()`/`derive_ring()` remain,
+both still defaulting `false`). Those two `reverse` parameters were left
+in place, per the original request — harmless, opt-in, no behavior
+change for any real call site.
+
+**Reminder for any future session: `reverse=true` was never shipped,
+produces L-ribose, and is not a candidate fix for Bug W.** The O4'-
+proximity feasibility conflict and the scale-ratio plan's base-pair
+crowding block are both exactly where they were before this demo —
+nothing here moved either of them forward.

@@ -134,7 +134,20 @@ static func build_guanine_seed_into(topology: MoleculeTopology, role_prefix: Str
 ## utility — no tuned/behavioral value, straight trigonometry. Used for
 ## ribose (N=5, via ribose_deriver.gd's wrapper), pyrimidines (N=6), and
 ## the purine 6-ring half.
-static func derive_regular_ring(topology: MoleculeTopology, role_suffixes: Array[String], role_prefix: String, bond_length: float, start_angle: float = -PI / 2.0) -> Dictionary:
+##
+## DEMO-ONLY parameter (docs/MolecularStructure_BasePairExpansion.md,
+## Bug W): `reverse`, defaulting false. When true, walks vertices with
+## `angle = start_angle - i * angle_step` instead of `+` — mathematically
+## a mirror reflection of the vertex walk, not a rotation (this is exactly
+## the reversal `derive_ring()`'s own HARDCODED HANDEDNESS comment warns
+## produces L-ribose instead of D-ribose). Defaults false everywhere, so
+## every existing call site (leading, lagging, every non-demo path) is a
+## provable no-op — `false` reduces to the original `angle = start_angle
+## + i * angle_step` exactly, byte-identical. NOT a shipped mechanism —
+## see the Bug W doc entry for the one-time visual confirmation this was
+## added for, and confirm before trusting this comment that no call site
+## still passes `true`.
+static func derive_regular_ring(topology: MoleculeTopology, role_suffixes: Array[String], role_prefix: String, bond_length: float, start_angle: float = -PI / 2.0, reverse: bool = false) -> Dictionary:
 	var positions: Dictionary = {}
 	var n: int = role_suffixes.size()
 	if n < 3:
@@ -146,7 +159,7 @@ static func derive_regular_ring(topology: MoleculeTopology, role_suffixes: Array
 		if atom_id == -1:
 			push_warning("NitrogenBaseDeriver.derive_regular_ring: role not found (%s)" % [role_prefix + role_suffixes[i]])
 			continue
-		var angle: float = start_angle + i * angle_step
+		var angle: float = start_angle - i * angle_step if reverse else start_angle + i * angle_step
 		positions[atom_id] = Vector2(cos(angle), sin(angle)) * circumradius
 	return positions
 

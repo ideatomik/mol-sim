@@ -937,3 +937,44 @@ approved is the *direction* and the first milestone's shape. This is a
 Lattice doc: it exists to be discussed and explicitly approved before any
 code is written, and to be contradicted in writing by an As-Built section
 once real files are read.
+
+---
+
+## Self-paired template state is a first-class render state, not a transient one
+
+**Correction, added after this framing crept into conversation and needed to
+be stopped rather than left implicit.** The self-paired template case (both
+template strands still hydrogen-bonded to each other, before the polymerase
+has caught up and built either strand's real copy) has repeatedly been
+described in discussion as "temporary," "transient," or "a brief pre-fork
+window" — language used to justify deprioritizing its correctness relative
+to leading/lagging's fully-synthesized geometry. That framing is wrong and
+is retired as of this entry.
+
+**Why it's wrong, on the record:** this is the state a teacher or student
+sees when panning the fully-assembled DNA with no enzyme active — no
+helicase, no polymerase, nothing moving to compete for attention. That is
+not an edge case to be tolerated until something better replaces it; it is
+the cleanest available teaching view of what antiparallel structure and
+5'→3' directionality actually mean at the atom level, precisely because
+nothing else is happening on screen. A rendering defect here is not lower
+priority than the same defect on leading/lagging — if anything it is
+encountered MORE, since a student is free to sit in this state indefinitely,
+while the fork keeps moving past any given leading/lagging residue.
+
+**What follows from this:** self-paired template geometry (ring rotation,
+chain placement, O4' proximity, H-bond rendering) must be held to the same
+correctness bar as leading/lagging's fixed-sign path — chemically accurate
+distances and directions, not merely "passes its own clearance metric" or
+"good enough for a state nobody lingers on." Every open item in
+`MolecularStructure_BasePairExpansion.md`'s Bug V/W thread (the rotation
+search's constraint conflicts, the O4'-proximity failure, the
+determinism/flicker bug) is evaluated against that bar, not against a
+lower one implied by "it resolves once the fork arrives." It does resolve —
+but that is not a reason to under-invest in it now.
+
+**Naming going forward:** refer to this as "the self-paired template state"
+or "the pre-fork state" when precision about *when* it occurs is useful —
+those are neutral, descriptive terms. Do not use "temporary," "transient,"
+or language implying it is lower-priority than any other named render
+state in this document.

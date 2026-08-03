@@ -125,6 +125,26 @@ const PARTNER_STRAND: Dictionary = {
 	"lagging": "template_bottom",
 }
 
+## Every base-atom role suffix that can be one end of a real Watson-Crick
+## hydrogen bond, across all four base letters — used to build
+## base_bond_atoms_by_key (_rebuild_layout()) via a single flat try-lookup
+## loop (find_by_role, skip if absent) rather than branching per letter.
+const HBOND_ROLE_SUFFIXES: Array[String] = ["n1", "n3", "n2", "o2", "o6", "n4", "n6", "o4"]
+
+## Real per-base-letter hydrogen-bond atom pairs (own role -> partner's
+## role), replacing the old "N parallel offset lines from one shared
+## anchor axis" approximation (docs/MolecularStructure_BasePairExpansion.md).
+## G-C: N1-N3 (existing anchor pair), N2-O2, O6-N4. A-T: N1-N3, N6-O4.
+## Real chemistry, not a rendering convenience — every pair here is an
+## actual WC donor/acceptor atom pair, confirmed against standard base-
+## pairing geometry, not this project's own invention.
+const HBOND_OWN_TO_PARTNER_ROLES: Dictionary = {
+	"A": [["n1", "n3"], ["n6", "o4"]],
+	"T": [["n3", "n1"], ["o4", "n6"]],
+	"G": [["n1", "n3"], ["n2", "o2"], ["o6", "n4"]],
+	"C": [["n3", "n1"], ["o2", "n2"], ["n4", "o6"]],
+}
+
 ## Which screen-x direction each strand's 5'->3' reading runs, per
 ## SKILL.md's polarity marker convention ("Bottom template: 3' left, 5'
 ## right. Top template: 5' left, 3' right. Leading strand: 3' left, 5'
@@ -314,10 +334,29 @@ func _compute_active() -> bool:
 
 
 func _rebuild_layout() -> void:
+	# Perf fix (docs/MolecularStructure_BasePairExpansion.md): this used to
+	# run its full per-residue cost — fold lookup, ring/base derivation,
+	# NitrogenBaseDeriver.derive_base_layout()'s 72-step clearance-search
+	# rotation, none of it cached (recomputed fresh every call, by design,
+	# per this file's own dump header) — EVERY FRAME regardless of
+	# whether the molecular renderer was even active, for every residue
+	# inside cull_rect. cull_rect (_current_viewport_world_rect()) is
+	# LARGER exactly when zoomed OUT (world_size = viewport_pixels / z,
+	# smaller z -> bigger world_size), so ordinary bead-glyph play at
+	# normal zoom — nowhere near molecular mode — paid the full cost for
+	# every residue on screen, scaling directly with how much of the
+	# strand was visible. Safe to skip entirely while inactive: _draw()
+	# already independently guards on _active before reading
+	# _atom_layout/_bond_layout/_h_bond_layout, and is_slot_active()/
+	# is_strand_active() already short-circuit on `not _active` before
+	# ever consulting _active_slots — nothing downstream depends on these
+	# being freshly rebuilt while inactive.
 	_atom_layout.clear()
 	_bond_layout.clear()
 	_h_bond_layout.clear()
 	_active_slots.clear()
+	if not _active:
+		return
 
 	var bond_length: float = tm.molecular_ring_bond_length_ratio * _slot_spacing()
 	var cull_rect: Rect2 = _current_viewport_world_rect()
@@ -346,7 +385,15 @@ func _rebuild_layout() -> void:
 	# cross-residue passes (bug-B backbone bond, hydrogen bonds) below.
 	var o3_by_key: Dictionary = {}
 	var alpha_by_key: Dictionary = {}
-	var anchor_by_key: Dictionary = {}
+	# Real per-atom world positions for every role Watson-Crick H-bonding
+	# can involve (base-letter-dependent — see HBOND_OWN_TO_PARTNER_ROLES),
+	# not just one named anchor atom. Supersedes the old single-anchor
+	# anchor_by_key (docs/MolecularStructure_BasePairExpansion.md): the
+	# anchor-pair-only rendering was chemically wrong at atom-level zoom —
+	# real G:C/A:T H-bonds connect specific, different atom pairs (N1-N3,
+	# N2-O2, O6-N4 for G:C; N1-N3, N6-O4 for A:T), not N parallel offset
+	# lines fanned out from one shared axis.
+	var base_bond_atoms_by_key: Dictionary = {}
 
 	for entry in all_entries:
 		var world_pos: Vector2 = _molecular_render_pos(entry.strand, entry.world_position, cluster_center_x)
@@ -379,6 +426,45 @@ func _rebuild_layout() -> void:
 			_fold_cache[cache_key] = topology
 
 		var ring_positions: Dictionary = RiboseDeriver.derive_ring(topology, "incoming.", bond_length)
+		var c1_id: int = topology.find_by_role("incoming.c1_prime")
+		var c1_local: Vector2 = ring_positions.get(c1_id, Vector2.ZERO)
+
+		# Computed here, ahead of the ring-direction decision below (moved up
+		# from its old post-rotation position — the self-paired template
+		# case, below, needs the real partner direction BEFORE choosing
+		# which way to rotate the ring, not after). Also still feeds
+		# derive_substituents()/derive_base_layout() exactly as before.
+		var partner_key: String = _pair_for_slot(entry.strand, entry.slot, base_type_by_key, position_by_key)
+		var pairing_direction: Vector2 = Vector2.ZERO
+		if partner_key != "" and position_by_key.has(partner_key):
+			pairing_direction = position_by_key[partner_key] - world_pos
+
+		# Real same-strand-neighbor direction (supersedes Bug J/L — see
+		# docs/MolecularStructureDesign.md's Layout rule + Open Question 10,
+		# docs/MolecularStructure_BasePairExpansion.md). C5' bonds toward
+		# the more-5' same-strand neighbor, O3' toward the more-3' one —
+		# neither has anything to do with pairing_direction (the cross-
+		# strand H-bond vector Bug J/L used, confirmed chemically wrong for
+		# this purpose). Which physical slot (slot+1 vs slot-1) is more-3'
+		# vs more-5' depends on STRAND_DIRECTION_SIGN, same rule
+		# _build_backbone_bonds() already implements below — reused here,
+		# not re-derived, so the two can't silently disagree. Computed here,
+		# ahead of the ring-rotation decision below (Bug W needs these real
+		# vectors to run its own clearance search) — this file's own
+		# geometry is not affected by rotation state, only by real
+		# same-strand neighbor positions, so the reordering changes nothing
+		# about what these vectors mean.
+		var neighbor_sign: float = _strand_direction_sign(entry.strand)
+		var next_slot_key: String = "%s:%d" % [entry.strand, entry.slot + 1]
+		var prev_slot_key: String = "%s:%d" % [entry.strand, entry.slot - 1]
+		var more_3prime_key: String = next_slot_key if neighbor_sign >= 0.0 else prev_slot_key
+		var more_5prime_key: String = prev_slot_key if neighbor_sign >= 0.0 else next_slot_key
+		var toward_next: Vector2 = Vector2.ZERO
+		if position_by_key.has(more_3prime_key):
+			toward_next = position_by_key[more_3prime_key] - world_pos
+		var toward_previous: Vector2 = Vector2.ZERO
+		if position_by_key.has(more_5prime_key):
+			toward_previous = position_by_key[more_5prime_key] - world_pos
 
 		# Antiparallel-strand orientation fix
 		# (docs/Handout_AntiparallelStrandOrientation.md): the ring was
@@ -395,41 +481,33 @@ func _rebuild_layout() -> void:
 		# corrected orientation automatically (they're placed relative to
 		# whatever ring shape they're given) rather than needing their own
 		# separate rotation. C1' is the pivot, so it stays fixed under the
-		# rotation — computed once, below, and valid whether or not the
-		# rotation actually ran.
-		var c1_id: int = topology.find_by_role("incoming.c1_prime")
-		var c1_local: Vector2 = ring_positions.get(c1_id, Vector2.ZERO)
-		ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
+		# rotation.
+		#
+		# Self-paired-template correction (docs/MolecularStructure_
+		# BasePairExpansion.md, Bug V/Bug W): the fixed STRAND_DIRECTION_SIGN
+		# convention above was verified only against "do the rings stop
+		# overlapping" (Handout_AntiparallelStrandOrientation.md's own
+		# criterion) — never against the ring's bulge direction relative to
+		# the real partner. Bug V fixed the bulge direction with a binary
+		# identity/180-degree choice; Bug W found that binary choice left no
+		# freedom to also avoid the substituent chain colliding with the
+		# ring's own atoms, and replaced it with
+		# RiboseDeriver.resolve_self_paired_ring_rotation() — a bounded
+		# search over the ring's rotation angle that satisfies the same
+		# bulge-away-from-partner requirement (any negative dot product, not
+		# specifically -1.0 — see that function's own doc comment) while
+		# maximizing clearance against the real chain (toward_next/
+		# toward_previous, computed above, never modified). This branch
+		# ONLY changes that specific case — leading, lagging, and any
+		# template residue with a real synthesized partner (post-
+		# _pair_for_slot()-fix, already confirmed clean this session) keep
+		# the exact original fixed sign, byte-identical to before.
+		var is_self_paired_template: bool = (entry.strand == "template_top" or entry.strand == "template_bottom") and partner_key.begins_with("template_")
+		if is_self_paired_template:
+			ring_positions = RiboseDeriver.resolve_self_paired_ring_rotation(topology, "incoming.", ring_positions, c1_local, pairing_direction, bond_length, toward_next, toward_previous)
+		else:
+			ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
 
-		# Computed here, ahead of derive_substituents(), so the chain can use
-		# it too (Bug J, below) — was previously computed after, purely for
-		# base placement.
-		var partner_key: String = _pair_for_slot(entry.strand, entry.slot, base_type_by_key, position_by_key)
-		var pairing_direction: Vector2 = Vector2.ZERO
-		if partner_key != "" and position_by_key.has(partner_key):
-			pairing_direction = position_by_key[partner_key] - world_pos
-
-		# Real same-strand-neighbor direction (supersedes Bug J/L — see
-		# docs/MolecularStructureDesign.md's Layout rule + Open Question 10,
-		# docs/MolecularStructure_BasePairExpansion.md). C5' bonds toward
-		# the more-5' same-strand neighbor, O3' toward the more-3' one —
-		# neither has anything to do with pairing_direction (the cross-
-		# strand H-bond vector Bug J/L used, confirmed chemically wrong for
-		# this purpose). Which physical slot (slot+1 vs slot-1) is more-3'
-		# vs more-5' depends on STRAND_DIRECTION_SIGN, same rule
-		# _build_backbone_bonds() already implements below — reused here,
-		# not re-derived, so the two can't silently disagree.
-		var neighbor_sign: float = _strand_direction_sign(entry.strand)
-		var next_slot_key: String = "%s:%d" % [entry.strand, entry.slot + 1]
-		var prev_slot_key: String = "%s:%d" % [entry.strand, entry.slot - 1]
-		var more_3prime_key: String = next_slot_key if neighbor_sign >= 0.0 else prev_slot_key
-		var more_5prime_key: String = prev_slot_key if neighbor_sign >= 0.0 else next_slot_key
-		var toward_next: Vector2 = Vector2.ZERO
-		if position_by_key.has(more_3prime_key):
-			toward_next = position_by_key[more_3prime_key] - world_pos
-		var toward_previous: Vector2 = Vector2.ZERO
-		if position_by_key.has(more_5prime_key):
-			toward_previous = position_by_key[more_5prime_key] - world_pos
 		var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
 
 		var local_positions: Dictionary = {}
@@ -488,13 +566,16 @@ func _rebuild_layout() -> void:
 			o3_by_key[key] = world_pos + (local_positions[o3_id] - anchor_offset)
 		if local_positions.has(alpha_id):
 			alpha_by_key[key] = world_pos + (local_positions[alpha_id] - anchor_offset)
-		var anchor_suffix: String = NitrogenBaseDeriver.pairing_anchor_suffix(entry.base_type)
-		var anchor_id: int = topology.find_by_role("incoming." + anchor_suffix)
-		if local_positions.has(anchor_id):
-			anchor_by_key[key] = world_pos + (local_positions[anchor_id] - anchor_offset)
+		var bond_atoms: Dictionary = {}
+		for suffix in HBOND_ROLE_SUFFIXES:
+			var role_id: int = topology.find_by_role("incoming." + suffix)
+			if local_positions.has(role_id):
+				bond_atoms[suffix] = world_pos + (local_positions[role_id] - anchor_offset)
+		if not bond_atoms.is_empty():
+			base_bond_atoms_by_key[key] = bond_atoms
 
 	_build_backbone_bonds(o3_by_key, alpha_by_key)
-	_build_hydrogen_bonds(anchor_by_key, base_type_by_key, position_by_key)
+	_build_hydrogen_bonds(base_bond_atoms_by_key, base_type_by_key, position_by_key)
 
 
 ## Bug-B fix: connects residue N's own already-positioned O3' to residue
@@ -650,33 +731,45 @@ func _pair_for_slot(strand: String, slot: int, base_type_by_key: Dictionary, pos
 	return ""
 
 
-## Builds one dashed-line group per rendered base pair, count sourced from
-## NitrogenBaseDeriver.hydrogen_bond_count() (single source of truth, also
-## used by replication_manager.gd's bead-glyph H-bond spawning — never
-## recomputed independently). Only drawn when BOTH sides of a pair are
-## rendered this frame, same accepted-simplification rule as the backbone
-## bonds above.
-func _build_hydrogen_bonds(anchor_by_key: Dictionary, base_type_by_key: Dictionary, position_by_key: Dictionary) -> void:
+## Builds one real-atom-pair segment group per rendered base pair
+## (docs/MolecularStructure_BasePairExpansion.md — supersedes the old
+## single-anchor-pair-plus-parallel-offset approximation). Segment count
+## is naturally 2 for A:T, 3 for G:C — no longer read from
+## NitrogenBaseDeriver.hydrogen_bond_count() here (that stays the single
+## source of truth for replication_manager.gd's bead-glyph dash COUNT,
+## an intentionally different, coarser Tier-1 rendering this file doesn't
+## touch). Only drawn when BOTH sides of a pair are rendered this frame,
+## same accepted-simplification rule as the backbone bonds above.
+func _build_hydrogen_bonds(base_bond_atoms_by_key: Dictionary, base_type_by_key: Dictionary, position_by_key: Dictionary) -> void:
 	var seen: Dictionary = {}
-	for key in anchor_by_key.keys():
+	for key in base_bond_atoms_by_key.keys():
 		if seen.has(key):
 			continue
 		var parts: PackedStringArray = key.split(":")
 		var strand: String = parts[0]
 		var slot: int = int(parts[1])
 		var partner_key: String = _pair_for_slot(strand, slot, base_type_by_key, position_by_key)
-		if partner_key == "" or not anchor_by_key.has(partner_key):
+		if partner_key == "" or not base_bond_atoms_by_key.has(partner_key):
 			continue
 		seen[key] = true
 		seen[partner_key] = true
 
 		var base_type: String = base_type_by_key.get(key, "A")
-		var count: int = NitrogenBaseDeriver.hydrogen_bond_count(base_type)
+		var own_atoms: Dictionary = base_bond_atoms_by_key[key]
+		var partner_atoms: Dictionary = base_bond_atoms_by_key[partner_key]
+		var role_pairs: Array = HBOND_OWN_TO_PARTNER_ROLES.get(base_type, [])
+		var segments: Array = []
+		for pair in role_pairs:
+			var own_suffix: String = pair[0]
+			var partner_suffix: String = pair[1]
+			if own_atoms.has(own_suffix) and partner_atoms.has(partner_suffix):
+				segments.append({a = own_atoms[own_suffix], b = partner_atoms[partner_suffix]})
+		if segments.is_empty():
+			continue
+
 		var color: Color = tm.cg_bond_color if (base_type == "C" or base_type == "G") else tm.at_bond_color
 		_h_bond_layout.append({
-			anchor_a = anchor_by_key[key],
-			anchor_b = anchor_by_key[partner_key],
-			count = count,
+			segments = segments,
 			color = color,
 		})
 
@@ -742,6 +835,8 @@ func _dump_geometry_diagnostic() -> void:
 	_dump_pairing(out, "template_top", "template_bottom", template_entries, template_entries, bond_length, diag_position_by_key, synth_entries)
 	_dump_pairing(out, "leading", "template_top", synth_entries, template_entries, bond_length, diag_position_by_key)
 	_dump_pairing(out, "lagging", "template_bottom", synth_entries, template_entries, bond_length, diag_position_by_key)
+
+	_dump_self_paired_boundary_trace(out, template_entries, synth_entries, bond_length, diag_position_by_key)
 
 	# Full-sequence same-letter scan (docs/MolecularStructure_
 	# BasePairExpansion.md, Bug E follow-up): the per-pairing dump above
@@ -907,8 +1002,8 @@ func _dump_pairing(out: Array, top_strand: String, bottom_strand: String, top_so
 				continue
 
 			printed += 1
-			var top_r: Dictionary = _derive_full_residue(top_entry, _molecular_render_pos(bottom_entry.strand, bottom_entry.world_position), bond_length, position_by_key)
-			var bottom_r: Dictionary = _derive_full_residue(bottom_entry, _molecular_render_pos(top_entry.strand, top_entry.world_position), bond_length, position_by_key)
+			var top_r: Dictionary = _derive_full_residue(top_entry, _molecular_render_pos(bottom_entry.strand, bottom_entry.world_position), bond_length, position_by_key, is_template_self_pairing)
+			var bottom_r: Dictionary = _derive_full_residue(bottom_entry, _molecular_render_pos(top_entry.strand, top_entry.world_position), bond_length, position_by_key, is_template_self_pairing)
 
 			out.append("\n[PAIR %d | sequence: %s%s]" % [printed, top_entry.base_type, bottom_entry.base_type])
 			_write_residue_block(out, "TOP", top_r)
@@ -916,6 +1011,20 @@ func _dump_pairing(out: Array, top_strand: String, bottom_strand: String, top_so
 			out.append("H-BOND:")
 			out.append("  anchor-to-anchor world distance = %.4f" % span)
 			out.append("  dna_ribbons_gap for reference    = %s" % _dna_ribbons_gap())
+			# STALE as of the real-atom-pair H-bond rewrite (docs/
+			# MolecularStructure_BasePairExpansion.md): originally added for
+			# Bug R verification, mirroring _draw()'s old perp/offset dash
+			# spacing computation so the dump could confirm what actually
+			# rendered. That mechanism no longer exists — _draw() now draws
+			# real per-atom-pair segments (HBOND_OWN_TO_PARTNER_ROLES), no
+			# spacing/offset math at all. Left in place (flagged, not
+			# silently deleted) since the numbers are still mathematically
+			# real, just no longer describing anything the renderer uses.
+			var h_bond_count: int = NitrogenBaseDeriver.hydrogen_bond_count(top_entry.base_type)
+			var h_bond_dash_spacing: float = tm.molecular_hydrogen_bond_spacing_ratio * bond_length
+			var h_bond_outermost_offset: float = float(h_bond_count - 1) * h_bond_dash_spacing / 2.0
+			out.append("  dash spacing (molecular_hydrogen_bond_spacing_ratio * bond_length) = %.4f  (ratio=%s, bond_length=%.4f)" % [h_bond_dash_spacing, tm.molecular_hydrogen_bond_spacing_ratio, bond_length])
+			out.append("  outermost dash offset (%d-line pair) = %.4f" % [h_bond_count, h_bond_outermost_offset])
 			_write_residue_block(out, "BOTTOM", bottom_r)
 
 			var top_closest_to_bottom_center: float = _closest_world_distance(top_r.base_world_positions.values(), bottom_r.world_pos)
@@ -930,10 +1039,141 @@ func _dump_pairing(out: Array, top_strand: String, bottom_strand: String, top_so
 		slot += 1
 
 
+## TEMPORARY diagnostic (docs/MolecularStructure_BasePairExpansion.md,
+## frame-to-frame ring-rotation flicker investigation) — prints
+## RiboseDeriver.debug_self_paired_candidates()'s full per-angle trace for
+## the FIRST and LAST slot of template_top/template_bottom (the strand's
+## own hard terminal boundary — identical to the self-paired region's own
+## boundary only as long as no synthesis has started; once leading/lagging
+## progress, the self-paired region's own moving boundary — at
+## helicase_x, not necessarily slot 0/max — would need its own targeting,
+## not implemented here since this run has zero synthesized residues).
+## Reveals whether the winning candidate is a clear maximum or a
+## near/exact tie with a runner-up, invisible from the live renderer's
+## single winning value. Remove once the flicker investigation is served,
+## same convention as every other TEMPORARY diagnostic in this file.
+func _dump_self_paired_boundary_trace(out: Array, template_entries: Array[Dictionary], synth_entries: Array[Dictionary], bond_length: float, position_by_key: Dictionary) -> void:
+	if template_entries.is_empty():
+		return
+	var base_type_by_key: Dictionary = {}
+	for e in template_entries:
+		base_type_by_key["%s:%d" % [e.strand, e.slot]] = e.base_type
+	for e in synth_entries:
+		base_type_by_key["%s:%d" % [e.strand, e.slot]] = e.base_type
+
+	out.append("\n=== SELF-PAIRED BOUNDARY ROTATION TRACE (frame-to-frame flicker investigation) ===")
+
+	for strand in ["template_top", "template_bottom"]:
+		var min_slot: int = -1
+		var max_slot: int = -1
+		for e in template_entries:
+			if e.strand != strand:
+				continue
+			if min_slot == -1 or e.slot < min_slot:
+				min_slot = e.slot
+			if e.slot > max_slot:
+				max_slot = e.slot
+		if min_slot == -1:
+			continue
+		for slot in [min_slot, max_slot]:
+			var entry: Dictionary = {}
+			for e in template_entries:
+				if e.strand == strand and e.slot == slot:
+					entry = e
+					break
+			if entry.is_empty():
+				continue
+			var partner_key: String = _pair_for_slot(strand, slot, base_type_by_key, position_by_key)
+			var is_self_paired: bool = partner_key.begins_with("template_")
+			out.append("\n[%s slot %d]  partner_key=%s  is_self_paired_template=%s" % [strand, slot, partner_key, is_self_paired])
+			if not is_self_paired or partner_key == "":
+				out.append("  not self-paired this frame — skipped")
+				continue
+
+			var world_pos: Vector2 = _molecular_render_pos(strand, entry.world_position)
+			var pairing_direction: Vector2 = position_by_key[partner_key] - world_pos
+
+			var cache_key: String = "%s:%d" % [strand, slot]
+			var topology: MoleculeTopology = _fold_cache.get(cache_key)
+			if topology == null:
+				var seed: MoleculeTopology = RiboseDeriver.build_incoming_nucleotide_seed("incoming.", entry.base_type)
+				topology = MoleculeFoldEngine.fold(seed, _operators, 0)
+				_fold_cache[cache_key] = topology
+			var ring_positions: Dictionary = RiboseDeriver.derive_ring(topology, "incoming.", bond_length)
+			var c1_id: int = topology.find_by_role("incoming.c1_prime")
+			var c1_local: Vector2 = ring_positions.get(c1_id, Vector2.ZERO)
+
+			var neighbor_sign: float = _strand_direction_sign(strand)
+			var next_slot_key: String = "%s:%d" % [strand, slot + 1]
+			var prev_slot_key: String = "%s:%d" % [strand, slot - 1]
+			var more_3prime_key: String = next_slot_key if neighbor_sign >= 0.0 else prev_slot_key
+			var more_5prime_key: String = prev_slot_key if neighbor_sign >= 0.0 else next_slot_key
+			var toward_next: Vector2 = Vector2.ZERO
+			if position_by_key.has(more_3prime_key):
+				toward_next = position_by_key[more_3prime_key] - world_pos
+			var toward_previous: Vector2 = Vector2.ZERO
+			if position_by_key.has(more_5prime_key):
+				toward_previous = position_by_key[more_5prime_key] - world_pos
+			out.append("  toward_next=%s (real neighbor %s present=%s)  toward_previous=%s (real neighbor %s present=%s)" % [
+				toward_next, more_3prime_key, position_by_key.has(more_3prime_key),
+				toward_previous, more_5prime_key, position_by_key.has(more_5prime_key),
+			])
+
+			var trace: Array = RiboseDeriver.debug_self_paired_candidates(topology, "incoming.", ring_positions, c1_local, pairing_direction, bond_length, toward_next, toward_previous)
+			var best_i: int = -1
+			var best_clearance: float = -INF
+			var second_i: int = -1
+			var second_clearance: float = -INF
+			for i in range(trace.size()):
+				var t: Dictionary = trace[i]
+				if not t.valid:
+					continue
+				if t.clearance > best_clearance:
+					second_i = best_i
+					second_clearance = best_clearance
+					best_i = i
+					best_clearance = t.clearance
+				elif t.clearance > second_clearance:
+					second_i = i
+					second_clearance = t.clearance
+			if best_i == -1:
+				out.append("  RAW best (pre-tie-break): NO VALID CANDIDATE — falls back to old binary choice")
+			else:
+				out.append("  RAW best (pre-tie-break, what THIS display used to report as WINNER — do not read as the actual live result): angle=%.2f deg  clearance=%.6f" % [trace[best_i].angle_deg, best_clearance])
+				if second_i != -1:
+					out.append("  RAW runner-up: angle=%.2f deg  clearance=%.6f  (gap=%.6f)" % [trace[second_i].angle_deg, second_clearance, best_clearance - second_clearance])
+				else:
+					out.append("  RAW runner-up: none (only one valid candidate)")
+			# ACTUAL live result (docs/MolecularStructure_BasePairExpansion.md,
+			# frame-to-frame flicker fix): reproduces
+			# resolve_self_paired_ring_rotation()'s own deterministic
+			# tie-break EXACTLY (same epsilon, same "first in fixed
+			# increasing-angle order wins" rule) — this is the number that
+			# actually matters; the RAW best/runner-up above is shown only
+			# for comparison, since a mismatch between the two is exactly
+			# what the pre-fix flicker looked like.
+			if best_i != -1:
+				var tie_break_epsilon: float = bond_length * RiboseDeriver.SELF_PAIRED_TIE_BREAK_EPSILON_RATIO
+				var actual_i: int = -1
+				for i in range(trace.size()):
+					var t: Dictionary = trace[i]
+					if t.valid and t.clearance >= best_clearance - tie_break_epsilon:
+						actual_i = i
+						break
+				out.append("  ACTUAL live result (post-tie-break): angle=%.2f deg  clearance=%.6f" % [trace[actual_i].angle_deg, trace[actual_i].clearance])
+			out.append("  full candidate table (angle_deg, bulge_dot, bulge_valid, o3_side, o3_valid, c5_side, c5_valid, clearance):")
+			for t in trace:
+				out.append("    %6.2f  bulge=%8.4f(%s)  o3_side=%9.4f(%s)  c5_side=%9.4f(%s)  clearance=%s" % [
+					t.angle_deg, t.bulge_dot, "OK" if t.bulge_valid else "--",
+					t.o3_side, "OK" if t.o3_valid else "--",
+					t.c5_side, "OK" if t.c5_valid else "--",
+					("%.4f" % t.clearance) if t.valid else "n/a",
+				])
+
 ## Rebuilds one residue's full local+world geometry directly (same calls
 ## _rebuild_layout() makes), independent of culling. Returns everything the
 ## dump format needs, keyed for direct printing.
-func _derive_full_residue(entry: Dictionary, partner_world_pos: Vector2, bond_length: float, position_by_key: Dictionary = {}) -> Dictionary:
+func _derive_full_residue(entry: Dictionary, partner_world_pos: Vector2, bond_length: float, position_by_key: Dictionary = {}, is_self_paired_template: bool = false) -> Dictionary:
 	var strand: String = entry.strand
 	var slot: int = entry.slot
 	var base_type: String = entry.base_type
@@ -949,14 +1189,14 @@ func _derive_full_residue(entry: Dictionary, partner_world_pos: Vector2, bond_le
 	var ring_positions: Dictionary = RiboseDeriver.derive_ring(topology, "incoming.", bond_length)
 	var c1_id: int = topology.find_by_role("incoming.c1_prime")
 	var c1_local: Vector2 = ring_positions.get(c1_id, Vector2.ZERO)
-	ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(strand))
 
 	var pairing_direction: Vector2 = partner_world_pos - world_pos
 
-	# Real same-strand-neighbor direction (supersedes Bug J/L — see
-	# docs/MolecularStructureDesign.md's Layout rule + Open Question 10).
-	# Mirrors _rebuild_layout()'s identical logic exactly, so the diagnostic
-	# dump reports the same geometry the live renderer actually draws.
+	# Real same-strand-neighbor direction — moved up ahead of the
+	# ring-rotation decision below (mirrors _rebuild_layout()'s identical
+	# reordering for Bug W: resolve_self_paired_ring_rotation() needs these
+	# real vectors to run its own clearance search). See the full comment
+	# on this block in _rebuild_layout().
 	var neighbor_sign: float = _strand_direction_sign(strand)
 	var next_slot_key: String = "%s:%d" % [strand, slot + 1]
 	var prev_slot_key: String = "%s:%d" % [strand, slot - 1]
@@ -968,6 +1208,49 @@ func _derive_full_residue(entry: Dictionary, partner_world_pos: Vector2, bond_le
 	var toward_previous: Vector2 = Vector2.ZERO
 	if position_by_key.has(more_5prime_key):
 		toward_previous = position_by_key[more_5prime_key] - world_pos
+
+	# Self-paired-template correction (docs/MolecularStructure_
+	# BasePairExpansion.md, Bug V/Bug W) — mirrors _rebuild_layout()'s
+	# identical logic exactly, so the diagnostic dump reports the same
+	# geometry the live renderer actually draws. is_self_paired_template is
+	# caller-supplied (_dump_pairing() already computes the equivalent
+	# is_template_self_pairing for Bug P) rather than re-derived here,
+	# since this function only receives a partner WORLD POSITION, not a
+	# partner key it could classify itself.
+	if is_self_paired_template:
+		ring_positions = RiboseDeriver.resolve_self_paired_ring_rotation(topology, "incoming.", ring_positions, c1_local, pairing_direction, bond_length, toward_next, toward_previous)
+	else:
+		ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(strand))
+
+	# Bug V verification (docs/MolecularStructure_BasePairExpansion.md):
+	# unlike anchor_alignment_dot below (a DIFFERENT, pre-existing metric —
+	# the BASE ring's own anchor-vs-partner check, from an independent
+	# rotation search), this measures the RIBOSE ring's own bulge
+	# direction against pairing_direction, using the FINAL post-rotation
+	# ring_positions — i.e. whatever apply_strand_direction() actually
+	# just decided, regardless of which branch (fixed sign vs. self-paired
+	# override) produced it. Computed unconditionally (not just for the
+	# self-paired-template case) so leading/lagging/synthesized-partner
+	# residues are visible here too, for direct before/after comparison.
+	var bulge_ring_ids: Array = [
+		topology.find_by_role("incoming.c2_prime"), topology.find_by_role("incoming.c3_prime"),
+		topology.find_by_role("incoming.c4_prime"), topology.find_by_role("incoming.o4_prime"),
+	]
+	var bulge_vs_pairing_dot: float = 0.0
+	var bulge_sum2: Vector2 = Vector2.ZERO
+	var bulge_count2: int = 0
+	for bulge_id2 in bulge_ring_ids:
+		if ring_positions.has(bulge_id2):
+			bulge_sum2 += ring_positions[bulge_id2]
+			bulge_count2 += 1
+	if bulge_count2 > 0:
+		var final_bulge: Vector2 = bulge_sum2 / float(bulge_count2) - c1_local
+		if final_bulge.length() > 0.0 and pairing_direction.length() > 0.0:
+			bulge_vs_pairing_dot = final_bulge.normalized().dot(pairing_direction.normalized())
+
+	# toward_next/toward_previous (real same-strand-neighbor vectors) were
+	# already computed above, ahead of the ring-rotation decision — reused
+	# here unmodified.
 	var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
 
 	var base_positions: Dictionary = NitrogenBaseDeriver.derive_base_layout(topology, "incoming.", base_type, c1_local, pairing_direction, bond_length, ring_positions.values() + substituent_positions.values())
@@ -1025,6 +1308,21 @@ func _derive_full_residue(entry: Dictionary, partner_world_pos: Vector2, bond_le
 		for bp in base_positions.values():
 			chain_closest_to_own_base = min(chain_closest_to_own_base, p.distance_to(bp))
 
+	# Chain-vs-own-ribose overlap check (docs/MolecularStructure_
+	# BasePairExpansion.md, slot-0-broken-render investigation) — same
+	# closest-atom pattern as chain_closest_to_own_base above, but against
+	# the ribose ring's own atoms (C1'/C2'/C3'/C4'/O4') instead of the
+	# base. If the reported live-screenshot symptom (O3' sitting on top of
+	# C4') is real, this reads near-zero specifically at the affected slot
+	# and normal everywhere else — a real number instead of a screenshot
+	# impression, and independent of whatever bulge_vs_pairing_dot reports
+	# (a same-strand-neighbor/chain-construction issue would show up here
+	# regardless of whether the ring-rotation choice itself is correct).
+	var chain_closest_to_own_ribose: float = INF
+	for p2 in substituent_positions.values():
+		for rp in ring_positions.values():
+			chain_closest_to_own_ribose = min(chain_closest_to_own_ribose, p2.distance_to(rp))
+
 	# World-space per-group coordinates (CQA follow-up — user asked whether
 	# the dump discriminates which molecule/group an atom belongs to: yes,
 	# ring_named/base_named/chain_named already do — but only LOCAL coords
@@ -1072,8 +1370,10 @@ func _derive_full_residue(entry: Dictionary, partner_world_pos: Vector2, bond_le
 		chain_named = chain_named, chain_world_named = chain_world_named,
 		chain_far_from_c1 = chain_far_from_c1,
 		chain_closest_to_own_base = chain_closest_to_own_base,
+		chain_closest_to_own_ribose = chain_closest_to_own_ribose,
 		pairing_direction = pairing_direction,
 		anchor_alignment_dot = anchor_alignment_dot,
+		bulge_vs_pairing_dot = bulge_vs_pairing_dot,
 	}
 
 
@@ -1086,12 +1386,17 @@ func _write_residue_block(out: Array, label: String, r: Dictionary) -> void:
 		var pw: Vector2 = r.ring_world_named[role_label]
 		out.append("    %s: local=(%.4f, %.4f)  world=(%.4f, %.4f)" % [role_label, p.x, p.y, pw.x, pw.y])
 	out.append("  ribose ring diameter (widest extent) = %.4f" % r.ring_diameter)
+	out.append("  RIBOSE RING bulge_vs_pairing_dot (Bug V verification, post-rotation, actual rendered value) = %.4f  (%s)" % [
+		r.bulge_vs_pairing_dot,
+		"bulge faces AWAY from partner (self-paired-template goal)" if r.bulge_vs_pairing_dot < 0.0 else "bulge faces TOWARD partner" if r.bulge_vs_pairing_dot > 0.0 else "n/a, unpaired"
+	])
 	out.append("  substituent chain [CHAIN: O3'/C5'/O5'/alpha-P] — local / world coords:")
 	for role_label in r.chain_named:
 		var pc: Vector2 = r.chain_named[role_label]
 		var pcw: Vector2 = r.chain_world_named[role_label]
 		out.append("    %s: local=(%.4f, %.4f)  world=(%.4f, %.4f)" % [role_label, pc.x, pc.y, pcw.x, pcw.y])
 	out.append("  substituent chain farthest point from C1' = %.4f" % r.chain_far_from_c1)
+	out.append("  substituent chain closest approach to OWN ribose ring = %.4f  (slot-0-broken-render check: near-zero means a chain atom is sitting on a ring atom)" % r.chain_closest_to_own_ribose)
 	out.append("  DIRECTION CHECK: pairing_direction (toward real partner) = (%.4f, %.4f)  anchor_alignment_dot = %.4f  (%s)" % [
 		r.pairing_direction.x, r.pairing_direction.y, r.anchor_alignment_dot,
 		"anchor faces partner" if r.anchor_alignment_dot > 0.0 else "anchor faces AWAY from partner" if r.pairing_direction.length() > 0.0 else "n/a, unpaired"
@@ -1228,21 +1533,15 @@ func _draw() -> void:
 		for p in drawn_points:
 			draw_circle(p, half_width, tm.molecular_bond_color, true, -1.0, false)
 
-	# Hydrogen bonds: dotted parallel lines between each rendered pair's
-	# named pairing-anchor atoms (Tier 2, see the addendum doc) — count and
-	# color reused verbatim from the existing bead-glyph AT/CG convention,
-	# never recomputed independently.
+	# Hydrogen bonds: one dotted line per REAL atom pair
+	# (docs/MolecularStructure_BasePairExpansion.md — supersedes the old
+	# parallel-offset-from-one-anchor approximation). Each segment already
+	# carries its own real world endpoints (HBOND_OWN_TO_PARTNER_ROLES,
+	# _build_hydrogen_bonds()) — no perp/offset math, no dash spacing of
+	# any kind involved here anymore.
 	for h in _h_bond_layout:
-		var dir: Vector2 = h.anchor_b - h.anchor_a
-		if dir.length() <= 0.0:
-			continue
-		dir = dir.normalized()
-		var perp: Vector2 = dir.orthogonal()
-		var total_width: float = float(h.count - 1) * tm.hydrogen_bond_spacing
-		var start_offset: float = -total_width / 2.0
-		for i in range(h.count):
-			var offset: Vector2 = perp * (start_offset + float(i) * tm.hydrogen_bond_spacing)
-			_draw_dotted_line(h.anchor_a + offset, h.anchor_b + offset, h.color, tm.molecular_h_bond_dot_radius, tm.molecular_h_bond_dot_gap)
+		for seg in h.segments:
+			_draw_dotted_line(seg.a, seg.b, h.color, tm.molecular_h_bond_dot_radius, tm.molecular_h_bond_dot_gap)
 
 	# Atoms: element-colored circle + counter-rotated label, mirroring
 	# nucleotide_field.gd's exact per-glyph transform pattern (cache the

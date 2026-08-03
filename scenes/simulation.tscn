@@ -172,4 +172,3 @@ molecular_bond_width = 2.0
 molecular_atom_radius = 4.0
 molecular_atom_label_font_size = 4
 molecular_extra_ribbons_gap = 100.0
-molecular_extra_slot_spacing = 50.0
