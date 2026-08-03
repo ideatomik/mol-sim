@@ -19,12 +19,44 @@ polymerase has caught up):
 4. The first base pair in the sequence renders unpaired — wrong orientation,
    no hydrogen bonds drawn — even though it should be a real pair.
 
+Two structurally different fixes exist for symptoms 1-3, with different
+achievable outcomes, and this document has to commit to one rather than
+leave it ambiguous:
+
+- **1a — closed-form rigid rotation.** Same one-parameter family the current
+  search already explores (a single rotation angle around C1'), just picked
+  by a formula instead of a search. Fixes the flicker. Cannot fix the
+  collision, provably (see Root cause) — this is not a risk to discover
+  during implementation, it is known now.
+- **1b — flexible ring construction.** Derives C3'/C4' more independently
+  from the two real neighbor vectors, adding a genuine second degree of
+  freedom instead of rotating one fixed shape. The only version that could
+  touch the collision, because it's the only version with room to.
+
+**This document proposes 1b**, with 1a as the explicit, named fallback if 1b
+does not pan out (see the Fix section's stop condition) — not "try 1b, and
+if it's hard, quietly ship something in between."
+
 ## Root cause
 
-Leading/lagging strands derive ring orientation with a simple, deterministic
-rule: a fixed per-strand sign (`STRAND_DIRECTION_SIGN` /
-`apply_strand_direction()`), no search. This is grounded, cheap, and — per
-the confirmed visual result — correct.
+Leading/lagging strands derive ring orientation from a **fixed constant per
+strand identity** (`STRAND_DIRECTION_SIGN` / `apply_strand_direction()`) —
+not from real vectors at all, and not a per-frame derivation of anything.
+This works because each of those strands has exactly one real partner for
+its entire life (leading always pairs with template_top, lagging with
+template_bottom): a fixed convention is correct precisely because nothing
+about the correct orientation ever changes.
+
+**That is the actual root cause of why the self-paired case cannot reuse
+leading/lagging's trick, not a detail to note in passing:** a self-paired
+template residue's correct partner genuinely changes over its lifetime — it
+starts self-paired with the other template strand, then (once the
+polymerase catches up) its real biological partner becomes the newly
+synthesized leading/lagging strand. No fixed constant can be correct across
+that transition; the self-paired case is structurally required to consult
+live position data, which is exactly why it was built around a per-frame
+search in the first place and why that search cannot simply be replaced with
+another fixed convention.
 
 The self-paired-template case instead runs
 `RiboseDeriver.resolve_self_paired_ring_rotation()`: a 72-step brute-force
@@ -37,6 +69,7 @@ already names twice (Bug D/F, Bug J/L): a proxy metric search standing in
 for grounded, derived geometry.
 
 Consequences of the search approach, as designed:
+
 - **Flicker (symptom 2):** near-tied candidate angles can flip which one
   "wins" from small real (not floating-point-noise) frame-to-frame input
   changes — the tie-break epsilon mitigates but does not eliminate this,
@@ -84,85 +117,128 @@ independent evidence — not merely the design doc's own reasoning — that the
 search-based approach cannot be patched into stability; the fix has to stop
 being a per-frame independent search.
 
-## Fix: derive the ring from both real neighbor directions at once
+## Fix: 1b, flexible ring construction from both real neighbor directions
 
-A single rigid rotation of the natural pentagon has exactly one free
-parameter (the angle around the C1' pivot). Bug V/W's own history already
-demonstrates, empirically, that one angle cannot simultaneously satisfy both
-real constraints — bulge facing away from the partner, and the chain (built
-from real `toward_next`/`toward_previous`) clearing the ring's own atoms —
+A single rigid rotation of the natural pentagon (1a) has exactly one free
+parameter: the angle around the C1' pivot. Bug V/W's own history already
+proves, empirically, that one angle cannot simultaneously satisfy both real
+constraints — bulge facing away from the partner, and the chain (built from
+real `toward_next`/`toward_previous`) clearing the ring's own atoms —
 without a forced trade-off (measured collision 0.04-0.21 at the tightest,
 2.5-2.9 with today's net-side constraint added, worse than leading/lagging's
-clean 10.8). Rotating one fixed shape is not sufficient parameter space for
-two independent real-world directional constraints.
+clean 10.8). This is stated plainly, up front, as a known limit of 1a, not a
+risk to rediscover during implementation: **1a can fix the flicker (it is
+a closed-form formula instead of a search, so it cannot jump between
+discrete candidates the way the search does) but it cannot fix the
+collision — there is no angle to find that a formula would find instead of
+a search missing.**
 
-The fix is to stop treating self-paired ring placement as "rotate a
-pre-built pentagon" and instead derive the ring's vertex positions directly
-from the real direction data available — the same "derive, don't rotate a
-guess into place" principle `derive_fused_ring()` already uses elsewhere in
-this file (it builds the purine's second ring from a real shared edge plus a
-fold-away direction, not by rotating an independently-placed ring). Concrete
-mechanism (to be worked out against live F9 data during implementation, not
-guessed here): use the real same-strand-neighbor vectors as part of the
-ring's own construction — e.g. anchoring the C4'-side of the ring toward
-whichever of `toward_next`/`toward_previous` is physically adjacent to it —
-so the chain and ring are built from the same real vector and cannot
-disagree by construction, while the bulge-vs-partner requirement is
-satisfied as a consequence of the antiparallel geometry rather than forced
-by an independent rotation search.
+This document proposes **1b**: give the construction a genuine second
+degree of freedom instead of rotating one fixed shape, by deriving C3'/C4'
+more independently from the two real neighbor vectors rather than as fixed
+vertices of a rigid pentagon that only ever rotates as a unit. This is the
+only version of the fix with room to address the collision at all.
 
-### Chirality safety is a first-class, up-front requirement — not a post-hoc screenshot check
+**This is new geometric territory with no existing function in this
+codebase to model the construction on.** `derive_fused_ring()` is precedent
+for the _principle_ only — "derive from real data instead of rotating a
+guess into place" — not for the math: it solves a different problem (a
+second ring folded off an already-placed shared edge, one discrete
+fold-direction choice, not a continuously flexed single ring). Nobody
+implementing this should go looking for a reusable pattern in
+`derive_fused_ring()`, `derive_regular_ring()`, or `apply_strand_direction()`
+— none of them build a non-rigid single ring, and the construction here has
+to be designed from scratch against live F9 data, the same way every other
+piece of real geometry in this file was.
 
-`apply_strand_direction()`'s existing 180°-rotation approach is chirality-safe
-*for free*: any rotation of a rigid shape around a fixed pivot has
-determinant +1 by construction, so it can never silently produce the L-ribose
-mirror image the way a reflection would (`derive_ring()`'s own "HARDCODED
-HANDEDNESS" comment, and the `reverse=true` L-ribose demo already proven and
-reverted in this codebase, both exist specifically to guard against this).
-Deriving a genuinely new local frame from two independent real-world
-direction vectors does **not** inherit that guarantee automatically — it is
-new geometry construction, not a rotation, and must be proven safe rather
-than assumed safe.
+Concrete mechanism is deliberately not fixed by this document — only its
+required properties are (see below). The starting idea to investigate: let
+`toward_next`/`toward_previous` (whichever is physically adjacent to the
+C4' side) directly influence where C3'/C4' land, rather than deriving them
+only via `derive_substituents()`'s downstream chain after the ring has
+already been rigidly placed — so the ring and the chain are grounded in the
+same real vector where they meet, instead of a rigid ring fighting an
+independently-aimed chain for the same space.
 
-**Required before this fix ships**, as part of implementation, not deferred
-to visual inspection:
+### Chemical tolerance bound — currently unsourced, blocking
+
+Because 1b lets C3'/C4' deviate from the canonical regular-pentagon
+positions, the construction needs an explicit upper bound on how far that
+deviation is allowed to go before the result stops being defensible ribose
+geometry — not "whatever the other constraints happen to need."
+
+**This bound is not yet sourced.** This document's own citation of Gelbin et
+al. (1996), used elsewhere in the project for the mean bond angles
+(C5'-C4'-C3' = 114.7°, C4'-C3'-O3' = 110.3°), does not include a variance,
+standard deviation, or range figure anywhere in this project's records —
+checked directly against both `MolecularStructureDesign.md` and
+`MolecularStructure_BasePairExpansion.md` before writing this section. A
+numeric tolerance cannot honestly be "sourced from that" until a real
+variation figure is supplied — either the actual Gelbin et al. figure (if
+available) or an explicit decision to source the bound differently. This is
+a blocking gap for implementation, not a detail to fill in while coding.
+
+### Orientation-preservation proof — chirality safety for a flexible construction
+
+`apply_strand_direction()`'s existing 180°-rotation approach (1a, and every
+other rigid rotation already in this file) is chirality-safe for free: any
+rotation of a rigid shape around a fixed pivot has determinant +1 by
+construction, so it can never silently produce the L-ribose mirror image the
+way a reflection would (`derive_ring()`'s own "HARDCODED HANDEDNESS" comment,
+and the `reverse=true` L-ribose demo already proven and reverted in this
+codebase, both exist specifically to guard against this).
+
+**A flexible construction (1b) does not inherit that guarantee, and the
+rotation-equivalence proof that would gate 1a does not apply to it.** A
+correctly-built flexed pentagon will _not_ equal any rotation of the
+canonical regular pentagon — that is expected and correct, not a failure —
+so testing "does the output match some single rotation of the canonical
+shape" would reject good 1b output, not merely catch mirrors. 1b needs a
+different, real safety check:
+
+**Required before 1b ships, as part of implementation, not deferred to
+visual inspection:**
+
 1. State the construction as an explicit, closed-form function of the real
    input vectors (`toward_next`, `toward_previous`, `pairing_direction`) —
    no free parameter chosen by search or eyeballing.
 2. For a representative sample of self-paired residues (both strands, both
    "only one real neighbor present" boundary cases, and an interior residue
    with both neighbors present), compute the construction's output ring
-   vertex positions, then independently solve for the rigid rotation angle
-   (around the same C1' pivot) that would map the *canonical* D-ribose
-   pentagon (`derive_ring()`'s unrotated output) onto at least two
-   non-collinear vertices of that output.
-3. Confirm the **entire** vertex set matches that single rotation exactly
-   (not just the two solved-for points) — proving the construction is
-   everywhere equivalent to one proper rotation of the canonical pentagon,
-   never a reflection or an independently-placed vertex set that only
-   coincidentally resembles one from two points. This is the same
-   "compute it, compare to the mirror formula, confirm they don't match"
-   analytic-proof discipline already used once in this file for the
-   `reverse=true` L-ribose demo — applied here as a mandatory pre-ship gate,
-   not an optional demo.
-4. Only after step 3 passes for every sampled case does a live screenshot
-   serve as confirmation of visual correctness — it is not a substitute for
-   the analytic proof, since a chirality bug and a merely-ugly-but-correct
-   layout can look similar in a single screenshot.
+   vertex positions in the fixed atom-walk order `RING_ROLE_SUFFIXES`
+   already uses (C1'→C2'→C3'→C4'→O4').
+3. Compute the signed area of that vertex polygon (shoelace formula) and
+   confirm its sign matches the signed area of the canonical D-ribose
+   pentagon (`derive_ring()`'s unrotated output), walked in the same atom
+   order, for every sampled residue. A flipped sign means the construction
+   produced the mirror-image (L-ribose) vertex ordering regardless of how
+   plausible the shape looks — this is the flexible-construction equivalent
+   of the rotation-equivalence proof, verifying orientation preservation
+   instead of exact rigid-rotation equivalence.
+4. Confirm every sampled residue's C3'/C4' deviation from the canonical
+   pentagon position falls within the chemical tolerance bound (see above —
+   blocked until that bound is sourced).
+5. Only after steps 3 and 4 pass for every sampled case does a live
+   screenshot serve as confirmation of visual correctness — it is not a
+   substitute for either proof, since a chirality bug or an out-of-tolerance
+   deviation can look plausible in a single screenshot.
 
-**Deleted:** `resolve_self_paired_ring_rotation()`, `debug_self_paired_
-candidates()`, `SELF_PAIRED_ROTATION_SEARCH_STEPS`, `SELF_PAIRED_BULGE_
-DOT_MARGIN`, `SELF_PAIRED_NET_SIDE_MARGIN_RATIO`, `SELF_PAIRED_TIE_BREAK_
-EPSILON_RATIO`, `_dump_self_paired_boundary_trace()`, and the dead
-`apply_partner_flip()`.
+### Stop condition
 
-This is real, unscoped design work — the exact construction is not fixed by
-this document, only its required properties (grounded in real vectors,
-provably chirality-safe, no discrete search). If no construction satisfying
-both real constraints simultaneously and passing the chirality proof is
-found, that is a legitimate outcome to report back before shipping anything,
-not a reason to quietly fall back to the rejected search or the rejected
-always-flip rule.
+If no construction is found that satisfies both real constraints, the
+orientation-preservation proof, and the chemical tolerance bound, **ship 1a
+alone instead**: the closed-form rigid rotation (bulge-away-from-partner
+test, gated by the rotation-equivalence proof described in the prior
+revision of this document). That ships with the flicker fixed and the
+collision explicitly documented as a known, open, un-fixed-by-this-pass
+issue — not silently reverted to the rejected search, and not a decision
+deferred to be made mid-implementation.
+
+**Deleted either way:** `resolve_self_paired_ring_rotation()`,
+`debug_self_paired_candidates()`, `SELF_PAIRED_ROTATION_SEARCH_STEPS`,
+`SELF_PAIRED_BULGE_DOT_MARGIN`, `SELF_PAIRED_NET_SIDE_MARGIN_RATIO`,
+`SELF_PAIRED_TIE_BREAK_EPSILON_RATIO`, `_dump_self_paired_boundary_trace()`,
+and the dead `apply_partner_flip()`.
 
 ## Fix: unpaired first base pair
 
@@ -206,21 +282,33 @@ doesn't require reviewing a ~700-line file move at the same time.
 
 ## Testing / verification plan
 
-- Diagnostics-extraction move verified first, on its own, by diffing full
-  dump output before/after the file split for one identical scene state.
-- Chirality proof (see above) run and passing for every sampled case
-  *before* any visual check of the rotation fix — analytic, not screenshot.
+Each check below names which construction (1a or 1b — see Fix section) it
+verifies, so this plan cannot silently drift out of sync with whichever one
+actually ships.
+
+- Diagnostics-extraction move (applies to either branch) verified first, on
+  its own, by diffing full dump output before/after the file split for one
+  identical scene state.
+- **If 1b ships:** the orientation-preservation proof (signed-area check,
+  step 3 above) and the chemical-tolerance check (step 4 above) both run and
+  pass for every sampled case _before_ any visual check — analytic, not
+  screenshot. **If 1a ships instead (stop condition fired):** the
+  rotation-equivalence proof (full vertex set matches one rotation of the
+  canonical pentagon) runs and passes instead — the two proofs are not
+  interchangeable and only one applies to whichever branch actually shipped.
 - F9 live geometry dump, before and after, on a scene with the self-paired
-  template state visible (no enzymes active, fresh sequence load) —
-  confirm `chain_closest_to_own_base`/`chain_closest_to_own_ribose` and the
-  ring-vs-chain clearance numbers at the previously-affected slots, and
-  record whatever they are honestly (this fix is not assumed to reach
-  leading/lagging's clean 10.8 — only to stop trading collision for flicker
-  or vice versa).
+  template state visible (no enzymes active, fresh sequence load) — applies
+  to either branch — confirm `chain_closest_to_own_base`/
+  `chain_closest_to_own_ribose` and the ring-vs-chain clearance numbers at
+  the previously-affected slots, and record whatever they are honestly (1b
+  is not assumed to reach leading/lagging's clean 10.8; 1a is not expected
+  to move these numbers from today's baseline at all, since it only
+  addresses the rotation-angle choice, not the collision).
 - Multiple F9 dumps taken seconds apart, including at least one where the
   underlying template curve has visibly moved between presses (not a static
-  scene) — confirm byte-identical ring rotation output despite that motion,
-  since the flicker root-caused above only reproduces under real curve
-  movement, not a frozen scene.
-- Live screenshot of the first base pair in the sequence — confirm it
-  renders paired with hydrogen bonds and correct orientation.
+  scene) — applies to either branch — confirm byte-identical ring rotation
+  output despite that motion, since the flicker root-caused above only
+  reproduces under real curve movement, not a frozen scene.
+- Live screenshot of the first base pair in the sequence (unpaired-first-pair
+  fix, independent of 1a/1b) — confirm it renders paired with hydrogen bonds
+  and correct orientation.
