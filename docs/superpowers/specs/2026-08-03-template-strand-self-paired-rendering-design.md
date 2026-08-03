@@ -160,23 +160,42 @@ already been rigidly placed — so the ring and the chain are grounded in the
 same real vector where they meet, instead of a rigid ring fighting an
 independently-aimed chain for the same space.
 
-### Chemical tolerance bound — currently unsourced, blocking
+### Chemical tolerance bound — sourced
 
 Because 1b lets C3'/C4' deviate from the canonical regular-pentagon
 positions, the construction needs an explicit upper bound on how far that
 deviation is allowed to go before the result stops being defensible ribose
 geometry — not "whatever the other constraints happen to need."
 
-**This bound is not yet sourced.** This document's own citation of Gelbin et
-al. (1996), used elsewhere in the project for the mean bond angles
-(C5'-C4'-C3' = 114.7°, C4'-C3'-O3' = 110.3°), does not include a variance,
-standard deviation, or range figure anywhere in this project's records —
-checked directly against both `MolecularStructureDesign.md` and
-`MolecularStructure_BasePairExpansion.md` before writing this section. A
-numeric tolerance cannot honestly be "sourced from that" until a real
-variation figure is supplied — either the actual Gelbin et al. figure (if
-available) or an explicit decision to source the bound differently. This is
-a blocking gap for implementation, not a detail to fill in while coding.
+Source: Gelbin, Schneider, Clowney, Hsieh, Olson, Berman (1996), "Geometric
+Parameters in Nucleic Acids: Sugar and Phosphate Constituents," J. Am. Chem.
+Soc. 118, 519-529, Table 4 — deoxyribose values (the correct sugar for this
+project; DNA, not RNA), combined across sugar pucker conformations, N=47 real
+crystal structures. Mean ± σ (standard deviation):
+
+| Angle | Mean | σ | Governs |
+| --- | --- | --- | --- |
+| C2'-C3'-C4' | 103.2° | 1.0° | ring shape (internal) |
+| C3'-C4'-O4' | 105.6° | 1.0° | ring shape (internal) |
+| C4'-O4'-C1' | 109.7° | 1.4° | ring shape (internal) |
+| C5'-C4'-C3' | 114.7° | 1.5° | C5' substituent swing (exocyclic) |
+| C5'-C4'-O4' | 109.4° | 1.6° | C5' substituent swing (exocyclic) |
+| C4'-C3'-O3' | 110.3° | 2.2° | O3' substituent swing (exocyclic) |
+| C2'-C3'-O3' | 110.6° | 2.7° | O3' substituent swing (exocyclic) |
+
+The top three (ring-internal) angles bound how far the ring's own shape may
+deviate from the canonical pentagon; the bottom four (exocyclic) bound how
+far the O3'/C5' substituent directions may swing independent of the ring —
+looser than the ring-internal angles, matching the real physical
+expectation that substituents flex more than the ring itself.
+
+**Hard construction limit: ±2σ per angle**, applied per-angle from the table
+above (tighter on the three ring-internal angles, looser on the four
+exocyclic ones — not one flat number for all seven). Any candidate
+construction whose resulting bond angles exceed ±2σ on any listed angle, for
+any sampled residue, is rejected outright — regardless of whether it would
+otherwise resolve the collision. This is step 4 of the required proof below,
+made concrete rather than left as a TBD gap.
 
 ### Orientation-preservation proof — chirality safety for a flexible construction
 
@@ -215,9 +234,9 @@ visual inspection:**
    plausible the shape looks — this is the flexible-construction equivalent
    of the rotation-equivalence proof, verifying orientation preservation
    instead of exact rigid-rotation equivalence.
-4. Confirm every sampled residue's C3'/C4' deviation from the canonical
-   pentagon position falls within the chemical tolerance bound (see above —
-   blocked until that bound is sourced).
+4. Confirm every sampled residue's relevant bond angles (the seven listed in
+   the chemical tolerance bound above) fall within ±2σ of their Gelbin et
+   al. mean.
 5. Only after steps 3 and 4 pass for every sampled case does a live
    screenshot serve as confirmation of visual correctness — it is not a
    substitute for either proof, since a chirality bug or an out-of-tolerance
@@ -290,9 +309,10 @@ actually ships.
   its own, by diffing full dump output before/after the file split for one
   identical scene state.
 - **If 1b ships:** the orientation-preservation proof (signed-area check,
-  step 3 above) and the chemical-tolerance check (step 4 above) both run and
-  pass for every sampled case _before_ any visual check — analytic, not
-  screenshot. **If 1a ships instead (stop condition fired):** the
+  step 3 above) and the chemical-tolerance check (step 4 above, ±2σ per
+  angle against the Gelbin et al. Table 4 values) both run and pass for
+  every sampled case _before_ any visual check — analytic, not screenshot.
+  **If 1a ships instead (stop condition fired):** the
   rotation-equivalence proof (full vertex set matches one rotation of the
   canonical pentagon) runs and passes instead — the two proofs are not
   interchangeable and only one applies to whichever branch actually shipped.
