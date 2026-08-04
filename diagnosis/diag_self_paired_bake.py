@@ -222,13 +222,26 @@ def search_substituent(start_pos, natural_dir, ring, real_neighbor_distance):
     this can never point at the wrong neighbor entirely, per the Global
     Constraints. max_safe_reach mirrors the shipped Tier 2's real-
     neighbor-distance cap (never past half the real neighbor distance
-    minus the collision threshold)."""
+    minus the collision threshold).
+
+    Objective (revised after live testing found the original max-
+    clearance objective produces visually chaotic, flung-out chains):
+    among all candidates that CLEAR the collision threshold, prefer the
+    one with the SMALLEST deviation from the natural (real) direction and
+    distance -- a minimal, chemically-plausible-looking placement, not
+    the most extreme one the search window allows. Falls back to the old
+    max-clearance candidate only when nothing in the window clears the
+    threshold at all (the genuinely-hard case this project already
+    documents as an accepted open residual, not silently degraded
+    further)."""
     if length(natural_dir) <= 0.0:
         return None
     natural_hat = normalized(natural_dir)
     natural_angle = vangle(natural_hat)
     max_safe_reach = max(BOND_LENGTH, real_neighbor_distance * 0.5 - COLLISION_THRESHOLD)
-    best = None
+    best_clearing = None       # smallest-deviation candidate that clears the threshold
+    best_clearing_deviation = None
+    best_overall = None        # fallback: max clearance among ALL candidates
     steps = int(SUBSTITUENT_SEARCH_HALF_WINDOW_DEG / SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
     for i in range(-steps, steps + 1):
         angle = natural_angle + math.radians(i * SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
@@ -237,10 +250,22 @@ def search_substituent(start_pos, natural_dir, ring, real_neighbor_distance):
             dist = BOND_LENGTH + (max_safe_reach - BOND_LENGTH) * (j / SUBSTITUENT_SEARCH_DIST_STEPS)
             point = add(start_pos, scale(direction, dist))
             clearance = min_clearance_to_ring(point, ring)
-            if best is None or clearance > best["clearance"]:
-                best = dict(point=point, direction=direction, dist=dist, clearance=clearance,
-                            angle_offset_deg=i * SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
-    return best
+            candidate = dict(point=point, direction=direction, dist=dist, clearance=clearance,
+                              angle_offset_deg=i * SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
+            # Deviation is a simple, unweighted combination of angular
+            # offset (degrees) and radial overshoot beyond bond_length --
+            # both real, comparable "how far from natural" measures, kept
+            # unweighted deliberately (no tuned relative-importance
+            # constant to justify without more data than this project
+            # currently has).
+            deviation = abs(i * SUBSTITUENT_SEARCH_ANGLE_STEP_DEG) + abs(dist - BOND_LENGTH)
+            if clearance >= COLLISION_THRESHOLD:
+                if best_clearing is None or deviation < best_clearing_deviation:
+                    best_clearing = candidate
+                    best_clearing_deviation = deviation
+            if best_overall is None or clearance > best_overall["clearance"]:
+                best_overall = candidate
+    return best_clearing if best_clearing is not None else best_overall
 
 def run_full_bake(label, ring_result, toward_next, toward_previous):
     print(f"\n=== Full bake: {label} ===")
