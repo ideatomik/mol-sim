@@ -129,7 +129,7 @@ def run_case(label, toward_next, toward_previous, pairing_direction):
     print(f"O3' clearance to ring (Tier 1 only): {o3_clear:.4f}  (target: {COLLISION_THRESHOLD})")
     print(f"C5' clearance to ring (Tier 1 only): {c5_clear:.4f}  (target: {COLLISION_THRESHOLD})")
     return dict(ring=ring, theta=theta, bvd=bvd, o3=o3, c5=c5, o3_dir=o3_dir, c5_dir=c5_dir,
-                o3_clear=o3_clear, c5_clear=c5_clear)
+                o3_clear=o3_clear, c5_clear=c5_clear, toward_next=toward_next, toward_previous=toward_previous)
 
 result_a = run_case("template_top slot 0 (boundary)", FIXTURE_A_TOWARD_NEXT, FIXTURE_A_TOWARD_PREVIOUS, FIXTURE_A_PAIRING_DIRECTION)
 result_b = run_case("template_bottom slot 0 (mirror boundary)", FIXTURE_B_TOWARD_NEXT, FIXTURE_B_TOWARD_PREVIOUS, FIXTURE_B_PAIRING_DIRECTION)
@@ -208,12 +208,19 @@ print(f"  toward_next (Y-0.1): theta changes by {new_delta_neg:.2f} deg")
 print(f"  -> Stable: {new_stable}")
 print(f"Bug mechanism confirmed (old flips, new stable): {old_flips_either and new_stable}")
 
-CHAIN_EXTENSION_STRETCH_CAP_RATIO = 2.7  # confirmed/adjusted against real fixture data
-
-def required_chain_reach(start_pos, dir_hat, ring, bond_length, threshold=COLLISION_THRESHOLD):
+def required_chain_reach(start_pos, dir_hat, ring, bond_length, real_neighbor_distance, threshold=COLLISION_THRESHOLD):
     """Smallest distance >= bond_length along the UNCHANGED real direction
-    dir_hat that clears every ring atom by `threshold`. Never changes
-    direction -- only how far along it the atom sits."""
+    dir_hat that clears every ring atom by `threshold`, capped so it can
+    never reach past roughly the halfway point to the real same-strand
+    neighbor (real_neighbor_distance = length of the real, UNnormalized
+    toward_next/toward_previous vector) minus a `threshold`-sized safety
+    margin -- grounded in the real live neighbor distance, not an
+    arbitrary bond-length multiplier, so this scales correctly regardless
+    of what slot spacing / bond_length ratio a given scene uses (found via
+    live testing: the old flat 2.7x-bond_length cap let the chain reach
+    55.1 units when the real neighbor was only 54.0 units away -- an
+    inter-residue collision the old same-residue-only cap had no way to
+    prevent)."""
     best = bond_length
     threshold_sq = threshold * threshold
     for p in ring.values():
@@ -221,18 +228,27 @@ def required_chain_reach(start_pos, dir_hat, ring, bond_length, threshold=COLLIS
         a = dot(rel, dir_hat)
         h_sq = max(0.0, length_sq(rel) - a * a)
         if h_sq >= threshold_sq:
-            continue  # this ring atom can never collide regardless of reach
+            continue
         current_dist_sq = (bond_length - a) ** 2 + h_sq
         if current_dist_sq >= threshold_sq:
-            continue  # already clear at the default bond length
+            continue
         reach = math.sqrt(threshold_sq - h_sq)
         best = max(best, a + reach)
-    return min(best, bond_length * CHAIN_EXTENSION_STRETCH_CAP_RATIO)
+    max_safe_reach = max(bond_length, real_neighbor_distance * 0.5 - threshold)
+    return min(best, max_safe_reach)
 
 def run_case_with_tier2(label, result):
     ring = result["ring"]
-    o3_reach = required_chain_reach(ring["c3_prime"], result["o3_dir"], ring, BOND_LENGTH)
-    c5_reach = required_chain_reach(ring["c4_prime"], result["c5_dir"], ring, BOND_LENGTH)
+    toward_next = result["toward_next"]
+    toward_previous = result["toward_previous"]
+
+    # Compute the effective real neighbor distances, accounting for mutual fallback:
+    # if one direction has no real neighbor (0,0), the other side's vector is used as fallback
+    tn_dist = length(toward_next) if length(toward_next) > 0.0 else length(toward_previous)
+    tp_dist = length(toward_previous) if length(toward_previous) > 0.0 else length(toward_next)
+
+    o3_reach = required_chain_reach(ring["c3_prime"], result["o3_dir"], ring, BOND_LENGTH, tn_dist)
+    c5_reach = required_chain_reach(ring["c4_prime"], result["c5_dir"], ring, BOND_LENGTH, tp_dist)
     o3_final = add(ring["c3_prime"], scale(result["o3_dir"], o3_reach))
     c5_final = add(ring["c4_prime"], scale(result["c5_dir"], c5_reach))
     o3_clear = min_clearance_to_ring(o3_final, ring)
