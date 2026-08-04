@@ -510,13 +510,31 @@ static func _min_clearance_to_ring(point: Vector2, ring_positions: Dictionary) -
 		best = min(best, point.distance_to(p))
 	return best
 
+## Objective (revised after live testing found the original max-clearance
+## objective produces visually chaotic, flung-out chains): among all
+## candidates that CLEAR the collision threshold, prefer the one with
+## the SMALLEST deviation from the natural (real) direction and distance
+## -- a minimal, chemically-plausible-looking placement, not the most
+## extreme one the search window allows. Falls back to the old max-
+## clearance candidate only when nothing in the window clears the
+## threshold at all (the genuinely-hard case this project already
+## documents as an accepted open residual, not silently degraded
+## further). Deviation is an unweighted sum of angular offset (degrees)
+## and radial overshoot beyond bond_length -- both real, comparable
+## "how far from natural" measures, left unweighted deliberately (no
+## tuned relative-importance constant to justify without more data than
+## this project currently has). Matches diagnosis/diag_self_paired_bake.py's
+## search_substituent(), ported after live testing (not part of the
+## original brief).
 static func _search_substituent(start_pos: Vector2, natural_dir: Vector2, ring_positions: Dictionary, bond_length: float, real_neighbor_distance: float, collision_clearance_threshold: float) -> Dictionary:
 	if natural_dir.length() <= 0.0:
 		return {}
 	var natural_angle: float = natural_dir.angle()
 	var max_safe_reach: float = max(bond_length, real_neighbor_distance * 0.5 - collision_clearance_threshold)
-	var best: Dictionary = {}
-	var best_clearance: float = -INF
+	var best_clearing: Dictionary = {}
+	var best_clearing_deviation: float = INF
+	var best_overall: Dictionary = {}
+	var best_overall_clearance: float = -INF
 	var steps: int = int(SUBSTITUENT_SEARCH_HALF_WINDOW_DEG / SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
 	for i in range(-steps, steps + 1):
 		var angle: float = natural_angle + deg_to_rad(i * SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
@@ -525,10 +543,16 @@ static func _search_substituent(start_pos: Vector2, natural_dir: Vector2, ring_p
 			var dist: float = bond_length + (max_safe_reach - bond_length) * (float(j) / float(SUBSTITUENT_SEARCH_DIST_STEPS))
 			var point: Vector2 = start_pos + direction * dist
 			var clearance: float = _min_clearance_to_ring(point, ring_positions)
-			if clearance > best_clearance:
-				best_clearance = clearance
-				best = {point = point, direction = direction, dist = dist, clearance = clearance}
-	return best
+			var candidate: Dictionary = {point = point, direction = direction, dist = dist, clearance = clearance}
+			var deviation: float = abs(i * SUBSTITUENT_SEARCH_ANGLE_STEP_DEG) + abs(dist - bond_length)
+			if clearance >= collision_clearance_threshold:
+				if deviation < best_clearing_deviation:
+					best_clearing_deviation = deviation
+					best_clearing = candidate
+			if clearance > best_overall_clearance:
+				best_overall_clearance = clearance
+				best_overall = candidate
+	return best_clearing if not best_clearing.is_empty() else best_overall
 
 ## The single public entry point for this whole bake (docs/
 ## MolecularStructureDesign.md, "Self-paired geometry is baked once per
