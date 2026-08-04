@@ -43,11 +43,6 @@ const BULGE_DOT_MARGIN_DEG: float = 5.0
 ## template work (docs/superpowers/specs/2026-08-03-self-paired-chain-
 ## collision-fix-design.md).
 const COLLISION_CLEARANCE_THRESHOLD: float = 12.0
-## Confirmed against real fixture data in diagnosis/diag_chain_ring_
-## clearance_fix.py's Task 2: the real maximum reach needed across all
-## three sampled fixtures was 2.62x bond_length; this is that plus a
-## small safety margin.
-const CHAIN_EXTENSION_STRETCH_CAP_RATIO: float = 2.7
 
 ## Bug W (docs/MolecularStructure_BasePairExpansion.md) —
 ## resolve_self_paired_ring_rotation()'s search. Unlike NitrogenBaseDeriver's
@@ -160,22 +155,30 @@ static func derive_ring(topology: MoleculeTopology, role_prefix: String, bond_le
 	return NitrogenBaseDeriver.derive_regular_ring(topology, RING_ROLE_SUFFIXES, role_prefix, bond_length, -PI / 2.0, reverse)
 
 ## Tier 2 (docs/superpowers/plans/2026-08-03-self-paired-chain-collision-fix.md,
-## Task 3): smallest distance >= bond_length along the UNCHANGED real
-## direction `dir_hat` that clears every atom in `ring_positions` by
-## COLLISION_CLEARANCE_THRESHOLD, capped at CHAIN_EXTENSION_STRETCH_CAP_RATIO
-## * bond_length. Never changes direction -- only how far along the already-
-## correct real direction the substituent sits, so this cannot desync from
-## the real inter-residue backbone bond the way every previously-attempted
-## fix for this same collision did (docs/MolecularStructure_BasePairExpansion.md,
-## Bug V/W's four independently-failed attempts, plus this project's own
-## angle-substitution attempt, all reverted for exactly that reason).
-## NOTE: the loop below includes every atom in `ring_positions`, including
-## the substituent's own anchor atom (e.g. C3' itself, when computing O3''s
-## reach) -- that atom's `rel` is (0,0), so `h_sq` is 0, which trivially
-## forces `best >= COLLISION_CLEARANCE_THRESHOLD` as a side effect. Harmless/
-## intended here because COLLISION_CLEARANCE_THRESHOLD > bond_length, but
-## noted so a future reader doesn't mistake it for a bug.
-static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_positions: Dictionary, bond_length: float) -> float:
+## Task 3, revised after a critical live-testing finding): smallest
+## distance >= bond_length along the UNCHANGED real direction `dir_hat`
+## that clears every atom in `ring_positions` by
+## COLLISION_CLEARANCE_THRESHOLD, capped so it can never reach past
+## roughly the halfway point to the real same-strand neighbor
+## (real_neighbor_distance = length of the real, UNnormalized
+## toward_next/toward_previous vector) minus a
+## COLLISION_CLEARANCE_THRESHOLD-sized safety margin -- grounded in the
+## real live neighbor distance, not an arbitrary bond-length multiplier,
+## so this scales correctly regardless of what slot spacing/bond_length
+## ratio a given scene uses. Found via live testing: the old flat
+## bond_length-ratio cap let the chain reach 55.1 units when the real
+## neighbor was only 54.0 units away -- a real, visible inter-residue
+## collision (confirmed: one residue's alpha-phosphate landed 6.46 units
+## from the NEXT residue's own O4' atom, well under threshold) that the
+## old same-residue-only cap had no way to prevent. Trade-off: may leave
+## some same-ring collision unresolved in tight cases (accepted, per this
+## project's established "document the limit, don't chase it further"
+## pattern) in exchange for guaranteeing zero inter-residue collision.
+## Never changes direction -- only how far along the already-correct real
+## direction the substituent sits, so this cannot desync from the real
+## inter-residue backbone bond the way every previously-attempted fix for
+## the original collision did.
+static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_positions: Dictionary, bond_length: float, real_neighbor_distance: float) -> float:
 	var best: float = bond_length
 	var threshold_sq: float = COLLISION_CLEARANCE_THRESHOLD * COLLISION_CLEARANCE_THRESHOLD
 	for p in ring_positions.values():
@@ -189,7 +192,8 @@ static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_pos
 			continue
 		var reach: float = sqrt(threshold_sq - h_sq)
 		best = max(best, a + reach)
-	return min(best, bond_length * CHAIN_EXTENSION_STRETCH_CAP_RATIO)
+	var max_safe_reach: float = max(bond_length, real_neighbor_distance * 0.5 - COLLISION_CLEARANCE_THRESHOLD)
+	return min(best, max_safe_reach)
 
 ## Substituent positions (5'-CH2-phosphate chain's first atom, 3'-OH),
 ## merged into the same local frame as derive_ring()'s output — the
@@ -246,7 +250,7 @@ static func derive_substituents(topology: MoleculeTopology, role_prefix: String,
 		var outward: Vector2 = toward_next.normalized() if toward_next.length() > 0.0 else c3_pos.normalized()
 		var reach: float = bond_length
 		if is_self_paired_template and toward_next.length() > 0.0:
-			reach = _required_chain_reach(c3_pos, outward, ring_positions, bond_length)
+			reach = _required_chain_reach(c3_pos, outward, ring_positions, bond_length, toward_next.length())
 		positions[o3_id] = c3_pos + outward * reach
 
 	var c4_id: int = topology.find_by_role(role_prefix + "c4_prime")
@@ -256,7 +260,7 @@ static func derive_substituents(topology: MoleculeTopology, role_prefix: String,
 		var outward: Vector2 = toward_previous.normalized() if toward_previous.length() > 0.0 else c4_pos.normalized()
 		var reach: float = bond_length
 		if is_self_paired_template and toward_previous.length() > 0.0:
-			reach = _required_chain_reach(c4_pos, outward, ring_positions, bond_length)
+			reach = _required_chain_reach(c4_pos, outward, ring_positions, bond_length, toward_previous.length())
 		var c5_pos: Vector2 = c4_pos + outward * reach
 		positions[c5_id] = c5_pos
 
