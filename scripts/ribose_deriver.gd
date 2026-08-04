@@ -159,52 +159,6 @@ static func build_incoming_nucleotide_seed(role_prefix: String = "incoming.", ba
 static func derive_ring(topology: MoleculeTopology, role_prefix: String, bond_length: float, reverse: bool = false) -> Dictionary:
 	return NitrogenBaseDeriver.derive_regular_ring(topology, RING_ROLE_SUFFIXES, role_prefix, bond_length, -PI / 2.0, reverse)
 
-## Tier 2 (docs/superpowers/plans/2026-08-03-self-paired-chain-collision-fix.md,
-## Task 3, revised after a critical live-testing finding): smallest
-## distance >= bond_length along the UNCHANGED real direction `dir_hat`
-## that clears every atom in `ring_positions` by
-## `collision_clearance_threshold`, capped so it can never reach past
-## roughly the halfway point to the real same-strand neighbor
-## (real_neighbor_distance = length of the real, UNnormalized
-## toward_next/toward_previous vector) minus a
-## `collision_clearance_threshold`-sized safety margin -- grounded in the
-## real live neighbor distance, not an arbitrary bond-length multiplier,
-## so this scales correctly regardless of what slot spacing/bond_length
-## ratio a given scene uses. Found via live testing: the old flat
-## bond_length-ratio cap let the chain reach 55.1 units when the real
-## neighbor was only 54.0 units away -- a real, visible inter-residue
-## collision (confirmed: one residue's alpha-phosphate landed 6.46 units
-## from the NEXT residue's own O4' atom, well under threshold) that the
-## old same-residue-only cap had no way to prevent. Trade-off: may leave
-## some same-ring collision unresolved in tight cases (accepted, per this
-## project's established "document the limit, don't chase it further"
-## pattern) in exchange for guaranteeing zero inter-residue collision.
-## `collision_clearance_threshold` is passed in by the caller (derived
-## from the real molecular_atom_radius via COLLISION_CLEARANCE_RATIO,
-## same pattern as bond_length) rather than read from a module constant,
-## after live testing found a stale hardcoded threshold silently drifted
-## out of sync with the real scene's theme override (see
-## COLLISION_CLEARANCE_RATIO's doc comment). Never changes direction --
-## only how far along the already-correct real direction the substituent
-## sits, so this cannot desync from the real inter-residue backbone bond
-## the way every previously-attempted fix for the original collision did.
-static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_positions: Dictionary, bond_length: float, real_neighbor_distance: float, collision_clearance_threshold: float) -> float:
-	var best: float = bond_length
-	var threshold_sq: float = collision_clearance_threshold * collision_clearance_threshold
-	for p in ring_positions.values():
-		var rel: Vector2 = p - start_pos
-		var a: float = rel.dot(dir_hat)
-		var h_sq: float = max(0.0, rel.length_squared() - a * a)
-		if h_sq >= threshold_sq:
-			continue
-		var current_dist_sq: float = (bond_length - a) * (bond_length - a) + h_sq
-		if current_dist_sq >= threshold_sq:
-			continue
-		var reach: float = sqrt(threshold_sq - h_sq)
-		best = max(best, a + reach)
-	var max_safe_reach: float = max(bond_length, real_neighbor_distance * 0.5 - collision_clearance_threshold)
-	return min(best, max_safe_reach)
-
 ## Substituent positions (5'-CH2-phosphate chain's first atom, 3'-OH),
 ## merged into the same local frame as derive_ring()'s output — the
 ## backbone (ring) stays anchored; substituents hang off it at derived
@@ -245,9 +199,8 @@ static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_pos
 ## Only when BOTH sides are missing (a fully isolated residue — should not
 ## occur in practice) does this still fall back to the ring's own raw
 ## vertex direction, the original fallback shape.
-static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float, toward_next: Vector2 = Vector2.ZERO, toward_previous: Vector2 = Vector2.ZERO, is_self_paired_template: bool = false, molecular_atom_radius: float = 6.0) -> Dictionary:
+static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float, toward_next: Vector2 = Vector2.ZERO, toward_previous: Vector2 = Vector2.ZERO) -> Dictionary:
 	var positions: Dictionary = {}
-	var collision_clearance_threshold: float = COLLISION_CLEARANCE_RATIO * molecular_atom_radius
 
 	if toward_next.length() <= 0.0 and toward_previous.length() > 0.0:
 		toward_next = -toward_previous
@@ -259,20 +212,14 @@ static func derive_substituents(topology: MoleculeTopology, role_prefix: String,
 	if c3_id != -1 and o3_id != -1 and ring_positions.has(c3_id):
 		var c3_pos: Vector2 = ring_positions[c3_id]
 		var outward: Vector2 = toward_next.normalized() if toward_next.length() > 0.0 else c3_pos.normalized()
-		var reach: float = bond_length
-		if is_self_paired_template and toward_next.length() > 0.0:
-			reach = _required_chain_reach(c3_pos, outward, ring_positions, bond_length, toward_next.length(), collision_clearance_threshold)
-		positions[o3_id] = c3_pos + outward * reach
+		positions[o3_id] = c3_pos + outward * bond_length
 
 	var c4_id: int = topology.find_by_role(role_prefix + "c4_prime")
 	var c5_id: int = topology.find_by_role(role_prefix + "c5_prime")
 	if c4_id != -1 and c5_id != -1 and ring_positions.has(c4_id):
 		var c4_pos: Vector2 = ring_positions[c4_id]
 		var outward: Vector2 = toward_previous.normalized() if toward_previous.length() > 0.0 else c4_pos.normalized()
-		var reach: float = bond_length
-		if is_self_paired_template and toward_previous.length() > 0.0:
-			reach = _required_chain_reach(c4_pos, outward, ring_positions, bond_length, toward_previous.length(), collision_clearance_threshold)
-		var c5_pos: Vector2 = c4_pos + outward * reach
+		var c5_pos: Vector2 = c4_pos + outward * bond_length
 		positions[c5_id] = c5_pos
 
 		var o5_id: int = topology.find_by_role(role_prefix + "o5_prime")
@@ -329,6 +276,136 @@ static func _rotate_180(local_positions: Dictionary, pivot: Vector2) -> Dictiona
 		rotated[id] = 2.0 * pivot - local_positions[id]
 	return rotated
 
+## Self-paired geometry bake, Stage 1: ring construction (docs/
+## MolecularStructureDesign.md, "Self-paired geometry is baked once per
+## residue, not recomputed live", 2026-08-04). Reuses the proven Tier 1
+## rotation unchanged, then sweeps an elbow-flex angle (the revived
+## abandoned "1b" idea) around the natural joint angle, widening Gelbin
+## tolerance only as far as diagnosis/diag_self_paired_bake.py's real run
+## found necessary. Bake-time only -- called at most once per residue,
+## never per frame, so a real search budget is available here that was
+## never available to the retired live formula.
+const ELBOW_SEARCH_HALF_WINDOW_DEG: float = 40.0
+const ELBOW_SEARCH_STEP_DEG: float = 1.0
+const GELBIN_RING_INTERNAL_SIGMA_DEG: Dictionary = {"c3_prime": 1.0, "c4_prime": 1.0, "o4_prime": 1.4}
+const REGULAR_PENTAGON_INTERIOR_DEG: float = 108.0
+## Sigma multiples tried in order until one yields a valid candidate --
+## confirmed against diagnosis/diag_self_paired_bake.py's real run before
+## this port; update this list if that harness found different widths
+## necessary.
+const TOLERANCE_WIDEN_STEPS: Array[float] = [2.0, 3.0, 4.0, 6.0, 8.0]
+
+static func _angle_at(prev_pt: Vector2, vertex_pt: Vector2, next_pt: Vector2) -> float:
+	var v1: Vector2 = (prev_pt - vertex_pt).normalized()
+	var v2: Vector2 = (next_pt - vertex_pt).normalized()
+	return rad_to_deg(acos(clamp(v1.dot(v2), -1.0, 1.0)))
+
+static func _within_gelbin_delta(vertex_suffix: String, measured_deg: float, sigma_multiple: float) -> bool:
+	var sigma: float = GELBIN_RING_INTERNAL_SIGMA_DEG[vertex_suffix]
+	return abs(measured_deg - REGULAR_PENTAGON_INTERIOR_DEG) <= sigma_multiple * sigma
+
+static func _signed_area(points_in_order: Array) -> float:
+	var s: float = 0.0
+	var n: int = points_in_order.size()
+	for i in range(n):
+		var p1: Vector2 = points_in_order[i]
+		var p2: Vector2 = points_in_order[(i + 1) % n]
+		s += p1.x * p2.y - p2.x * p1.y
+	return 0.5 * s
+
+static func _elbow_candidate(a_fixed: Vector2, b_fixed: Vector2, link_len: float, alpha: float, prefer_near: Vector2) -> Array:
+	var d_ab: float = a_fixed.distance_to(b_fixed)
+	if d_ab <= 0.0 or d_ab > 3.0 * link_len:
+		return []
+	var u: Vector2 = (b_fixed - a_fixed).normalized()
+	var v: Vector2 = u.orthogonal()
+	var c3: Vector2 = a_fixed + u * (link_len * cos(alpha)) + v * (link_len * sin(alpha))
+	var d: float = c3.distance_to(b_fixed)
+	if d > 2.0 * link_len or d <= 0.0:
+		return []
+	var a_dist: float = d / 2.0
+	var h_sq: float = link_len * link_len - a_dist * a_dist
+	if h_sq < 0.0:
+		return []
+	var h: float = sqrt(h_sq)
+	var mid: Vector2 = (c3 + b_fixed) * 0.5
+	var perp: Vector2 = (b_fixed - c3).normalized().orthogonal()
+	var cand1: Vector2 = mid + perp * h
+	var cand2: Vector2 = mid - perp * h
+	var c4: Vector2 = cand1 if cand1.distance_to(prefer_near) <= cand2.distance_to(prefer_near) else cand2
+	return [c3, c4]
+
+## Stage 1 result dictionary keys: "ring" (Dictionary, atom id -> Vector2),
+## "theta" (float, radians). Returns {} (empty) if no candidate was found
+## at any tolerance width tried -- the caller (Stage 2 / the bake
+## orchestrator) must handle this as the documented stop-condition case,
+## not assume a result.
+static func _search_self_paired_ring(topology: MoleculeTopology, role_prefix: String, natural_ring_positions: Dictionary, pivot: Vector2, pairing_direction: Vector2, bond_length: float, toward_next: Vector2, toward_previous: Vector2) -> Dictionary:
+	var rotated_ring: Dictionary = derive_self_paired_ring_rotation_only(topology, role_prefix, natural_ring_positions, pivot, pairing_direction, bond_length, toward_next, toward_previous)
+	var c2_id: int = topology.find_by_role(role_prefix + "c2_prime")
+	var c3_id: int = topology.find_by_role(role_prefix + "c3_prime")
+	var c4_id: int = topology.find_by_role(role_prefix + "c4_prime")
+	var o4_id: int = topology.find_by_role(role_prefix + "o4_prime")
+	var c1: Vector2 = rotated_ring[topology.find_by_role(role_prefix + "c1_prime")]
+	var c2: Vector2 = rotated_ring[c2_id]
+	var o4: Vector2 = rotated_ring[o4_id]
+	var natural_c3: Vector2 = rotated_ring[c3_id]
+	var natural_c4: Vector2 = rotated_ring[c4_id]
+	## alpha0 must be expressed RELATIVE to the local (u, v) basis
+	## _elbow_candidate() builds internally (u = (b_fixed - a_fixed)
+	## .normalized(), v = u.orthogonal()), not as Vector2.angle()'s
+	## absolute world/local angle -- confirmed in
+	## diagnosis/diag_self_paired_bake.py (commit 2135685): the naive
+	## absolute-angle version put alpha0 off by ~36 degrees against the
+	## +/-40 degree elbow search window, failing the Gelbin tolerance
+	## check for every candidate across all three real fixtures.
+	var u0: Vector2 = (o4 - c2).normalized()
+	var v0: Vector2 = u0.orthogonal()
+	var rel_c3: Vector2 = natural_c3 - c2
+	var alpha0: float = atan2(rel_c3.dot(v0), rel_c3.dot(u0))
+
+	var canonical_order: Array = [natural_ring_positions[topology.find_by_role(role_prefix + "c1_prime")], natural_ring_positions[c2_id], natural_ring_positions[c3_id], natural_ring_positions[c4_id], natural_ring_positions[o4_id]]
+	var canonical_sign_positive: bool = _signed_area(canonical_order) > 0.0
+
+	for sigma_mult in TOLERANCE_WIDEN_STEPS:
+		var best: Dictionary = {}
+		var best_spread: float = -INF
+		var steps: int = int(ELBOW_SEARCH_HALF_WINDOW_DEG / ELBOW_SEARCH_STEP_DEG)
+		for i in range(-steps, steps + 1):
+			var alpha: float = alpha0 + deg_to_rad(i * ELBOW_SEARCH_STEP_DEG)
+			var candidate: Array = _elbow_candidate(c2, o4, bond_length, alpha, natural_c4)
+			if candidate.is_empty():
+				continue
+			var c3: Vector2 = candidate[0]
+			var c4: Vector2 = candidate[1]
+			if not _within_gelbin_delta("c3_prime", _angle_at(c2, c3, c4), sigma_mult):
+				continue
+			if not _within_gelbin_delta("c4_prime", _angle_at(c3, c4, o4), sigma_mult):
+				continue
+			if not _within_gelbin_delta("o4_prime", _angle_at(c4, o4, c1), sigma_mult):
+				continue
+			var ring_now: Dictionary = {topology.find_by_role(role_prefix + "c1_prime"): c1, c2_id: c2, c3_id: c3, c4_id: c4, o4_id: o4}
+			var order_now: Array = [c1, c2, c3, c4, o4]
+			if (_signed_area(order_now) > 0.0) != canonical_sign_positive:
+				continue
+			var bulge_dot: float = _bulge_vs_pairing_dot(ring_now, c1, c2_id, c3_id, c4_id, o4_id, pairing_direction)
+			if bulge_dot > -0.05:
+				continue
+			var spread: float = c3.distance_to(c1) + c4.distance_to(c1)
+			if spread > best_spread:
+				best_spread = spread
+				best = ring_now
+		if not best.is_empty():
+			return best
+	return {}
+
+static func _bulge_vs_pairing_dot(ring: Dictionary, c1: Vector2, c2_id: int, c3_id: int, c4_id: int, o4_id: int, pairing_direction: Vector2) -> float:
+	var bulge: Vector2 = (ring[c2_id] + ring[c3_id] + ring[c4_id] + ring[o4_id]) * 0.25
+	var bulge_vec: Vector2 = bulge - c1
+	if bulge_vec.length() <= 0.0 or pairing_direction.length() <= 0.0:
+		return 0.0
+	return bulge_vec.normalized().dot(pairing_direction.normalized())
+
 ## Self-paired ring construction, Tier 1 (docs/superpowers/plans/
 ## 2026-08-03-self-paired-chain-collision-fix.md, Task 3) -- replaces the
 ## binary 0/180-degree choice (Branch B / 1a) with a closed-form continuous
@@ -337,6 +414,10 @@ static func _rotate_180(local_positions: Dictionary, pivot: Vector2) -> Dictiona
 ## same proof as the version it replaces -- no new tolerance/signed-area
 ## check needed. Verified against real fixture data in
 ## diagnosis/diag_chain_ring_clearance_fix.py before this port.
+## Kept as a small private helper -- Stage 1 (_search_self_paired_ring()
+## above) calls this to get the rigid-rotated starting point before
+## flexing C3'/C4' individually. No longer called directly from outside
+## this file; bake_self_paired_geometry() is the public entry point now.
 ##
 ## Two real constraints, both derived from the SAME rotation angle:
 ## 1. Bulge-away-from-partner (existing goal, unchanged): the ring's own
@@ -351,7 +432,7 @@ static func _rotate_180(local_positions: Dictionary, pivot: Vector2) -> Dictiona
 ## it exactly. If not, clamp to the nearest arc edge -- continuous in the
 ## real inputs, so this does not reproduce the discrete-candidate-jump
 ## flicker that got the old 72-step search reverted.
-static func derive_self_paired_ring(topology: MoleculeTopology, role_prefix: String, natural_ring_positions: Dictionary, pivot: Vector2, pairing_direction: Vector2, bond_length: float, toward_next: Vector2, toward_previous: Vector2) -> Dictionary:
+static func derive_self_paired_ring_rotation_only(topology: MoleculeTopology, role_prefix: String, natural_ring_positions: Dictionary, pivot: Vector2, pairing_direction: Vector2, bond_length: float, toward_next: Vector2, toward_previous: Vector2) -> Dictionary:
 	if pairing_direction.length() <= 0.0:
 		return natural_ring_positions
 
@@ -410,4 +491,92 @@ static func derive_self_paired_ring(topology: MoleculeTopology, role_prefix: Str
 	for id in natural_ring_positions:
 		result[id] = pivot + (natural_ring_positions[id] - pivot).rotated(theta)
 	return result
+
+## Self-paired geometry bake, Stage 2 (docs/MolecularStructureDesign.md,
+## same entry as Stage 1 above): O3'/C5' direction AND distance searched
+## jointly, centered on and bounded around the real toward_next/
+## toward_previous direction -- never able to point at the wrong
+## neighbor, per this project's hard-won constraint from four
+## independently-failed prior attempts (docs/MolecularStructure_
+## BasePairExpansion.md, Bug V/W). Bake-time only, same as Stage 1.
+const SUBSTITUENT_SEARCH_HALF_WINDOW_DEG: float = 90.0
+const SUBSTITUENT_SEARCH_ANGLE_STEP_DEG: float = 3.0
+const SUBSTITUENT_SEARCH_DIST_STEPS: int = 6
+
+static func _min_clearance_to_ring(point: Vector2, ring_positions: Dictionary) -> float:
+	var best: float = INF
+	for p in ring_positions.values():
+		best = min(best, point.distance_to(p))
+	return best
+
+static func _search_substituent(start_pos: Vector2, natural_dir: Vector2, ring_positions: Dictionary, bond_length: float, real_neighbor_distance: float, collision_clearance_threshold: float) -> Dictionary:
+	if natural_dir.length() <= 0.0:
+		return {}
+	var natural_angle: float = natural_dir.angle()
+	var max_safe_reach: float = max(bond_length, real_neighbor_distance * 0.5 - collision_clearance_threshold)
+	var best: Dictionary = {}
+	var best_clearance: float = -INF
+	var steps: int = int(SUBSTITUENT_SEARCH_HALF_WINDOW_DEG / SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
+	for i in range(-steps, steps + 1):
+		var angle: float = natural_angle + deg_to_rad(i * SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
+		var direction: Vector2 = Vector2(cos(angle), sin(angle))
+		for j in range(SUBSTITUENT_SEARCH_DIST_STEPS + 1):
+			var dist: float = bond_length + (max_safe_reach - bond_length) * (float(j) / float(SUBSTITUENT_SEARCH_DIST_STEPS))
+			var point: Vector2 = start_pos + direction * dist
+			var clearance: float = _min_clearance_to_ring(point, ring_positions)
+			if clearance > best_clearance:
+				best_clearance = clearance
+				best = {point = point, direction = direction, dist = dist, clearance = clearance}
+	return best
+
+## The single public entry point for this whole bake (docs/
+## MolecularStructureDesign.md, "Self-paired geometry is baked once per
+## residue, not recomputed live"). Returns {} (empty) if Stage 1 found no
+## ring candidate at any tolerance width -- the caller (the renderer's
+## cache-or-bake lookup, Task 4) must handle this as the documented
+## stop-condition case: fall back to the rigid rotation-only construction
+## (derive_self_paired_ring_rotation_only) rather than crash or render
+## nothing.
+static func bake_self_paired_geometry(topology: MoleculeTopology, role_prefix: String, bond_length: float, pairing_direction: Vector2, toward_next: Vector2, toward_previous: Vector2, real_neighbor_distance_next: float, real_neighbor_distance_previous: float, molecular_atom_radius: float) -> Dictionary:
+	var natural_ring: Dictionary = derive_ring(topology, role_prefix, bond_length)
+	var pivot: Vector2 = natural_ring[topology.find_by_role(role_prefix + "c1_prime")]
+	var ring_positions: Dictionary = _search_self_paired_ring(topology, role_prefix, natural_ring, pivot, pairing_direction, bond_length, toward_next, toward_previous)
+	if ring_positions.is_empty():
+		ring_positions = derive_self_paired_ring_rotation_only(topology, role_prefix, natural_ring, pivot, pairing_direction, bond_length, toward_next, toward_previous)
+
+	var collision_clearance_threshold: float = COLLISION_CLEARANCE_RATIO * molecular_atom_radius
+
+	var c3_id: int = topology.find_by_role(role_prefix + "c3_prime")
+	var c4_id: int = topology.find_by_role(role_prefix + "c4_prime")
+	var tn: Vector2 = toward_next
+	var tp: Vector2 = toward_previous
+	if tn.length() <= 0.0 and tp.length() > 0.0:
+		tn = -tp
+	elif tp.length() <= 0.0 and tn.length() > 0.0:
+		tp = -tn
+
+	var substituent_positions: Dictionary = derive_substituents(topology, role_prefix, ring_positions, bond_length, toward_next, toward_previous)
+	if ring_positions.has(c3_id) and tn.length() > 0.0:
+		var o3_id: int = topology.find_by_role(role_prefix + "o3_prime")
+		var o3_result: Dictionary = _search_substituent(ring_positions[c3_id], tn, ring_positions, bond_length, real_neighbor_distance_next, collision_clearance_threshold)
+		if not o3_result.is_empty():
+			substituent_positions[o3_id] = o3_result.point
+	if ring_positions.has(c4_id) and tp.length() > 0.0:
+		var c5_id: int = topology.find_by_role(role_prefix + "c5_prime")
+		var c5_result: Dictionary = _search_substituent(ring_positions[c4_id], tp, ring_positions, bond_length, real_neighbor_distance_previous, collision_clearance_threshold)
+		if not c5_result.is_empty():
+			# O5'/alpha-phosphate continue chained from the searched C5' in
+			# its own found direction, same bond_length increments as
+			# derive_substituents() already applies -- recomputed here since
+			# C5' itself moved.
+			var o5_id: int = topology.find_by_role(role_prefix + "o5_prime")
+			var alpha_id: int = topology.find_by_role(role_prefix + "alpha_phosphate")
+			substituent_positions[c5_id] = c5_result.point
+			if o5_id != -1:
+				var o5_pos: Vector2 = c5_result.point + c5_result.direction * bond_length
+				substituent_positions[o5_id] = o5_pos
+				if alpha_id != -1:
+					substituent_positions[alpha_id] = o5_pos + c5_result.direction * bond_length
+
+	return {ring_positions = ring_positions, substituent_positions = substituent_positions}
 

@@ -110,6 +110,23 @@ var _fold_cache: Dictionary = {}  # "leading:12" -> MoleculeTopology
 func clear_fold_cache() -> void:
 	_fold_cache.clear()
 
+## "strand:slot" -> {ring_positions: Dictionary, substituent_positions: Dictionary}
+## (RiboseDeriver.bake_self_paired_geometry()'s return shape). Computed
+## once per residue, on first encounter while self-paired, never
+## recomputed after -- same convention as _fold_cache, now extended to
+## LOCAL GEOMETRY for this one render state (docs/MolecularStructureDesign.md,
+## "Self-paired geometry is baked once per residue, not recomputed live").
+var _self_paired_geometry_cache: Dictionary = {}
+
+## Named, callable invalidation seam for future work this cache does not
+## yet need to know about (an unbound/exposed phosphate at a ligase site,
+## distinct polymerase-interaction geometry) -- decided at Nucleation,
+## docs/MolecularStructureDesign.md's same entry. Nothing calls this yet;
+## it exists so that future work has an obvious attachment point instead
+## of forcing a redesign of this cache.
+func invalidate_self_paired_geometry(strand: String, slot: int) -> void:
+	_self_paired_geometry_cache.erase("%s:%d" % [strand, slot])
+
 const OPERATOR_PATH: String = "res://resources/phosphodiester_bond_formation.tres"
 var _phosphodiester_operator: ReactionOperator = null
 var _operators: Array[ReactionOperator] = []  # [_phosphodiester_operator] — built once in _ready(), typed explicitly so fold()'s Array[ReactionOperator] parameter doesn't need to coerce an untyped literal every frame
@@ -503,12 +520,19 @@ func _rebuild_layout() -> void:
 		# _pair_for_slot()-fix, already confirmed clean this session) keep
 		# the exact original fixed sign, byte-identical to before.
 		var is_self_paired_template: bool = (entry.strand == "template_top" or entry.strand == "template_bottom") and partner_key.begins_with("template_")
+		var substituent_positions: Dictionary = {}
 		if is_self_paired_template:
-			ring_positions = RiboseDeriver.derive_self_paired_ring(topology, "incoming.", ring_positions, c1_local, pairing_direction, bond_length, toward_next, toward_previous)
+			var self_paired_cache_key: String = "%s:%d" % [entry.strand, entry.slot]
+			if not _self_paired_geometry_cache.has(self_paired_cache_key):
+				_self_paired_geometry_cache[self_paired_cache_key] = RiboseDeriver.bake_self_paired_geometry(topology, "incoming.", bond_length, pairing_direction, toward_next, toward_previous, position_by_key.get(more_3prime_key, world_pos).distance_to(world_pos) if position_by_key.has(more_3prime_key) else 0.0, position_by_key.get(more_5prime_key, world_pos).distance_to(world_pos) if position_by_key.has(more_5prime_key) else 0.0, tm.molecular_atom_radius)
+			var baked: Dictionary = _self_paired_geometry_cache[self_paired_cache_key]
+			ring_positions = baked.ring_positions
+			substituent_positions = baked.substituent_positions
 		else:
 			ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
 
-		var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous, is_self_paired_template, tm.molecular_atom_radius)
+		if not is_self_paired_template:
+			substituent_positions = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
 
 		var local_positions: Dictionary = {}
 		for id in ring_positions:
