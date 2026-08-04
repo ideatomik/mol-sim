@@ -31,6 +31,24 @@ const RING_ATOM_COUNT: int = 5
 ## Fixed chemical walk order — see derive_ring()'s handedness note below.
 const RING_ROLE_SUFFIXES: Array[String] = ["c1_prime", "c2_prime", "c3_prime", "c4_prime", "o4_prime"]
 
+## Keeps bulge_vs_pairing_dot comfortably negative (~-0.087) instead of
+## landing exactly on the 0.0 floating-point knife-edge -- confirmed live
+## that all three sampled fixtures saturate this clamp exactly, so this
+## margin is load-bearing, not a rare-case safeguard. Mirrors
+## diagnosis/diag_chain_ring_clearance_fix.py's BULGE_DOT_MARGIN_DEG.
+const BULGE_DOT_MARGIN_DEG: float = 5.0
+
+## 2 * molecular_atom_radius (6.0, theme_manager.gd) -- the same
+## collision-clearance target used throughout this project's self-paired-
+## template work (docs/superpowers/specs/2026-08-03-self-paired-chain-
+## collision-fix-design.md).
+const COLLISION_CLEARANCE_THRESHOLD: float = 12.0
+## Confirmed against real fixture data in diagnosis/diag_chain_ring_
+## clearance_fix.py's Task 2: the real maximum reach needed across all
+## three sampled fixtures was 2.62x bond_length; this is that plus a
+## small safety margin.
+const CHAIN_EXTENSION_STRETCH_CAP_RATIO: float = 2.7
+
 ## Bug W (docs/MolecularStructure_BasePairExpansion.md) —
 ## resolve_self_paired_ring_rotation()'s search. Unlike NitrogenBaseDeriver's
 ## BASE_ROTATION_SEARCH_WINDOW_DEG (a NARROW window bounding how far an
@@ -141,6 +159,38 @@ static func build_incoming_nucleotide_seed(role_prefix: String = "incoming.", ba
 static func derive_ring(topology: MoleculeTopology, role_prefix: String, bond_length: float, reverse: bool = false) -> Dictionary:
 	return NitrogenBaseDeriver.derive_regular_ring(topology, RING_ROLE_SUFFIXES, role_prefix, bond_length, -PI / 2.0, reverse)
 
+## Tier 2 (docs/superpowers/plans/2026-08-03-self-paired-chain-collision-fix.md,
+## Task 3): smallest distance >= bond_length along the UNCHANGED real
+## direction `dir_hat` that clears every atom in `ring_positions` by
+## COLLISION_CLEARANCE_THRESHOLD, capped at CHAIN_EXTENSION_STRETCH_CAP_RATIO
+## * bond_length. Never changes direction -- only how far along the already-
+## correct real direction the substituent sits, so this cannot desync from
+## the real inter-residue backbone bond the way every previously-attempted
+## fix for this same collision did (docs/MolecularStructure_BasePairExpansion.md,
+## Bug V/W's four independently-failed attempts, plus this project's own
+## angle-substitution attempt, all reverted for exactly that reason).
+## NOTE: the loop below includes every atom in `ring_positions`, including
+## the substituent's own anchor atom (e.g. C3' itself, when computing O3''s
+## reach) -- that atom's `rel` is (0,0), so `h_sq` is 0, which trivially
+## forces `best >= COLLISION_CLEARANCE_THRESHOLD` as a side effect. Harmless/
+## intended here because COLLISION_CLEARANCE_THRESHOLD > bond_length, but
+## noted so a future reader doesn't mistake it for a bug.
+static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_positions: Dictionary, bond_length: float) -> float:
+	var best: float = bond_length
+	var threshold_sq: float = COLLISION_CLEARANCE_THRESHOLD * COLLISION_CLEARANCE_THRESHOLD
+	for p in ring_positions.values():
+		var rel: Vector2 = p - start_pos
+		var a: float = rel.dot(dir_hat)
+		var h_sq: float = max(0.0, rel.length_squared() - a * a)
+		if h_sq >= threshold_sq:
+			continue
+		var current_dist_sq: float = (bond_length - a) * (bond_length - a) + h_sq
+		if current_dist_sq >= threshold_sq:
+			continue
+		var reach: float = sqrt(threshold_sq - h_sq)
+		best = max(best, a + reach)
+	return min(best, bond_length * CHAIN_EXTENSION_STRETCH_CAP_RATIO)
+
 ## Substituent positions (5'-CH2-phosphate chain's first atom, 3'-OH),
 ## merged into the same local frame as derive_ring()'s output — the
 ## backbone (ring) stays anchored; substituents hang off it at derived
@@ -181,7 +231,7 @@ static func derive_ring(topology: MoleculeTopology, role_prefix: String, bond_le
 ## Only when BOTH sides are missing (a fully isolated residue — should not
 ## occur in practice) does this still fall back to the ring's own raw
 ## vertex direction, the original fallback shape.
-static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float, toward_next: Vector2 = Vector2.ZERO, toward_previous: Vector2 = Vector2.ZERO) -> Dictionary:
+static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float, toward_next: Vector2 = Vector2.ZERO, toward_previous: Vector2 = Vector2.ZERO, is_self_paired_template: bool = false) -> Dictionary:
 	var positions: Dictionary = {}
 
 	if toward_next.length() <= 0.0 and toward_previous.length() > 0.0:
@@ -194,14 +244,20 @@ static func derive_substituents(topology: MoleculeTopology, role_prefix: String,
 	if c3_id != -1 and o3_id != -1 and ring_positions.has(c3_id):
 		var c3_pos: Vector2 = ring_positions[c3_id]
 		var outward: Vector2 = toward_next.normalized() if toward_next.length() > 0.0 else c3_pos.normalized()
-		positions[o3_id] = c3_pos + outward * bond_length
+		var reach: float = bond_length
+		if is_self_paired_template and toward_next.length() > 0.0:
+			reach = _required_chain_reach(c3_pos, outward, ring_positions, bond_length)
+		positions[o3_id] = c3_pos + outward * reach
 
 	var c4_id: int = topology.find_by_role(role_prefix + "c4_prime")
 	var c5_id: int = topology.find_by_role(role_prefix + "c5_prime")
 	if c4_id != -1 and c5_id != -1 and ring_positions.has(c4_id):
 		var c4_pos: Vector2 = ring_positions[c4_id]
 		var outward: Vector2 = toward_previous.normalized() if toward_previous.length() > 0.0 else c4_pos.normalized()
-		var c5_pos: Vector2 = c4_pos + outward * bond_length
+		var reach: float = bond_length
+		if is_self_paired_template and toward_previous.length() > 0.0:
+			reach = _required_chain_reach(c4_pos, outward, ring_positions, bond_length)
+		var c5_pos: Vector2 = c4_pos + outward * reach
 		positions[c5_id] = c5_pos
 
 		var o5_id: int = topology.find_by_role(role_prefix + "o5_prime")
@@ -258,26 +314,66 @@ static func _rotate_180(local_positions: Dictionary, pivot: Vector2) -> Dictiona
 		rotated[id] = 2.0 * pivot - local_positions[id]
 	return rotated
 
-## Self-paired ring rotation (1a, replacing the deleted search --
-## docs/superpowers/plans/2026-08-03-template-strand-self-paired-rendering.md
-## Task 5/6, Branch B: diagnosis/diag_self_paired_construction.py found no
-## elbow-construction candidate within the Gelbin +/-2 sigma window that
-## simultaneously cleared COLLISION_THRESHOLD -- the stop condition named in
-## the design doc fired, and this ships instead. Flicker is fixed
-## (deterministic, no search); the chain/ring collision (baseline ~2.5-2.9,
-## vs. the desired 12.0) is NOT fixed by this branch and remains open --
-## see docs/superpowers/specs/2026-08-03-template-strand-self-paired-rendering-design.md.
+## Self-paired ring construction, Tier 1 (docs/superpowers/plans/
+## 2026-08-03-self-paired-chain-collision-fix.md, Task 3) -- replaces the
+## binary 0/180-degree choice (Branch B / 1a) with a closed-form continuous
+## rotation angle. Still a RIGID rotation of the whole natural ring (never
+## flexes C3'/C4' individually), so it is chirality-safe by construction,
+## same proof as the version it replaces -- no new tolerance/signed-area
+## check needed. Verified against real fixture data in
+## diagnosis/diag_chain_ring_clearance_fix.py before this port.
+##
+## Two real constraints, both derived from the SAME rotation angle:
+## 1. Bulge-away-from-partner (existing goal, unchanged): the ring's own
+##    bulge (a fixed direction in its unrotated frame) must face away from
+##    the real partner (pairing_direction) -- a ~180-degree-wide feasible
+##    arc, centered on theta_center below.
+## 2. Chain-clearance (new): the ring's own C3'-C4' bond should point away
+##    from the strand's real forward direction (blended from toward_next
+##    and -toward_previous -- these agree in the common straight-strand
+##    case, so a single angle can satisfy both O3' and C5' at once there).
+## If the ideal chain-clearance angle falls inside the bulge-away arc, use
+## it exactly. If not, clamp to the nearest arc edge -- continuous in the
+## real inputs, so this does not reproduce the discrete-candidate-jump
+## flicker that got the old 72-step search reverted.
 static func derive_self_paired_ring(topology: MoleculeTopology, role_prefix: String, natural_ring_positions: Dictionary, pivot: Vector2, pairing_direction: Vector2, bond_length: float, toward_next: Vector2, toward_previous: Vector2) -> Dictionary:
 	if pairing_direction.length() <= 0.0:
 		return natural_ring_positions
+
 	var c2_id: int = topology.find_by_role(role_prefix + "c2_prime")
 	var c3_id: int = topology.find_by_role(role_prefix + "c3_prime")
 	var c4_id: int = topology.find_by_role(role_prefix + "c4_prime")
 	var o4_id: int = topology.find_by_role(role_prefix + "o4_prime")
+
 	var bulge: Vector2 = (natural_ring_positions[c2_id] + natural_ring_positions[c3_id] + natural_ring_positions[c4_id] + natural_ring_positions[o4_id]) * 0.25
 	var bulge_vec: Vector2 = bulge - pivot
-	if bulge_vec.length() <= 0.0:
-		return natural_ring_positions
-	var facing: float = bulge_vec.normalized().dot(pairing_direction.normalized())
-	return apply_strand_direction(natural_ring_positions, pivot, -1.0 if facing > 0.0 else 1.0)
+	var pairing_hat: Vector2 = pairing_direction.normalized()
+	var arc_target: Vector2 = -pairing_hat
+	var theta_center: float = bulge_vec.angle_to(arc_target)
+
+	var ring_bond_dir0: Vector2 = (natural_ring_positions[c4_id] - natural_ring_positions[c3_id]).normalized()
+
+	var tn: Vector2 = toward_next
+	var tp: Vector2 = toward_previous
+	if tn.length() <= 0.0 and tp.length() > 0.0:
+		tn = -tp
+	elif tp.length() <= 0.0 and tn.length() > 0.0:
+		tp = -tn
+
+	var theta: float = theta_center
+	if tn.length() > 0.0 or tp.length() > 0.0:
+		var tn_hat: Vector2 = tn.normalized() if tn.length() > 0.0 else Vector2.ZERO
+		var tp_hat: Vector2 = tp.normalized() if tp.length() > 0.0 else Vector2.ZERO
+		var forward: Vector2 = tn_hat - tp_hat
+		if forward.length() > 0.0:
+			var target_ring_bond_dir: Vector2 = -forward.normalized()
+			var theta_ideal: float = ring_bond_dir0.angle_to(target_ring_bond_dir)
+			var half: float = PI / 2.0 - deg_to_rad(BULGE_DOT_MARGIN_DEG)
+			var delta: float = wrapf(theta_ideal - theta_center, -PI, PI)
+			theta = theta_ideal if abs(delta) <= half else theta_center + (half if delta > 0.0 else -half)
+
+	var result: Dictionary = {}
+	for id in natural_ring_positions:
+		result[id] = pivot + (natural_ring_positions[id] - pivot).rotated(theta)
+	return result
 
