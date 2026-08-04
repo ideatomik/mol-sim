@@ -601,7 +601,24 @@ static func bake_self_paired_geometry(topology: MoleculeTopology, role_prefix: S
 				var o5_pos: Vector2 = c5_result.point + c5_result.direction * bond_length
 				substituent_positions[o5_id] = o5_pos
 				if alpha_id != -1:
-					substituent_positions[alpha_id] = o5_pos + c5_result.direction * bond_length
+					var alpha_pos: Vector2 = o5_pos + c5_result.direction * bond_length
+					substituent_positions[alpha_id] = alpha_pos
+					# O1a/O2a must move WITH the phosphate they're attached
+					# to -- mirrors derive_substituents()'s own formula
+					# (this file, lines ~242-248) exactly, just using the
+					# NEW alpha_pos/direction from this search instead of
+					# the old unmodified outward. Found via live testing:
+					# without this, O1a/O2a stayed at their position from
+					# the initial (pre-search) derive_substituents() call
+					# while Pa itself moved, visually detaching them from
+					# their own phosphate.
+					var alpha_o1_id: int = topology.find_by_role(role_prefix + "alpha_O1")
+					var alpha_o2_id: int = topology.find_by_role(role_prefix + "alpha_O2")
+					var perp: Vector2 = c5_result.direction.orthogonal()
+					if alpha_o1_id != -1:
+						substituent_positions[alpha_o1_id] = alpha_pos + (c5_result.direction + perp).normalized() * bond_length
+					if alpha_o2_id != -1:
+						substituent_positions[alpha_o2_id] = alpha_pos + (c5_result.direction - perp).normalized() * bond_length
 
 	return {ring_positions = ring_positions, substituent_positions = substituent_positions}
 
