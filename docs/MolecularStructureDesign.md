@@ -978,3 +978,128 @@ or "the pre-fork state" when precision about *when* it occurs is useful —
 those are neutral, descriptive terms. Do not use "temporary," "transient,"
 or language implying it is lower-priority than any other named render
 state in this document.
+
+---
+
+## Self-paired geometry is baked once per residue, not recomputed live
+
+**Lattice-phase decision, 2026-08-04.** Held to the correctness bar the
+entry above establishes, the self-paired template state's ring/chain
+geometry moves from live, per-frame computation to a bake-once,
+cache-forever model — the same pattern `_fold_cache` already uses for
+topology, now extended to LOCAL GEOMETRY for this one render state
+specifically. This is a structural change: it determines how any future
+work on this state must attach, which is why it belongs here rather than
+in a narrower fix doc.
+
+### The seed: a live formula cannot satisfy this state's real constraints
+
+`docs/superpowers/plans/2026-08-03-self-paired-chain-collision-fix.md`
+implemented a two-tier live fix — a closed-form continuous ring rotation
+(bulge-away-from-partner and chain-clearance-from-own-ring, satisfied
+jointly where possible) plus a real-direction-preserving distance
+extension for whatever a single rotation couldn't resolve. Both tiers
+were built, reviewed, and shipped correctly to spec. Four rounds of
+live-testing fixes on top of that shipped design (a floating-point
+knife-edge in the rotation's safety margin, a genuine game-freezing
+bistable oscillation at the arc-clamp boundary, an inter-residue collision
+from uncapped reach, a collision threshold silently mismatched against the
+theme's real `molecular_atom_radius`) each closed a real gap — and the
+live F9 dump still measured a residue where the chain's own real direction
+passes only 3.92 world units from its own C1' atom, a hard geometric floor
+no amount of reach-tuning along that fixed direction can cross, given the
+collision-clearance target is 8.0.
+
+**This is not a bug in the implementation — it is the limit of what a
+single, live, closed-form rotation can do**, for the same structural
+reason the original design doc predicted before any code was written: the
+self-paired state's own bulge-away and chain-clearance targets are ~180°
+apart for this project's fixed vertical-pairing/horizontal-strand layout,
+confirmed analytically, not just observed. Leading/lagging never hit this
+wall because their partner never changes sides for the residue's whole
+life, so a single fixed rotation can satisfy both goals at once — the
+self-paired state's partner genuinely does change sides (template-paired,
+then eventually leading/lagging-paired), which is exactly why a live
+per-frame computation was reached for in the first place. The fix for
+that real requirement was never "compute it live" — it was "compute it
+once, with room to search," which a per-frame budget structurally cannot
+offer.
+
+### The bake
+
+For each self-paired residue, jointly solve — once, not per frame — for:
+
+- **Ring rotation and an elbow-flex degree of freedom.** Not a rigid
+  rotation alone (1a/Tier 1's limit): C3'/C4' flex independently within
+  the ring, reviving the elbow-linkage idea the prior design doc explored
+  and shelved (that attempt was rejected for finding no candidate within
+  Gelbin et al.'s ±2σ ring-internal tolerance that also cleared the
+  collision threshold — not for flicker, so caching alone doesn't resolve
+  it; the tolerance bound itself may need to widen, see below).
+- **O3'/C5' substituent placement, direction and distance jointly**, no
+  longer required to track the live `toward_next`/`toward_previous`
+  vector's exact instantaneous angle. Justified because that vector's real
+  *side* (which same-strand neighbor is ahead vs. behind) never changes
+  while a residue is self-paired — only its precise angle wobbles by a
+  fraction of a degree with the template curve's own physics motion, which
+  a one-time bake is insensitive to by construction. The hard constraint
+  every prior live attempt was rightly held to — never point the
+  substituent chain at the wrong neighbor entirely — still applies; what's
+  relaxed is sub-degree precision to a wobbling curve, not correctness of
+  which neighbor is targeted.
+
+Optimized to maximize the *minimum* clearance across own-ring collision
+and inter-residue collision (the real same-strand-neighbor distance bound
+Tier 2 already established as the correct check, not a flat multiplier),
+subject to hard constraints: chirality (the existing signed-area proof,
+unchanged), and ring-internal bond-angle tolerance starting at Gelbin et
+al.'s ±2σ, widened only as far as the search actually requires to find a
+collision-clearing candidate, and reported honestly either way — per this
+project's own house discipline (`diagnosis/*.py` harnesses prove the real
+number before any GDScript is written), not assumed to succeed.
+
+### Cache design
+
+A new `_self_paired_geometry_cache: Dictionary`, keyed `"strand:slot"` —
+the same convention `_fold_cache` already uses, computed on first
+encounter, never recomputed after. Deliberately simple (YAGNI): no
+state/variant key, because nothing currently needs one.
+
+**One deliberate seam for a known future need, decided at Nucleation:**
+this project's near-term roadmap includes rendering leading/lagging in
+states this cache does not yet need to know about — an unbound/exposed
+phosphate group at a ligase site, distinct polymerase-interaction
+geometry. Leading/lagging are entirely unaffected by this cache (mutually
+exclusive with the self-paired branch by construction — a residue is
+never both), so nothing here blocks that work. But the cache ships with a
+named, callable `invalidate_self_paired_geometry(strand: String, slot:
+int)` entry point from day one, even though nothing calls it yet — so
+that future work has an obvious attachment point instead of forcing a
+redesign of the caching mechanism itself. A loud, named seam over a silent
+assumption, same preference this document's Growth-phase rules already
+state elsewhere.
+
+### What this retires
+
+`RiboseDeriver.derive_self_paired_ring()`'s live continuous-rotation
+formula and `_required_chain_reach()`'s live distance-cap logic both move
+out of the per-frame render path entirely, becoming bake-time-only code
+invoked at most once per residue. The live renderer's contribution shrinks
+to a cache lookup plus a translation to the residue's current world
+position — same shape as how topology is already consumed via
+`_fold_cache`.
+
+### Verification
+
+Same house convention as every prior pass on this state: a standalone
+Python harness (`diagnosis/`) proves the bake-time search against the
+real fixtures already established (boundary top, boundary bottom,
+interior) before any GDScript is written, followed by a live F9 dump
+confirming the cached result matches. One check specific to this design:
+multiple F9 dumps taken seconds apart, while the residue remains
+self-paired, must show byte-identical cached geometry — not merely
+stable in practice, but structurally incapable of changing, since it is
+computed exactly once. That distinction is the actual fix for the
+flicker/oscillation class of defect this state has now produced twice
+(the original 72-step search, and this session's own arc-clamp
+oscillation) — proven by construction, not by absence of a counterexample.
