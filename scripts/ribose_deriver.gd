@@ -38,11 +38,16 @@ const RING_ROLE_SUFFIXES: Array[String] = ["c1_prime", "c2_prime", "c3_prime", "
 ## diagnosis/diag_chain_ring_clearance_fix.py's BULGE_DOT_MARGIN_DEG.
 const BULGE_DOT_MARGIN_DEG: float = 5.0
 
-## 2 * molecular_atom_radius (6.0, theme_manager.gd) -- the same
-## collision-clearance target used throughout this project's self-paired-
-## template work (docs/superpowers/specs/2026-08-03-self-paired-chain-
-## collision-fix-design.md).
-const COLLISION_CLEARANCE_THRESHOLD: float = 12.0
+## No overlap between two full-radius atom circles -- the real invariant
+## behind the collision-clearance target. The actual threshold is derived
+## from the real molecular_atom_radius (passed through from the caller's
+## `tm`, the same pattern bond_length already uses) rather than hardcoded,
+## after live testing found the old flat 12.0 was silently based on
+## theme_manager.gd's SCRIPT DEFAULT molecular_atom_radius (6.0) while the
+## real scene (scenes/simulation.tscn) overrides it to 4.0 -- a real
+## mismatch that made Tier 2 target 50% more clearance than actually
+## needed.
+const COLLISION_CLEARANCE_RATIO: float = 2.0
 
 ## Bug W (docs/MolecularStructure_BasePairExpansion.md) —
 ## resolve_self_paired_ring_rotation()'s search. Unlike NitrogenBaseDeriver's
@@ -158,11 +163,11 @@ static func derive_ring(topology: MoleculeTopology, role_prefix: String, bond_le
 ## Task 3, revised after a critical live-testing finding): smallest
 ## distance >= bond_length along the UNCHANGED real direction `dir_hat`
 ## that clears every atom in `ring_positions` by
-## COLLISION_CLEARANCE_THRESHOLD, capped so it can never reach past
+## `collision_clearance_threshold`, capped so it can never reach past
 ## roughly the halfway point to the real same-strand neighbor
 ## (real_neighbor_distance = length of the real, UNnormalized
 ## toward_next/toward_previous vector) minus a
-## COLLISION_CLEARANCE_THRESHOLD-sized safety margin -- grounded in the
+## `collision_clearance_threshold`-sized safety margin -- grounded in the
 ## real live neighbor distance, not an arbitrary bond-length multiplier,
 ## so this scales correctly regardless of what slot spacing/bond_length
 ## ratio a given scene uses. Found via live testing: the old flat
@@ -174,13 +179,18 @@ static func derive_ring(topology: MoleculeTopology, role_prefix: String, bond_le
 ## some same-ring collision unresolved in tight cases (accepted, per this
 ## project's established "document the limit, don't chase it further"
 ## pattern) in exchange for guaranteeing zero inter-residue collision.
-## Never changes direction -- only how far along the already-correct real
-## direction the substituent sits, so this cannot desync from the real
-## inter-residue backbone bond the way every previously-attempted fix for
-## the original collision did.
-static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_positions: Dictionary, bond_length: float, real_neighbor_distance: float) -> float:
+## `collision_clearance_threshold` is passed in by the caller (derived
+## from the real molecular_atom_radius via COLLISION_CLEARANCE_RATIO,
+## same pattern as bond_length) rather than read from a module constant,
+## after live testing found a stale hardcoded threshold silently drifted
+## out of sync with the real scene's theme override (see
+## COLLISION_CLEARANCE_RATIO's doc comment). Never changes direction --
+## only how far along the already-correct real direction the substituent
+## sits, so this cannot desync from the real inter-residue backbone bond
+## the way every previously-attempted fix for the original collision did.
+static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_positions: Dictionary, bond_length: float, real_neighbor_distance: float, collision_clearance_threshold: float) -> float:
 	var best: float = bond_length
-	var threshold_sq: float = COLLISION_CLEARANCE_THRESHOLD * COLLISION_CLEARANCE_THRESHOLD
+	var threshold_sq: float = collision_clearance_threshold * collision_clearance_threshold
 	for p in ring_positions.values():
 		var rel: Vector2 = p - start_pos
 		var a: float = rel.dot(dir_hat)
@@ -192,7 +202,7 @@ static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_pos
 			continue
 		var reach: float = sqrt(threshold_sq - h_sq)
 		best = max(best, a + reach)
-	var max_safe_reach: float = max(bond_length, real_neighbor_distance * 0.5 - COLLISION_CLEARANCE_THRESHOLD)
+	var max_safe_reach: float = max(bond_length, real_neighbor_distance * 0.5 - collision_clearance_threshold)
 	return min(best, max_safe_reach)
 
 ## Substituent positions (5'-CH2-phosphate chain's first atom, 3'-OH),
@@ -235,8 +245,9 @@ static func _required_chain_reach(start_pos: Vector2, dir_hat: Vector2, ring_pos
 ## Only when BOTH sides are missing (a fully isolated residue — should not
 ## occur in practice) does this still fall back to the ring's own raw
 ## vertex direction, the original fallback shape.
-static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float, toward_next: Vector2 = Vector2.ZERO, toward_previous: Vector2 = Vector2.ZERO, is_self_paired_template: bool = false) -> Dictionary:
+static func derive_substituents(topology: MoleculeTopology, role_prefix: String, ring_positions: Dictionary, bond_length: float, toward_next: Vector2 = Vector2.ZERO, toward_previous: Vector2 = Vector2.ZERO, is_self_paired_template: bool = false, molecular_atom_radius: float = 6.0) -> Dictionary:
 	var positions: Dictionary = {}
+	var collision_clearance_threshold: float = COLLISION_CLEARANCE_RATIO * molecular_atom_radius
 
 	if toward_next.length() <= 0.0 and toward_previous.length() > 0.0:
 		toward_next = -toward_previous
@@ -250,7 +261,7 @@ static func derive_substituents(topology: MoleculeTopology, role_prefix: String,
 		var outward: Vector2 = toward_next.normalized() if toward_next.length() > 0.0 else c3_pos.normalized()
 		var reach: float = bond_length
 		if is_self_paired_template and toward_next.length() > 0.0:
-			reach = _required_chain_reach(c3_pos, outward, ring_positions, bond_length, toward_next.length())
+			reach = _required_chain_reach(c3_pos, outward, ring_positions, bond_length, toward_next.length(), collision_clearance_threshold)
 		positions[o3_id] = c3_pos + outward * reach
 
 	var c4_id: int = topology.find_by_role(role_prefix + "c4_prime")
@@ -260,7 +271,7 @@ static func derive_substituents(topology: MoleculeTopology, role_prefix: String,
 		var outward: Vector2 = toward_previous.normalized() if toward_previous.length() > 0.0 else c4_pos.normalized()
 		var reach: float = bond_length
 		if is_self_paired_template and toward_previous.length() > 0.0:
-			reach = _required_chain_reach(c4_pos, outward, ring_positions, bond_length, toward_previous.length())
+			reach = _required_chain_reach(c4_pos, outward, ring_positions, bond_length, toward_previous.length(), collision_clearance_threshold)
 		var c5_pos: Vector2 = c4_pos + outward * reach
 		positions[c5_id] = c5_pos
 

@@ -345,7 +345,7 @@ static func _derive_full_residue(renderer: Node2D, entry: Dictionary, partner_wo
 	# toward_next/toward_previous (real same-strand-neighbor vectors) were
 	# already computed above, ahead of the ring-rotation decision — reused
 	# here unmodified.
-	var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous, is_self_paired_template)
+	var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous, is_self_paired_template, renderer.tm.molecular_atom_radius)
 
 	var base_positions: Dictionary = NitrogenBaseDeriver.derive_base_layout(topology, "incoming.", base_type, c1_local, pairing_direction, bond_length, ring_positions.values() + substituent_positions.values())
 

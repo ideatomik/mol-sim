@@ -508,7 +508,7 @@ func _rebuild_layout() -> void:
 		else:
 			ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
 
-		var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous, is_self_paired_template)
+		var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous, is_self_paired_template, tm.molecular_atom_radius)
 
 		var local_positions: Dictionary = {}
 		for id in ring_positions:
