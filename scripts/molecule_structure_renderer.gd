@@ -524,7 +524,7 @@ func _rebuild_layout() -> void:
 		if is_self_paired_template:
 			var self_paired_cache_key: String = "%s:%d" % [entry.strand, entry.slot]
 			if not _self_paired_geometry_cache.has(self_paired_cache_key):
-				_self_paired_geometry_cache[self_paired_cache_key] = RiboseDeriver.bake_self_paired_geometry(topology, "incoming.", bond_length, pairing_direction, toward_next, toward_previous, position_by_key.get(more_3prime_key, world_pos).distance_to(world_pos) if position_by_key.has(more_3prime_key) else 0.0, position_by_key.get(more_5prime_key, world_pos).distance_to(world_pos) if position_by_key.has(more_5prime_key) else 0.0, tm.molecular_atom_radius)
+				_self_paired_geometry_cache[self_paired_cache_key] = RiboseDeriver.bake_self_paired_geometry(topology, "incoming.", bond_length, pairing_direction, toward_next, toward_previous, tm.molecular_atom_radius)
 			var baked: Dictionary = _self_paired_geometry_cache[self_paired_cache_key]
 			ring_positions = baked.ring_positions
 			substituent_positions = baked.substituent_positions

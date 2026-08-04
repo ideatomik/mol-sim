@@ -335,11 +335,12 @@ static func _elbow_candidate(a_fixed: Vector2, b_fixed: Vector2, link_len: float
 	var c4: Vector2 = cand1 if cand1.distance_to(prefer_near) <= cand2.distance_to(prefer_near) else cand2
 	return [c3, c4]
 
-## Stage 1 result dictionary keys: "ring" (Dictionary, atom id -> Vector2),
-## "theta" (float, radians). Returns {} (empty) if no candidate was found
-## at any tolerance width tried -- the caller (Stage 2 / the bake
-## orchestrator) must handle this as the documented stop-condition case,
-## not assume a result.
+## Returns a flat Dictionary (atom id -> Vector2), the same shape
+## derive_ring()/derive_self_paired_ring_rotation_only() return -- not a
+## wrapper with separate "ring"/"theta" keys. Returns {} (empty) if no
+## candidate was found at any tolerance width tried -- the caller (Stage 2
+## / the bake orchestrator) must handle this as the documented
+## stop-condition case, not assume a result.
 static func _search_self_paired_ring(topology: MoleculeTopology, role_prefix: String, natural_ring_positions: Dictionary, pivot: Vector2, pairing_direction: Vector2, bond_length: float, toward_next: Vector2, toward_previous: Vector2) -> Dictionary:
 	var rotated_ring: Dictionary = derive_self_paired_ring_rotation_only(topology, role_prefix, natural_ring_positions, pivot, pairing_direction, bond_length, toward_next, toward_previous)
 	var c2_id: int = topology.find_by_role(role_prefix + "c2_prime")
@@ -537,7 +538,7 @@ static func _search_substituent(start_pos: Vector2, natural_dir: Vector2, ring_p
 ## stop-condition case: fall back to the rigid rotation-only construction
 ## (derive_self_paired_ring_rotation_only) rather than crash or render
 ## nothing.
-static func bake_self_paired_geometry(topology: MoleculeTopology, role_prefix: String, bond_length: float, pairing_direction: Vector2, toward_next: Vector2, toward_previous: Vector2, real_neighbor_distance_next: float, real_neighbor_distance_previous: float, molecular_atom_radius: float) -> Dictionary:
+static func bake_self_paired_geometry(topology: MoleculeTopology, role_prefix: String, bond_length: float, pairing_direction: Vector2, toward_next: Vector2, toward_previous: Vector2, molecular_atom_radius: float) -> Dictionary:
 	var natural_ring: Dictionary = derive_ring(topology, role_prefix, bond_length)
 	var pivot: Vector2 = natural_ring[topology.find_by_role(role_prefix + "c1_prime")]
 	var ring_positions: Dictionary = _search_self_paired_ring(topology, role_prefix, natural_ring, pivot, pairing_direction, bond_length, toward_next, toward_previous)
@@ -558,12 +559,12 @@ static func bake_self_paired_geometry(topology: MoleculeTopology, role_prefix: S
 	var substituent_positions: Dictionary = derive_substituents(topology, role_prefix, ring_positions, bond_length, toward_next, toward_previous)
 	if ring_positions.has(c3_id) and tn.length() > 0.0:
 		var o3_id: int = topology.find_by_role(role_prefix + "o3_prime")
-		var o3_result: Dictionary = _search_substituent(ring_positions[c3_id], tn, ring_positions, bond_length, real_neighbor_distance_next, collision_clearance_threshold)
+		var o3_result: Dictionary = _search_substituent(ring_positions[c3_id], tn, ring_positions, bond_length, tn.length(), collision_clearance_threshold)
 		if not o3_result.is_empty():
 			substituent_positions[o3_id] = o3_result.point
 	if ring_positions.has(c4_id) and tp.length() > 0.0:
 		var c5_id: int = topology.find_by_role(role_prefix + "c5_prime")
-		var c5_result: Dictionary = _search_substituent(ring_positions[c4_id], tp, ring_positions, bond_length, real_neighbor_distance_previous, collision_clearance_threshold)
+		var c5_result: Dictionary = _search_substituent(ring_positions[c4_id], tp, ring_positions, bond_length, tp.length(), collision_clearance_threshold)
 		if not c5_result.is_empty():
 			# O5'/alpha-phosphate continue chained from the searched C5' in
 			# its own found direction, same bond_length increments as

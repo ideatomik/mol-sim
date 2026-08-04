@@ -314,7 +314,7 @@ static func _derive_full_residue(renderer: Node2D, entry: Dictionary, partner_wo
 	var substituent_positions: Dictionary = {}
 	if is_self_paired_template:
 		if not renderer._self_paired_geometry_cache.has(cache_key):
-			renderer._self_paired_geometry_cache[cache_key] = RiboseDeriver.bake_self_paired_geometry(topology, "incoming.", bond_length, pairing_direction, toward_next, toward_previous, position_by_key.get(more_3prime_key, world_pos).distance_to(world_pos) if position_by_key.has(more_3prime_key) else 0.0, position_by_key.get(more_5prime_key, world_pos).distance_to(world_pos) if position_by_key.has(more_5prime_key) else 0.0, renderer.tm.molecular_atom_radius)
+			renderer._self_paired_geometry_cache[cache_key] = RiboseDeriver.bake_self_paired_geometry(topology, "incoming.", bond_length, pairing_direction, toward_next, toward_previous, renderer.tm.molecular_atom_radius)
 		var baked: Dictionary = renderer._self_paired_geometry_cache[cache_key]
 		ring_positions = baked.ring_positions
 		substituent_positions = baked.substituent_positions
