@@ -353,6 +353,25 @@ static func derive_self_paired_ring(topology: MoleculeTopology, role_prefix: Str
 
 	var ring_bond_dir0: Vector2 = (natural_ring_positions[c4_id] - natural_ring_positions[c3_id]).normalized()
 
+	## Fixed, deterministic tie-break for which arc edge to clamp to when
+	## theta_ideal falls outside the feasible arc (docs/superpowers/plans/
+	## 2026-08-03-self-paired-chain-collision-fix.md -- critical fix found
+	## during Task 4 live verification). theta_center and theta_ideal are
+	## structurally ~180 degrees apart for this project's geometry (always,
+	## not occasionally), which puts the OLD sign-based tie-break exactly on
+	## the +/-PI wraparound boundary -- any sub-floating-point jitter in the
+	## real toward_next/toward_previous/pairing_direction inputs flipped
+	## which side got chosen every single frame, causing a game-freezing
+	## visible oscillation (confirmed live). This tiebreak depends ONLY on
+	## the fixed, unrotated natural ring shape (bulge_vec, ring_bond_dir0)
+	## -- never on live data -- so it is a hardcoded constant in practice
+	## and cannot jitter. Both clamp sides are functionally equivalent for
+	## both real constraints (bulge safety is identical via cosine symmetry;
+	## chain-clearance is comparable either way since theta_ideal is always
+	## near-antipodal to theta_center), so fixing this deterministically
+	## loses nothing.
+	var fixed_tiebreak_sign: float = 1.0 if (bulge_vec.x * ring_bond_dir0.y - bulge_vec.y * ring_bond_dir0.x) >= 0.0 else -1.0
+
 	var tn: Vector2 = toward_next
 	var tp: Vector2 = toward_previous
 	if tn.length() <= 0.0 and tp.length() > 0.0:
@@ -370,7 +389,7 @@ static func derive_self_paired_ring(topology: MoleculeTopology, role_prefix: Str
 			var theta_ideal: float = ring_bond_dir0.angle_to(target_ring_bond_dir)
 			var half: float = PI / 2.0 - deg_to_rad(BULGE_DOT_MARGIN_DEG)
 			var delta: float = wrapf(theta_ideal - theta_center, -PI, PI)
-			theta = theta_ideal if abs(delta) <= half else theta_center + (half if delta > 0.0 else -half)
+			theta = theta_ideal if abs(delta) <= half else theta_center + fixed_tiebreak_sign * half
 
 	var result: Dictionary = {}
 	for id in natural_ring_positions:
