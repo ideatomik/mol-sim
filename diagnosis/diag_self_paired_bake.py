@@ -161,7 +161,10 @@ def search_ring(natural, pairing_direction, toward_next, toward_previous):
     rotated_ring, theta = tier1_rotation(natural, pairing_direction, toward_next, toward_previous)
     c1, c2, o4 = rotated_ring["c1_prime"], rotated_ring["c2_prime"], rotated_ring["o4_prime"]
     natural_c3, natural_c4 = rotated_ring["c3_prime"], rotated_ring["c4_prime"]
-    alpha0 = angle_to((1.0, 0.0), sub(natural_c3, c2)) if False else vangle(sub(natural_c3, c2))
+    u0 = normalized(sub(o4, c2))
+    v0 = orthogonal(u0)
+    rel_c3 = sub(natural_c3, c2)
+    alpha0 = math.atan2(dot(rel_c3, v0), dot(rel_c3, u0))
     for sigma_mult in TOLERANCE_WIDEN_STEPS:
         best = None
         steps = int(ELBOW_SEARCH_HALF_WINDOW_DEG / ELBOW_SEARCH_STEP_DEG)
