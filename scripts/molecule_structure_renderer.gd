@@ -54,6 +54,18 @@ var _bond_layout: Array[Dictionary] = []
 ## entry per rendered base pair, drawn as `count` parallel dashed lines.
 var _h_bond_layout: Array[Dictionary] = []
 
+## {world_pos: Vector2, radius: float, key: String} — one entry per
+## residue currently rendered via RiboseDeriver.reflect_about_backbone_axis()
+## (the fork-flip mirror) this frame. Populated inline at the exact call
+## site of that mirror in _rebuild_layout() — never a separate opt-in step
+## — so a residue cannot be mirrored without becoming hoverable, closing
+## the disclaimer requirement in reflect_about_backbone_axis()'s own doc
+## comment. Read by _process() to compute _hovered_mirrored_key, and
+## indirectly by _draw() through that. Inherits the _active zoom-tier gate
+## for free: _rebuild_layout() early-returns before this is ever touched
+## while inactive.
+var _mirrored_residue_layout: Array[Dictionary] = []
+
 ## Last hysteresis decision. Gates ONLY the draw calls — layout below runs
 ## unconditionally every frame regardless of this, per the render-mode
 ## transition decision (Open Question 10): no first-crossing hitch.
@@ -128,6 +140,14 @@ func invalidate_self_paired_geometry(strand: String, slot: int) -> void:
 	_self_paired_geometry_cache.erase("%s:%d" % [strand, slot])
 
 const OPERATOR_PATH: String = "res://resources/phosphodiester_bond_formation.tres"
+
+## Verbatim project framing (docs/MolecularStructureDesign.md, "Self-paired
+## fork-flip as a deliberate, labeled 2D mirror") for the hover disclaimer
+## shown while a residue is rendered via RiboseDeriver.
+## reflect_about_backbone_axis(). Never paraphrase this string — it's the
+## project's own already-agreed wording.
+const MIRRORED_RESIDUE_TOOLTIP_TEXT: String = "in 2D molecular representations this rotation doesn't really exist, but for didactic reasons, we're showing you this way."
+
 var _phosphodiester_operator: ReactionOperator = null
 var _operators: Array[ReactionOperator] = []  # [_phosphodiester_operator] — built once in _ready(), typed explicitly so fold()'s Array[ReactionOperator] parameter doesn't need to coerce an untyped literal every frame
 
@@ -372,6 +392,7 @@ func _rebuild_layout() -> void:
 	_bond_layout.clear()
 	_h_bond_layout.clear()
 	_active_slots.clear()
+	_mirrored_residue_layout.clear()
 	if not _active:
 		return
 
@@ -521,7 +542,23 @@ func _rebuild_layout() -> void:
 		# the exact original fixed sign, byte-identical to before.
 		var is_self_paired_template: bool = (entry.strand == "template_top" or entry.strand == "template_bottom") and partner_key.begins_with("template_")
 		var substituent_positions: Dictionary = {}
-		if is_self_paired_template:
+		# Fork-flip build (docs/MolecularStructureDesign.md, "Self-paired
+		# fork-flip as a deliberate, labeled 2D mirror"): direction_sign < 0
+		# self-paired residues (template_bottom) no longer go through
+		# bake_self_paired_geometry()'s collision-search rotation -- they
+		# get the pedagogical mirror instead, derived from their own
+		# natural (direction_sign >= 0) ring/substituent placement.
+		# template_top (direction_sign >= 0) is untouched, still the bake
+		# path, same as leading/lagging's own `else` branch below is
+		# untouched.
+		var self_paired_sign: float = _strand_direction_sign(entry.strand)
+		if is_self_paired_template and self_paired_sign < 0.0:
+			var natural_substituents: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
+			var c4_id: int = topology.find_by_role("incoming.c4_prime")
+			var axis_y: float = ring_positions[c4_id].y
+			ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+			substituent_positions = RiboseDeriver.reflect_about_backbone_axis(natural_substituents, axis_y)
+		elif is_self_paired_template:
 			var self_paired_cache_key: String = "%s:%d" % [entry.strand, entry.slot]
 			if not _self_paired_geometry_cache.has(self_paired_cache_key):
 				_self_paired_geometry_cache[self_paired_cache_key] = RiboseDeriver.bake_self_paired_geometry(topology, "incoming.", bond_length, pairing_direction, toward_next, toward_previous, tm.molecular_atom_radius)
@@ -562,16 +599,26 @@ func _rebuild_layout() -> void:
 		for id in base_positions:
 			local_positions[id] = base_positions[id]
 
+		var residue_max_extent: float = 0.0
 		for atom in topology.atoms:
 			if not local_positions.has(atom.id):
 				continue
-			var world: Vector2 = world_pos + (local_positions[atom.id] - anchor_offset)
+			var local_offset: Vector2 = local_positions[atom.id] - anchor_offset
+			residue_max_extent = max(residue_max_extent, local_offset.length())
+			var world: Vector2 = world_pos + local_offset
 			_atom_layout.append({
 				position = world,
 				element = atom.element,
 				label = _atom_display_label(atom.role, atom.element),
 				atom_id = atom.id,
 				nucleotide_slot = entry.slot,
+			})
+
+		if is_self_paired_template and self_paired_sign < 0.0:
+			_mirrored_residue_layout.append({
+				world_pos = world_pos,
+				radius = residue_max_extent + tm.molecular_atom_radius,
+				key = key,
 			})
 
 		for bond in topology.bonds:
