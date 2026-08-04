@@ -1103,3 +1103,127 @@ computed exactly once. That distinction is the actual fix for the
 flicker/oscillation class of defect this state has now produced twice
 (the original 72-step search, and this session's own arc-clamp
 oscillation) — proven by construction, not by absence of a counterexample.
+
+## Chirality-safety is a flat 2D proxy, scoped to the skeletal tier only
+
+**Correction, added after a real user question exposed a gap in how this
+document had been describing the rotation-safety guarantee.** Every
+rotation entry above (`apply_strand_direction()`, the bake's own rotation
+stage) protects chirality by checking the *2D signed area* (shoelace
+formula) of the fixed ring walk order (`C1' → C2' → C3' → C4' → O4'`)
+against the regular-pentagon baseline. This check is correct and load-
+bearing, but it is a proxy for a 3D property, not the property itself, and
+the difference matters for any future work on this state.
+
+A real 180° rotation in 3D space, about *any* axis, always preserves a real
+molecule's chirality — this is not in question. What this renderer actually
+draws is a flat skeletal diagram: every atom has z = 0, always, with no
+depth encoded anywhere. Two different 3D operations collapse onto this flat
+plane very differently:
+
+- A rotation about an axis perpendicular to the page (through a fixed
+  pivot, e.g. C1') projects as `(x, y) → (−x, −y)` — determinant +1 in 2D.
+  Winding order is preserved. This is what `apply_strand_direction()`
+  actually does for `direction_sign < 0` strands, and it is the operation
+  every chirality-safety claim in this document is about.
+- A rotation about an axis *lying in the page* (e.g. the residue's own
+  C4'–C5' bond, confirmed exactly horizontal in the natural, unrotated
+  local frame — `C4'` and `C5'` share the same y-coordinate by
+  construction) projects as `(x, y) → (x, 2h − y)`, h = that axis's
+  y-coordinate — determinant −1 in 2D. Winding order flips. Physically this
+  is still a proper rotation and a real molecule's chirality survives it
+  fine; but drawn flat, on this renderer's fixed walk-order convention, it
+  is indistinguishable from an actual mirror, because the renderer has no
+  state anywhere for "which face of the residue is toward the viewer" — it
+  was never built to track one.
+
+**The chirality-safety check is therefore correctly scoped to catch exactly
+the first case, and would incorrectly flag the second as a defect even
+though it isn't one for a real molecule.** This is not a bug in the check —
+it is the check doing its job on the only representation it has access to.
+Any future work that wants to render the second kind of rotation (see the
+next entry) must not route through the existing shoelace safety check
+unmodified; that check's silence is not evidence of correctness for that
+case.
+
+**This scoping is also why the bead-glyph tier is exempt entirely.** Below
+`molecular_zoom_enter_threshold`, nucleotides are plain circles/beads with
+no atomic geometry (`theme_manager.gd`'s bead-glyph mode) — a bead has no
+handedness, so a residue visually turning through the fork at that zoom
+level has nothing to preserve or violate. The chirality-safety rule lives
+only in the skeletal tier (`ribose_deriver.gd`, `molecule_structure_
+renderer.gd`), where atoms are actually drawn.
+
+## Self-paired fork-flip as a deliberate, labeled 2D mirror (design intent, not yet built)
+
+**Decision recorded 2026-08-04; not implemented.** The project's actual
+pedagogical goal for the self-paired → leading/lagging transition is not
+"pick whichever flat transform avoids collisions" — it is to visually show
+the residue turning around its own backbone as it crosses the fork, the way
+the bead-glyph tier already does implicitly by construction. The skeletal
+tier cannot represent that turn as a true rotation (previous entry) — so
+the decision is to render it anyway, as the one operation whose 2D
+projection matches the intended visual, and label it honestly rather than
+pretend it's chirality-neutral.
+
+Concretely: for the residue that currently gets `apply_strand_direction()`'s
+point-reflection (`direction_sign < 0`), derive its ring/substituents in
+the natural (`direction_sign ≥ 0`) orientation first, read its own C4'
+y-coordinate as `axis_y`, then reflect every atom — ring and substituent
+chain alike — about that height: `(x, y) → (x, 2·axis_y − y)`. This is
+`RiboseDeriver.reflect_about_backbone_axis()`, prototyped and then reverted
+out of the worktree this session (see the open hypothesis below for why it
+was reverted before being kept). The transform is a deliberate 2D mirror
+(determinant −1) of the natural orientation — expected and correct per the
+previous entry, not a regression to catch.
+
+**Requirement for whenever this is actually built:** the residue must carry
+an on-screen disclaimer while (and only while) this transform is active —
+this project's own stated framing: *"in 2D molecular representations this
+rotation doesn't really exist, but for didactic reasons, we're showing you
+this way."* Without that label, this state would silently contradict every
+other chirality-safety claim this document makes elsewhere; with it, the
+divergence is honest and scoped to exactly the one visual it's for.
+
+Not yet designed: whether the transition is instantaneous (as today) or an
+actual animated turn over some duration — raised in conversation, favored
+by the user, but no approach was chosen before this session ended. That
+choice, plus the disclaimer's exact trigger condition and visual treatment,
+is the next design step before an implementation plan is written for this
+entry.
+
+## Open hypothesis: the self-paired collision may be a spacing problem, not a rotation-formula problem (unresolved)
+
+**Raised and partially tested 2026-08-04; inconclusive, not yet resolved.**
+The entry above ("Self-paired geometry is baked once per residue") treats
+the self-paired ring/chain collision as a geometry problem requiring a
+bake-time search. A real alternative hypothesis surfaced this session:
+leading/lagging use the *plain* formula (`apply_strand_direction()` +
+`derive_substituents()`, no search, no cache) and never collide — not
+because their geometry is special, but because by the time a residue is
+leading/lagging, its partner strand has already been pushed apart by
+`dna_ribbons_gap`. The self-paired state's two template strands sit at real
+base-pair distance instead — tight by comparison — which may be the actual
+source of the collision the bake system was built to solve geometrically.
+
+If true, this would mean the bake's rotation/elbow-flex search
+(`_search_self_paired_ring()`, `_search_substituent()`) is solving a
+self-inflicted problem: the same plain formula leading/lagging already use
+safely might render self-paired residues cleanly too, if self-paired
+spacing were widened toward (not necessarily all the way to) the
+leading/lagging ribbons-gap separation.
+
+**This was set up as a live experiment in the test chamber** — the
+self-paired branch temporarily bypassed `bake_self_paired_geometry()`
+entirely, reusing the plain formula (natural derivation for
+`direction_sign ≥ 0`, the fork-flip mirror above for `direction_sign < 0`)
+at real, unwidened self-paired spacing — **but the experiment was reverted (uncommitted — `git checkout` back to
+the pre-experiment HEAD, not preserved as a commit) before its result was
+visually confirmed.** The hypothesis is therefore open, not decided either
+way. Next session: reapply the plain-formula bypass described above
+(`direction_sign ≥ 0` → natural `derive_substituents()` unchanged;
+`direction_sign < 0` → natural derivation, then
+`reflect_about_backbone_axis()` about the residue's own C4' height, in
+place of `bake_self_paired_geometry()`), check the F9 dump/screenshot for
+collision, and only then decide whether the bake system above should be
+kept as-is, simplified, or retired in favor of a spacing fix.
