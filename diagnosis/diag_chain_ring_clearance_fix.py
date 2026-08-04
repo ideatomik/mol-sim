@@ -22,7 +22,9 @@ def wrap_pi(x):
 
 TAU = 2 * math.pi
 BOND_LENGTH = 10.8  # molecular_ring_bond_length_ratio (0.2) * nucleotide_slot_spacing (54.0)
-COLLISION_THRESHOLD = 12.0  # 2 * molecular_atom_radius (6.0, theme_manager.gd)
+MOLECULAR_ATOM_RADIUS = 4.0  # scenes/simulation.tscn's real override of theme_manager.gd's molecular_atom_radius (script default is 6.0, but the real scene overrides it -- confirmed via the .tscn directly, not the script default, after live testing caught this mismatch)
+COLLISION_CLEARANCE_RATIO = 2.0  # no overlap between two full-radius atom circles -- the real invariant behind the old flat 12.0
+COLLISION_THRESHOLD = COLLISION_CLEARANCE_RATIO * MOLECULAR_ATOM_RADIUS  # = 8.0 with the real scene's radius
 BULGE_DOT_MARGIN_DEG = 5.0  # keeps bulge_vs_pairing_dot comfortably negative (~-0.087) instead of landing exactly on the 0.0 knife-edge; introduced here after Task 1's initial run showed every fixture saturating the clamp exactly at the arc boundary
 
 RING_ROLE_SUFFIXES = ["c1_prime", "c2_prime", "c3_prime", "c4_prime", "o4_prime"]
