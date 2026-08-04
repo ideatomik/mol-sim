@@ -208,3 +208,61 @@ for label, r in [("A (boundary top)", result_a), ("B (boundary bottom)", result_
     else:
         print(f"theta={math.degrees(r['theta']):.2f} deg, elbow alpha offset={r['alpha_deg']:.1f} deg, "
               f"tolerance needed=+/-{r['sigma_mult']}sigma, bulge_dot={r['bulge_dot']:.4f}")
+
+SUBSTITUENT_SEARCH_HALF_WINDOW_DEG = 90.0
+SUBSTITUENT_SEARCH_ANGLE_STEP_DEG = 3.0
+SUBSTITUENT_SEARCH_DIST_STEPS = 6  # bond_length up to 2x bond_length
+
+def min_clearance_to_ring(point, ring):
+    return min(length(sub(point, p)) for p in ring.values())
+
+def search_substituent(start_pos, natural_dir, ring, real_neighbor_distance):
+    """Direction AND distance searched jointly, centered on natural_dir
+    (the real toward_next/toward_previous direction) -- window bounded so
+    this can never point at the wrong neighbor entirely, per the Global
+    Constraints. max_safe_reach mirrors the shipped Tier 2's real-
+    neighbor-distance cap (never past half the real neighbor distance
+    minus the collision threshold)."""
+    if length(natural_dir) <= 0.0:
+        return None
+    natural_hat = normalized(natural_dir)
+    natural_angle = vangle(natural_hat)
+    max_safe_reach = max(BOND_LENGTH, real_neighbor_distance * 0.5 - COLLISION_THRESHOLD)
+    best = None
+    steps = int(SUBSTITUENT_SEARCH_HALF_WINDOW_DEG / SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
+    for i in range(-steps, steps + 1):
+        angle = natural_angle + math.radians(i * SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
+        direction = (math.cos(angle), math.sin(angle))
+        for j in range(SUBSTITUENT_SEARCH_DIST_STEPS + 1):
+            dist = BOND_LENGTH + (max_safe_reach - BOND_LENGTH) * (j / SUBSTITUENT_SEARCH_DIST_STEPS)
+            point = add(start_pos, scale(direction, dist))
+            clearance = min_clearance_to_ring(point, ring)
+            if best is None or clearance > best["clearance"]:
+                best = dict(point=point, direction=direction, dist=dist, clearance=clearance,
+                            angle_offset_deg=i * SUBSTITUENT_SEARCH_ANGLE_STEP_DEG)
+    return best
+
+def run_full_bake(label, ring_result, toward_next, toward_previous):
+    print(f"\n=== Full bake: {label} ===")
+    if ring_result is None:
+        print("No ring candidate -- cannot search substituents.")
+        return None
+    ring = ring_result["ring"]
+    tn, tp = toward_next, toward_previous
+    if length(tn) <= 0.0 and length(tp) > 0.0:
+        tn = scale(tp, -1.0)
+    elif length(tp) <= 0.0 and length(tn) > 0.0:
+        tp = scale(tn, -1.0)
+    o3_result = search_substituent(ring["c3_prime"], tn, ring, length(tn))
+    c5_result = search_substituent(ring["c4_prime"], tp, ring, length(tp))
+    print(f"O3': angle offset={o3_result['angle_offset_deg']:.1f} deg, dist={o3_result['dist']:.4f} "
+          f"({o3_result['dist']/BOND_LENGTH:.2f}x bond_length), clearance={o3_result['clearance']:.4f} "
+          f"(target {COLLISION_THRESHOLD}) -- {'CLEARS' if o3_result['clearance'] >= COLLISION_THRESHOLD else 'DOES NOT CLEAR'}")
+    print(f"C5': angle offset={c5_result['angle_offset_deg']:.1f} deg, dist={c5_result['dist']:.4f} "
+          f"({c5_result['dist']/BOND_LENGTH:.2f}x bond_length), clearance={c5_result['clearance']:.4f} "
+          f"(target {COLLISION_THRESHOLD}) -- {'CLEARS' if c5_result['clearance'] >= COLLISION_THRESHOLD else 'DOES NOT CLEAR'}")
+    return dict(ring=ring_result, o3=o3_result, c5=c5_result)
+
+full_a = run_full_bake("A (boundary top)", result_a, FIXTURE_A_TOWARD_NEXT, FIXTURE_A_TOWARD_PREVIOUS)
+full_b = run_full_bake("B (boundary bottom)", result_b, FIXTURE_B_TOWARD_NEXT, FIXTURE_B_TOWARD_PREVIOUS)
+full_c = run_full_bake("C (interior)", result_c, FIXTURE_C_TOWARD_NEXT, FIXTURE_C_TOWARD_PREVIOUS)
