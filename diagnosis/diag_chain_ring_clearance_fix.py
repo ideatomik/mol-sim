@@ -23,6 +23,7 @@ def wrap_pi(x):
 TAU = 2 * math.pi
 BOND_LENGTH = 10.8  # molecular_ring_bond_length_ratio (0.2) * nucleotide_slot_spacing (54.0)
 COLLISION_THRESHOLD = 12.0  # 2 * molecular_atom_radius (6.0, theme_manager.gd)
+BULGE_DOT_MARGIN_DEG = 5.0  # keeps bulge_vs_pairing_dot comfortably negative (~-0.087) instead of landing exactly on the 0.0 knife-edge; matches this project's prior SELF_PAIRED_BULGE_DOT_MARGIN precedent for the same purpose
 
 RING_ROLE_SUFFIXES = ["c1_prime", "c2_prime", "c3_prime", "c4_prime", "o4_prime"]
 
@@ -78,7 +79,7 @@ def derive_self_paired_ring(natural_ring, pairing_direction, toward_next, toward
         if length(forward) > 0.0:
             target_ring_bond_dir = scale(normalized(forward), -1.0)
             theta_ideal = angle_to(ring_bond_dir0, target_ring_bond_dir)
-            half = math.pi / 2.0
+            half = math.pi / 2.0 - math.radians(BULGE_DOT_MARGIN_DEG)
             delta = wrap_pi(theta_ideal - theta_center)
             theta = theta_ideal if abs(delta) <= half else theta_center + (half if delta > 0.0 else -half)
 
