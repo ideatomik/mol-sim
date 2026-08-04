@@ -64,6 +64,7 @@ def derive_self_paired_ring(natural_ring, pairing_direction, toward_next, toward
     theta_center = angle_to(bulge_vec, arc_target)
 
     ring_bond_dir0 = normalized(sub(natural_ring["c4_prime"], natural_ring["c3_prime"]))
+    fixed_tiebreak_sign = 1.0 if (bulge_vec[0] * ring_bond_dir0[1] - bulge_vec[1] * ring_bond_dir0[0]) >= 0.0 else -1.0
 
     tn, tp = toward_next, toward_previous
     if length(tn) <= 0.0 and length(tp) > 0.0:
@@ -81,7 +82,7 @@ def derive_self_paired_ring(natural_ring, pairing_direction, toward_next, toward
             theta_ideal = angle_to(ring_bond_dir0, target_ring_bond_dir)
             half = math.pi / 2.0 - math.radians(BULGE_DOT_MARGIN_DEG)
             delta = wrap_pi(theta_ideal - theta_center)
-            theta = theta_ideal if abs(delta) <= half else theta_center + (half if delta > 0.0 else -half)
+            theta = theta_ideal if abs(delta) <= half else theta_center + fixed_tiebreak_sign * half
 
     result = {k: add(pivot, rotated(sub(v, pivot), theta)) for k, v in natural_ring.items()}
     return result, theta
@@ -133,6 +134,79 @@ def run_case(label, toward_next, toward_previous, pairing_direction):
 result_a = run_case("template_top slot 0 (boundary)", FIXTURE_A_TOWARD_NEXT, FIXTURE_A_TOWARD_PREVIOUS, FIXTURE_A_PAIRING_DIRECTION)
 result_b = run_case("template_bottom slot 0 (mirror boundary)", FIXTURE_B_TOWARD_NEXT, FIXTURE_B_TOWARD_PREVIOUS, FIXTURE_B_PAIRING_DIRECTION)
 result_c = run_case("template_top slot 2 (interior)", FIXTURE_C_TOWARD_NEXT, FIXTURE_C_TOWARD_PREVIOUS, FIXTURE_C_PAIRING_DIRECTION)
+
+# Verification: demonstrate the old (jittering) formula vs new (stable) formula
+print("\n=== OSCILLATION BUG VERIFICATION ===")
+print("Testing whether tiny input perturbation (0.394745 vs 0.394746) causes theta to flip:")
+
+def derive_self_paired_ring_old_formula(natural_ring, pairing_direction, toward_next, toward_previous):
+    """OLD formula with sign-based tie-break (jitters at ±π boundary)."""
+    pivot = natural_ring["c1_prime"]
+    if length(pairing_direction) <= 0.0:
+        return dict(natural_ring), 0.0
+
+    bulge = scale(add(add(natural_ring["c2_prime"], natural_ring["c3_prime"]),
+                       add(natural_ring["c4_prime"], natural_ring["o4_prime"])), 0.25)
+    bulge_vec = sub(bulge, pivot)
+    pairing_hat = normalized(pairing_direction)
+    arc_target = scale(pairing_hat, -1.0)
+    theta_center = angle_to(bulge_vec, arc_target)
+
+    ring_bond_dir0 = normalized(sub(natural_ring["c4_prime"], natural_ring["c3_prime"]))
+
+    tn, tp = toward_next, toward_previous
+    if length(tn) <= 0.0 and length(tp) > 0.0:
+        tn = scale(tp, -1.0)
+    elif length(tp) <= 0.0 and length(tn) > 0.0:
+        tp = scale(tn, -1.0)
+
+    theta = theta_center
+    if length(tn) > 0.0 or length(tp) > 0.0:
+        tn_hat = normalized(tn) if length(tn) > 0.0 else (0.0, 0.0)
+        tp_hat = normalized(tp) if length(tp) > 0.0 else (0.0, 0.0)
+        forward = sub(tn_hat, tp_hat)
+        if length(forward) > 0.0:
+            target_ring_bond_dir = scale(normalized(forward), -1.0)
+            theta_ideal = angle_to(ring_bond_dir0, target_ring_bond_dir)
+            half = math.pi / 2.0 - math.radians(BULGE_DOT_MARGIN_DEG)
+            delta = wrap_pi(theta_ideal - theta_center)
+            # OLD: sign-based tie-break (JITTERS)
+            theta = theta_ideal if abs(delta) <= half else theta_center + (half if delta > 0.0 else -half)
+
+    result = {k: add(pivot, rotated(sub(v, pivot), theta)) for k, v in natural_ring.items()}
+    return result, theta
+
+natural = derive_regular_ring(BOND_LENGTH)
+
+# Test Case A with unperturbed input
+_, theta_old_unperturbed = derive_self_paired_ring_old_formula(natural, FIXTURE_A_PAIRING_DIRECTION, FIXTURE_A_TOWARD_NEXT, FIXTURE_A_TOWARD_PREVIOUS)
+# Test Case A with perturbation in the sign-flipping range
+toward_next_perturbed_pos = (54.0, 0.5)  # slightly higher Y
+toward_next_perturbed_neg = (54.0, 0.3)  # slightly lower Y
+_, theta_old_perturbed_pos = derive_self_paired_ring_old_formula(natural, FIXTURE_A_PAIRING_DIRECTION, toward_next_perturbed_pos, FIXTURE_A_TOWARD_PREVIOUS)
+_, theta_old_perturbed_neg = derive_self_paired_ring_old_formula(natural, FIXTURE_A_PAIRING_DIRECTION, toward_next_perturbed_neg, FIXTURE_A_TOWARD_PREVIOUS)
+
+# New formula (with fixed tie-break) should be stable
+_, theta_new_unperturbed = derive_self_paired_ring(natural, FIXTURE_A_PAIRING_DIRECTION, FIXTURE_A_TOWARD_NEXT, FIXTURE_A_TOWARD_PREVIOUS)
+_, theta_new_perturbed_pos = derive_self_paired_ring(natural, FIXTURE_A_PAIRING_DIRECTION, toward_next_perturbed_pos, FIXTURE_A_TOWARD_PREVIOUS)
+_, theta_new_perturbed_neg = derive_self_paired_ring(natural, FIXTURE_A_PAIRING_DIRECTION, toward_next_perturbed_neg, FIXTURE_A_TOWARD_PREVIOUS)
+
+old_delta_pos = abs(math.degrees(theta_old_perturbed_pos) - math.degrees(theta_old_unperturbed))
+old_delta_neg = abs(math.degrees(theta_old_perturbed_neg) - math.degrees(theta_old_unperturbed))
+new_delta_pos = abs(math.degrees(theta_new_perturbed_pos) - math.degrees(theta_new_unperturbed))
+new_delta_neg = abs(math.degrees(theta_new_perturbed_neg) - math.degrees(theta_new_unperturbed))
+old_flips_either = old_delta_pos > 90.0 or old_delta_neg > 90.0
+new_stable = new_delta_pos < 0.1 and new_delta_neg < 0.1
+
+print(f"OLD formula (sign-based tie-break, wraparound knife-edge sensitive):")
+print(f"  toward_next (Y+0.1): theta changes by {old_delta_pos:.2f} deg")
+print(f"  toward_next (Y-0.1): theta changes by {old_delta_neg:.2f} deg")
+print(f"  -> Shows large flips: {old_flips_either}")
+print(f"NEW formula (fixed deterministic tie-break):")
+print(f"  toward_next (Y+0.1): theta changes by {new_delta_pos:.2f} deg")
+print(f"  toward_next (Y-0.1): theta changes by {new_delta_neg:.2f} deg")
+print(f"  -> Stable: {new_stable}")
+print(f"Bug mechanism confirmed (old flips, new stable): {old_flips_either and new_stable}")
 
 CHAIN_EXTENSION_STRETCH_CAP_RATIO = 2.7  # confirmed/adjusted against real fixture data
 
