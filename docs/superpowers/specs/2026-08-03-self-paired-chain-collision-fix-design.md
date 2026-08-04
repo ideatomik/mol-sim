@@ -177,3 +177,41 @@ history on this branch), never the `else` branch leading/lagging takes.
   fix adds.
 - The unpaired-first-base-pair symptom (Task 8/9 in the prior design doc's
   plan) — separate, independent bug.
+
+## As-Built (2026-08-04)
+
+Both tiers were implemented and reviewed exactly to this spec, in a git
+worktree (`.claude/worktrees/self-paired-chain-fix`). Live testing found real
+defects the design didn't anticipate, each fixed in turn: a floating-point
+knife-edge in the rotation clamp's safety margin (`bulge_vs_pairing_dot`
+landing exactly on `0.0` for every sampled fixture, not the intended
+comfortably-negative value); a genuine game-freezing bistable oscillation at
+the arc-clamp boundary (`theta_center`/`theta_ideal` are ~180° apart
+structurally for this project's fixed layout, not occasionally — placing the
+old sign-based tie-break permanently on the wraparound knife-edge); an
+inter-residue collision from Tier 2's reach having no bound tied to the real
+neighbor distance; and a collision-clearance threshold silently based on
+`theme_manager.gd`'s script default (`molecular_atom_radius = 6.0`) rather
+than the real scene's override (`4.0`).
+
+After all four fixes, live testing found a residue where the real substituent
+direction passes only 3.92 world units from its own C1' atom — below the
+correct 8.0 threshold — a hard geometric floor Tier 2's reach-along-a-fixed-
+direction approach cannot cross no matter how the reach is tuned. **This is
+the design's real limit, not an unfixed bug**: a single live, closed-form
+rotation plus a direction-preserving distance extension cannot satisfy this
+residue class, for the same "~180° apart" structural reason this document's
+own Fix section named as 1a's known limit before implementation began — it
+resurfaced on the chain-clearance axis instead of the bulge-safety axis this
+document anticipated, but it is the same underlying conflict.
+
+**Superseded by a new Lattice-phase decision**, `docs/MolecularStructureDesign.md`'s
+"Self-paired geometry is baked once per residue, not recomputed live" section
+(2026-08-04): rather than a fifth live-formula patch, self-paired geometry
+moves to a bake-once-cache-forever model, unlocking a real search budget
+(impossible per-frame) without reintroducing flicker risk (impossible to
+recompute what is never recomputed). Both tiers implemented here become
+bake-time-only code under that new design, no longer part of the per-frame
+render path. This document's own numbers (the 3.92-unit floor, the 8.0
+threshold, the ~180° structural conflict) are exactly what motivated that
+decision — recorded here rather than silently left to contradict it.
