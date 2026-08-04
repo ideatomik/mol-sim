@@ -133,3 +133,42 @@ def run_case(label, toward_next, toward_previous, pairing_direction):
 result_a = run_case("template_top slot 0 (boundary)", FIXTURE_A_TOWARD_NEXT, FIXTURE_A_TOWARD_PREVIOUS, FIXTURE_A_PAIRING_DIRECTION)
 result_b = run_case("template_bottom slot 0 (mirror boundary)", FIXTURE_B_TOWARD_NEXT, FIXTURE_B_TOWARD_PREVIOUS, FIXTURE_B_PAIRING_DIRECTION)
 result_c = run_case("template_top slot 2 (interior)", FIXTURE_C_TOWARD_NEXT, FIXTURE_C_TOWARD_PREVIOUS, FIXTURE_C_PAIRING_DIRECTION)
+
+CHAIN_EXTENSION_STRETCH_CAP_RATIO = 2.7  # confirmed/adjusted against real fixture data
+
+def required_chain_reach(start_pos, dir_hat, ring, bond_length, threshold=COLLISION_THRESHOLD):
+    """Smallest distance >= bond_length along the UNCHANGED real direction
+    dir_hat that clears every ring atom by `threshold`. Never changes
+    direction -- only how far along it the atom sits."""
+    best = bond_length
+    threshold_sq = threshold * threshold
+    for p in ring.values():
+        rel = sub(p, start_pos)
+        a = dot(rel, dir_hat)
+        h_sq = max(0.0, length_sq(rel) - a * a)
+        if h_sq >= threshold_sq:
+            continue  # this ring atom can never collide regardless of reach
+        current_dist_sq = (bond_length - a) ** 2 + h_sq
+        if current_dist_sq >= threshold_sq:
+            continue  # already clear at the default bond length
+        reach = math.sqrt(threshold_sq - h_sq)
+        best = max(best, a + reach)
+    return min(best, bond_length * CHAIN_EXTENSION_STRETCH_CAP_RATIO)
+
+def run_case_with_tier2(label, result):
+    ring = result["ring"]
+    o3_reach = required_chain_reach(ring["c3_prime"], result["o3_dir"], ring, BOND_LENGTH)
+    c5_reach = required_chain_reach(ring["c4_prime"], result["c5_dir"], ring, BOND_LENGTH)
+    o3_final = add(ring["c3_prime"], scale(result["o3_dir"], o3_reach))
+    c5_final = add(ring["c4_prime"], scale(result["c5_dir"], c5_reach))
+    o3_clear = min_clearance_to_ring(o3_final, ring)
+    c5_clear = min_clearance_to_ring(c5_final, ring)
+    print(f"\n=== Tier 2: {label} ===")
+    print(f"O3' reach: {o3_reach:.4f}  ({o3_reach/BOND_LENGTH:.2f}x bond_length)  clearance now: {o3_clear:.4f}")
+    print(f"C5' reach: {c5_reach:.4f}  ({c5_reach/BOND_LENGTH:.2f}x bond_length)  clearance now: {c5_clear:.4f}")
+    print(f"O3' CLEARS THRESHOLD: {o3_clear >= COLLISION_THRESHOLD - 1e-6}")
+    print(f"C5' CLEARS THRESHOLD: {c5_clear >= COLLISION_THRESHOLD - 1e-6}")
+
+run_case_with_tier2("template_top slot 0 (boundary)", result_a)
+run_case_with_tier2("template_bottom slot 0 (mirror boundary)", result_b)
+run_case_with_tier2("template_top slot 2 (interior)", result_c)
