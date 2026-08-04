@@ -23,7 +23,7 @@ def wrap_pi(x):
 TAU = 2 * math.pi
 BOND_LENGTH = 10.8  # molecular_ring_bond_length_ratio (0.2) * nucleotide_slot_spacing (54.0)
 COLLISION_THRESHOLD = 12.0  # 2 * molecular_atom_radius (6.0, theme_manager.gd)
-BULGE_DOT_MARGIN_DEG = 5.0  # keeps bulge_vs_pairing_dot comfortably negative (~-0.087) instead of landing exactly on the 0.0 knife-edge; matches this project's prior SELF_PAIRED_BULGE_DOT_MARGIN precedent for the same purpose
+BULGE_DOT_MARGIN_DEG = 5.0  # keeps bulge_vs_pairing_dot comfortably negative (~-0.087) instead of landing exactly on the 0.0 knife-edge; introduced here after Task 1's initial run showed every fixture saturating the clamp exactly at the arc boundary
 
 RING_ROLE_SUFFIXES = ["c1_prime", "c2_prime", "c3_prime", "c4_prime", "o4_prime"]
 
