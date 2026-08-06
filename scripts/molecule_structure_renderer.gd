@@ -220,18 +220,24 @@ const STRAND_DIRECTION_SIGN: Dictionary = {
 ## different real pairings over its lifetime (never simultaneously, per
 ## _pair_for_slot()'s mutually-exclusive logic).
 ##
-## The two templates push apart from EACH OTHER symmetrically (top: -1,
-## bottom: +1, i.e. 1 unit of separation each = 1 total unit added between
-## them). Leading/lagging push an ADDITIONAL unit further in the same
-## direction their own template partner already moved (leading: -2,
-## lagging: +2) — mirrors how simulation.gd's own row formulas are built
-## (leading_y is defined relative to template_top's row, cascading), so
-## the leading-vs-template_top separation grows by the same total amount
-## as the template-vs-template separation, not half of it.
+## STAGE 4 (docs/superpowers/plans, self-paired pentose reconstruction):
+## template_top/template_bottom's push halved from the original ∓1.0.
+## Measured live via F9 dump before this change: self-paired template-
+## to-template gap = 160 world units (raw 60 + push-contributed 100),
+## while leading-to-its-template-partner gap = 110 (raw 60 + push-
+## contributed 50) — self-paired was rendering 50 units WIDER than
+## leading/lagging's own spacing, not matching it as originally
+## intended (the prior comment here claimed the two should grow by
+## "the same total amount," which the measured numbers contradicted).
+## Halving template_top/template_bottom's multiplier (∓1.0 -> ∓0.5)
+## brings self-paired's push-contributed share down to 50, matching
+## leading/lagging's spacing exactly (60 + 50 = 110 both). leading/
+## lagging's own ∓2.0 are unchanged -- they still push one additional
+## step beyond wherever their template partner now sits.
 const MOLECULAR_ROW_PUSH: Dictionary = {
 	"leading": -2.0,
-	"template_top": -1.0,
-	"template_bottom": 1.0,
+	"template_top": -0.5,
+	"template_bottom": 0.5,
 	"lagging": 2.0,
 }
 
