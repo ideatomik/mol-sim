@@ -311,10 +311,35 @@ static func _derive_full_residue(renderer: Node2D, entry: Dictionary, partner_wo
 	# is_template_self_pairing for Bug P) rather than re-derived here,
 	# since this function only receives a partner WORLD POSITION, not a
 	# partner key it could classify itself.
-	if is_self_paired_template:
-		ring_positions = RiboseDeriver.derive_self_paired_ring(topology, "incoming.", ring_positions, c1_local, pairing_direction, bond_length, toward_next, toward_previous)
-	else:
-		ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, renderer._strand_direction_sign(strand))
+	var substituent_positions: Dictionary = {}
+	# STAGE 1 -- mirrors _rebuild_layout()'s identical bypass exactly (see
+	# that block's own comment for the full rationale: both the mirror and
+	# the bake were found to have real geometry bugs via this same dump,
+	# so both are deliberately bypassed, not deleted, in favor of the
+	# plain leading/lagging formula, to re-establish a known-clean
+	# baseline). This dump must keep reporting the same geometry the live
+	# renderer actually draws.
+	ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, renderer._strand_direction_sign(strand))
+
+	# STAGE 2, bottom strand only -- mirrors _rebuild_layout()'s identical
+	# addition exactly (see that block's own comment for the full
+	# rationale: reflecting C1'/C2'/O4' across the C3'-C4' line, using
+	# THIS ring's own post-rotation C4' as the axis, then reassigning
+	# c1_local so anchor_offset and derive_base_layout() below both
+	# naturally follow the reflected C1').
+	if is_self_paired_template and neighbor_sign < 0.0:
+		var c4_id: int = topology.find_by_role("incoming.c4_prime")
+		var axis_y: float = ring_positions[c4_id].y
+		ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+		c1_local = ring_positions[c1_id]
+
+	# STAGE 3, top strand -- mirrors _rebuild_layout()'s identical addition
+	# exactly (see that block's comment for the full rationale).
+	if is_self_paired_template and neighbor_sign >= 0.0:
+		var c4_id: int = topology.find_by_role("incoming.c4_prime")
+		var axis_y: float = ring_positions[c4_id].y
+		ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+		c1_local = ring_positions[c1_id]
 
 	# Bug V verification (docs/MolecularStructure_BasePairExpansion.md):
 	# unlike anchor_alignment_dot below (a DIFFERENT, pre-existing metric —
@@ -345,7 +370,10 @@ static func _derive_full_residue(renderer: Node2D, entry: Dictionary, partner_wo
 	# toward_next/toward_previous (real same-strand-neighbor vectors) were
 	# already computed above, ahead of the ring-rotation decision — reused
 	# here unmodified.
-	var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
+	# STAGE 1: unconditional now, matching the ring derivation above — see
+	# that block's comment. is_self_paired_template no longer changes this
+	# call for this stage.
+	substituent_positions = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
 
 	var base_positions: Dictionary = NitrogenBaseDeriver.derive_base_layout(topology, "incoming.", base_type, c1_local, pairing_direction, bond_length, ring_positions.values() + substituent_positions.values())
 

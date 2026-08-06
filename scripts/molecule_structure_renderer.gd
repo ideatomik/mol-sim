@@ -54,6 +54,23 @@ var _bond_layout: Array[Dictionary] = []
 ## entry per rendered base pair, drawn as `count` parallel dashed lines.
 var _h_bond_layout: Array[Dictionary] = []
 
+## {world_pos: Vector2, radius: float, key: String} — one entry per
+## residue currently rendered via RiboseDeriver.reflect_about_backbone_axis()
+## (the fork-flip mirror) this frame. Populated in _rebuild_layout() by a
+## registration branch guarded by the identical condition
+## (is_self_paired_template and neighbor_sign < 0.0) as the mirror
+## branch above it — keep the two conditions in sync if either changes.
+## Read by _process() to compute _hovered_mirrored_key, and indirectly by
+## _draw() through that. Inherits the _active zoom-tier gate for free:
+## _rebuild_layout() early-returns before this is ever touched while
+## inactive.
+var _mirrored_residue_layout: Array[Dictionary] = []
+
+## Key ("strand:slot") of the mirrored residue currently under the mouse,
+## or "" if none. Recomputed once per frame in _process(), read by _draw()
+## to decide whether to draw the fork-flip disclaimer tooltip.
+var _hovered_mirrored_key: String = ""
+
 ## Last hysteresis decision. Gates ONLY the draw calls — layout below runs
 ## unconditionally every frame regardless of this, per the render-mode
 ## transition decision (Open Question 10): no first-crossing hitch.
@@ -120,7 +137,32 @@ var _fold_cache: Dictionary = {}  # "leading:12" -> MoleculeTopology
 func clear_fold_cache() -> void:
 	_fold_cache.clear()
 
+## "strand:slot" -> {ring_positions: Dictionary, substituent_positions: Dictionary}
+## (RiboseDeriver.bake_self_paired_geometry()'s return shape). Computed
+## once per residue, on first encounter while self-paired, never
+## recomputed after -- same convention as _fold_cache, now extended to
+## LOCAL GEOMETRY for this one render state (docs/MolecularStructureDesign.md,
+## "Self-paired geometry is baked once per residue, not recomputed live").
+var _self_paired_geometry_cache: Dictionary = {}
+
+## Named, callable invalidation seam for future work this cache does not
+## yet need to know about (an unbound/exposed phosphate at a ligase site,
+## distinct polymerase-interaction geometry) -- decided at Nucleation,
+## docs/MolecularStructureDesign.md's same entry. Nothing calls this yet;
+## it exists so that future work has an obvious attachment point instead
+## of forcing a redesign of this cache.
+func invalidate_self_paired_geometry(strand: String, slot: int) -> void:
+	_self_paired_geometry_cache.erase("%s:%d" % [strand, slot])
+
 const OPERATOR_PATH: String = "res://resources/phosphodiester_bond_formation.tres"
+
+## Verbatim project framing (docs/MolecularStructureDesign.md, "Self-paired
+## fork-flip as a deliberate, labeled 2D mirror") for the hover disclaimer
+## shown while a residue is rendered via RiboseDeriver.
+## reflect_about_backbone_axis(). Never paraphrase this string — it's the
+## project's own already-agreed wording.
+const MIRRORED_RESIDUE_TOOLTIP_TEXT: String = "in 2D molecular representations this rotation doesn't really exist, but for didactic reasons, we're showing you this way."
+
 var _phosphodiester_operator: ReactionOperator = null
 var _operators: Array[ReactionOperator] = []  # [_phosphodiester_operator] — built once in _ready(), typed explicitly so fold()'s Array[ReactionOperator] parameter doesn't need to coerce an untyped literal every frame
 
@@ -188,18 +230,24 @@ const STRAND_DIRECTION_SIGN: Dictionary = {
 ## different real pairings over its lifetime (never simultaneously, per
 ## _pair_for_slot()'s mutually-exclusive logic).
 ##
-## The two templates push apart from EACH OTHER symmetrically (top: -1,
-## bottom: +1, i.e. 1 unit of separation each = 1 total unit added between
-## them). Leading/lagging push an ADDITIONAL unit further in the same
-## direction their own template partner already moved (leading: -2,
-## lagging: +2) — mirrors how simulation.gd's own row formulas are built
-## (leading_y is defined relative to template_top's row, cascading), so
-## the leading-vs-template_top separation grows by the same total amount
-## as the template-vs-template separation, not half of it.
+## STAGE 4 (docs/superpowers/plans, self-paired pentose reconstruction):
+## template_top/template_bottom's push halved from the original ∓1.0.
+## Measured live via F9 dump before this change: self-paired template-
+## to-template gap = 160 world units (raw 60 + push-contributed 100),
+## while leading-to-its-template-partner gap = 110 (raw 60 + push-
+## contributed 50) — self-paired was rendering 50 units WIDER than
+## leading/lagging's own spacing, not matching it as originally
+## intended (the prior comment here claimed the two should grow by
+## "the same total amount," which the measured numbers contradicted).
+## Halving template_top/template_bottom's multiplier (∓1.0 -> ∓0.5)
+## brings self-paired's push-contributed share down to 50, matching
+## leading/lagging's spacing exactly (60 + 50 = 110 both). leading/
+## lagging's own ∓2.0 are unchanged -- they still push one additional
+## step beyond wherever their template partner now sits.
 const MOLECULAR_ROW_PUSH: Dictionary = {
 	"leading": -2.0,
-	"template_top": -1.0,
-	"template_bottom": 1.0,
+	"template_top": -0.5,
+	"template_bottom": 0.5,
 	"lagging": 2.0,
 }
 
@@ -324,6 +372,7 @@ func _process(_delta: float) -> void:
 	_active = _compute_active()
 	_label_full_geometry_active = _compute_label_full_geometry_active()
 	_rebuild_layout()
+	_hovered_mirrored_key = _compute_hovered_mirrored_key()
 	queue_redraw()
 
 	var key_down: bool = Input.is_key_pressed(KEY_F9)
@@ -358,6 +407,22 @@ func _compute_label_full_geometry_active() -> bool:
 	return z >= tm.molecular_label_zoom_enter_threshold
 
 
+## Nearest mirrored residue whose radius contains the mouse, or "" if none
+## qualify. _mirrored_residue_layout is already empty whenever _active is
+## false (Task 1) or no residue is currently fork-flip-mirrored, so no
+## extra gating is needed here.
+func _compute_hovered_mirrored_key() -> String:
+	var mouse_pos: Vector2 = get_global_mouse_position()
+	var best_key: String = ""
+	var best_dist: float = INF
+	for m in _mirrored_residue_layout:
+		var dist: float = mouse_pos.distance_to(m.world_pos)
+		if dist <= m.radius and dist < best_dist:
+			best_dist = dist
+			best_key = m.key
+	return best_key
+
+
 func _rebuild_layout() -> void:
 	# Perf fix (docs/MolecularStructure_BasePairExpansion.md): this used to
 	# run its full per-residue cost — fold lookup, ring/base derivation,
@@ -380,6 +445,7 @@ func _rebuild_layout() -> void:
 	_bond_layout.clear()
 	_h_bond_layout.clear()
 	_active_slots.clear()
+	_mirrored_residue_layout.clear()
 	if not _active:
 		return
 
@@ -528,12 +594,55 @@ func _rebuild_layout() -> void:
 		# _pair_for_slot()-fix, already confirmed clean this session) keep
 		# the exact original fixed sign, byte-identical to before.
 		var is_self_paired_template: bool = (entry.strand == "template_top" or entry.strand == "template_bottom") and partner_key.begins_with("template_")
-		if is_self_paired_template:
-			ring_positions = RiboseDeriver.derive_self_paired_ring(topology, "incoming.", ring_positions, c1_local, pairing_direction, bond_length, toward_next, toward_previous)
-		else:
-			ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
+		var substituent_positions: Dictionary = {}
+		# STAGE 1 (docs/superpowers/plans -- reconstruction of the self-
+		# paired pentose/phosphate geometry, staged deliberately after the
+		# fork-flip mirror and the bake were both found to have real
+		# geometry bugs -- see the F9 dump: mirror path produced an exact
+		# O3'=C4'/C5'=C3' overlap, bake path produced a C1'-farther-than-
+		# C4'-from-base "cross-twist"). Both bake_self_paired_geometry()
+		# and reflect_about_backbone_axis() are DELIBERATELY bypassed here,
+		# not deleted -- self-paired residues now fall through to the exact
+		# same plain formula leading/lagging already use below, matching
+		# the fake leading/lagging residues in the test chamber, to
+		# establish a known-clean ring/chain baseline before layering
+		# orientation-correctness back on top in a later stage. Expected to
+		# look orientation-wrong (no antiparallel/self-paired correction)
+		# -- that is intentional for this stage, not a regression.
+		ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
+		substituent_positions = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
 
-		var substituent_positions: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
+		# STAGE 2, bottom strand only: reflect C1'/C2'/O4' across the
+		# C3'-C4' line (C3'/C4' sit ON that axis so they -- and the
+		# substituent chain derived from them above -- are unaffected).
+		# Unlike the old, buggy mirror branch, axis_y is read from THIS
+		# ring's own post-apply_strand_direction C4' (not the pre-rotation
+		# natural ring's), which is what caused the old O3'=C4'/C5'=C3'
+		# overlap. Reassigning c1_local to the reflected C1' (rather than
+		# leaving it at the natural pivot used above) is deliberate: both
+		# anchor_offset and the derive_base_layout() call below read this
+		# same variable, so the base re-derives correctly bonded to
+		# wherever C1' now sits, with no separate parameter to thread.
+		# c1_local's EARLIER use above (apply_strand_direction()'s pivot)
+		# already happened, so it's unaffected by this reassignment.
+		if is_self_paired_template and neighbor_sign < 0.0:
+			var c4_id: int = topology.find_by_role("incoming.c4_prime")
+			var axis_y: float = ring_positions[c4_id].y
+			ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+			c1_local = ring_positions[c1_id]
+
+		# STAGE 3, top strand: same transform as Stage 2 immediately above,
+		# same reasoning (see that block's comment), the complementary
+		# sign. For template_top, apply_strand_direction() above was
+		# identity (sign >= 0), so axis_y here is the natural,
+		# never-rotated ring's own C4' -- reflect_about_backbone_axis()
+		# doesn't care either way, it just mirrors whatever ring it's
+		# given about that ring's own current C3'-C4' line.
+		if is_self_paired_template and neighbor_sign >= 0.0:
+			var c4_id: int = topology.find_by_role("incoming.c4_prime")
+			var axis_y: float = ring_positions[c4_id].y
+			ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+			c1_local = ring_positions[c1_id]
 
 		var local_positions: Dictionary = {}
 		for id in ring_positions:
@@ -563,16 +672,31 @@ func _rebuild_layout() -> void:
 		for id in base_positions:
 			local_positions[id] = base_positions[id]
 
+		var residue_max_extent: float = 0.0
 		for atom in topology.atoms:
 			if not local_positions.has(atom.id):
 				continue
-			var world: Vector2 = world_pos + (local_positions[atom.id] - anchor_offset)
+			var local_offset: Vector2 = local_positions[atom.id] - anchor_offset
+			residue_max_extent = max(residue_max_extent, local_offset.length())
+			var world: Vector2 = world_pos + local_offset
 			_atom_layout.append({
 				position = world,
 				element = atom.element,
 				label = _atom_display_label(atom.role, atom.element, _label_full_geometry_active),
 				atom_id = atom.id,
 				nucleotide_slot = entry.slot,
+			})
+
+		# STAGE 1: bypassed alongside the mirror call above -- nothing is
+		# actually mirrored this stage, so nothing should be hoverable
+		# either (this is a SEPARATE condition check from the bypassed
+		# derivation above, not structurally tied to it -- see that
+		# block's own comment -- so it needed its own bypass here).
+		if false and is_self_paired_template and neighbor_sign < 0.0:
+			_mirrored_residue_layout.append({
+				world_pos = world_pos,
+				radius = residue_max_extent + tm.molecular_atom_radius,
+				key = key,
 			})
 
 		for bond in topology.bonds:
@@ -924,4 +1048,32 @@ func _draw() -> void:
 			var draw_pos: Vector2 = Vector2(-ssize.x / 2.0, ascent - ssize.y / 2.0)
 			draw_set_transform(a.position, label_rotation, Vector2.ONE)
 			draw_string(font, draw_pos, a.label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, tm.base_label_color)
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+	# Fork-flip hover disclaimer (docs/superpowers/specs/
+	# 2026-08-04-fork-flip-disclaimer-design.md): drawn last so it renders
+	# on top of atoms/bonds/labels. Hardcoded background/text colors —
+	# no established draw_rect() convention or theme fields exist in this
+	# file to reuse, and this is a small, self-contained overlay, not
+	# something worth a new theme_manager.gd surface for.
+	if _hovered_mirrored_key != "":
+		var hovered_world_pos: Vector2 = Vector2.ZERO
+		var hovered_radius: float = 0.0
+		for m in _mirrored_residue_layout:
+			if m.key == _hovered_mirrored_key:
+				hovered_world_pos = m.world_pos
+				hovered_radius = m.radius
+				break
+		var tooltip_font: Font = tm.base_label_font if tm.base_label_font != null else ThemeDB.fallback_font
+		if tooltip_font != null:
+			var tooltip_font_size: int = tm.molecular_atom_label_font_size
+			var text_size: Vector2 = tooltip_font.get_string_size(MIRRORED_RESIDUE_TOOLTIP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, tooltip_font_size)
+			var padding: Vector2 = Vector2(6.0, 4.0)
+			var tooltip_offset: Vector2 = Vector2(-text_size.x / 2.0, -hovered_radius)
+			var box_pos: Vector2 = tooltip_offset - padding
+			var box_size: Vector2 = text_size + padding * 2.0
+			draw_set_transform(hovered_world_pos, label_rotation, Vector2.ONE)
+			draw_rect(Rect2(box_pos, box_size), Color(0.0, 0.0, 0.0, 0.75), true)
+			var text_pos: Vector2 = tooltip_offset + Vector2(0.0, tooltip_font.get_ascent(tooltip_font_size))
+			draw_string(tooltip_font, text_pos, MIRRORED_RESIDUE_TOOLTIP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, tooltip_font_size, tm.base_label_color)
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
