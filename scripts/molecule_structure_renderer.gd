@@ -600,6 +600,19 @@ func _rebuild_layout() -> void:
 			ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
 			c1_local = ring_positions[c1_id]
 
+		# STAGE 3, top strand: same transform as Stage 2 immediately above,
+		# same reasoning (see that block's comment), the complementary
+		# sign. For template_top, apply_strand_direction() above was
+		# identity (sign >= 0), so axis_y here is the natural,
+		# never-rotated ring's own C4' -- reflect_about_backbone_axis()
+		# doesn't care either way, it just mirrors whatever ring it's
+		# given about that ring's own current C3'-C4' line.
+		if is_self_paired_template and neighbor_sign >= 0.0:
+			var c4_id: int = topology.find_by_role("incoming.c4_prime")
+			var axis_y: float = ring_positions[c4_id].y
+			ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+			c1_local = ring_positions[c1_id]
+
 		var local_positions: Dictionary = {}
 		for id in ring_positions:
 			local_positions[id] = ring_positions[id]

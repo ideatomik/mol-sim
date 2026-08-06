@@ -333,6 +333,14 @@ static func _derive_full_residue(renderer: Node2D, entry: Dictionary, partner_wo
 		ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
 		c1_local = ring_positions[c1_id]
 
+	# STAGE 3, top strand -- mirrors _rebuild_layout()'s identical addition
+	# exactly (see that block's comment for the full rationale).
+	if is_self_paired_template and neighbor_sign >= 0.0:
+		var c4_id: int = topology.find_by_role("incoming.c4_prime")
+		var axis_y: float = ring_positions[c4_id].y
+		ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+		c1_local = ring_positions[c1_id]
+
 	# Bug V verification (docs/MolecularStructure_BasePairExpansion.md):
 	# unlike anchor_alignment_dot below (a DIFFERENT, pre-existing metric —
 	# the BASE ring's own anchor-vs-partner check, from an independent
