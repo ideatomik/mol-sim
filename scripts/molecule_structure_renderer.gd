@@ -581,6 +581,25 @@ func _rebuild_layout() -> void:
 		ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
 		substituent_positions = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
 
+		# STAGE 2, bottom strand only: reflect C1'/C2'/O4' across the
+		# C3'-C4' line (C3'/C4' sit ON that axis so they -- and the
+		# substituent chain derived from them above -- are unaffected).
+		# Unlike the old, buggy mirror branch, axis_y is read from THIS
+		# ring's own post-apply_strand_direction C4' (not the pre-rotation
+		# natural ring's), which is what caused the old O3'=C4'/C5'=C3'
+		# overlap. Reassigning c1_local to the reflected C1' (rather than
+		# leaving it at the natural pivot used above) is deliberate: both
+		# anchor_offset and the derive_base_layout() call below read this
+		# same variable, so the base re-derives correctly bonded to
+		# wherever C1' now sits, with no separate parameter to thread.
+		# c1_local's EARLIER use above (apply_strand_direction()'s pivot)
+		# already happened, so it's unaffected by this reassignment.
+		if is_self_paired_template and neighbor_sign < 0.0:
+			var c4_id: int = topology.find_by_role("incoming.c4_prime")
+			var axis_y: float = ring_positions[c4_id].y
+			ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+			c1_local = ring_positions[c1_id]
+
 		var local_positions: Dictionary = {}
 		for id in ring_positions:
 			local_positions[id] = ring_positions[id]

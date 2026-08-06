@@ -321,6 +321,18 @@ static func _derive_full_residue(renderer: Node2D, entry: Dictionary, partner_wo
 	# renderer actually draws.
 	ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, renderer._strand_direction_sign(strand))
 
+	# STAGE 2, bottom strand only -- mirrors _rebuild_layout()'s identical
+	# addition exactly (see that block's own comment for the full
+	# rationale: reflecting C1'/C2'/O4' across the C3'-C4' line, using
+	# THIS ring's own post-rotation C4' as the axis, then reassigning
+	# c1_local so anchor_offset and derive_base_layout() below both
+	# naturally follow the reflected C1').
+	if is_self_paired_template and neighbor_sign < 0.0:
+		var c4_id: int = topology.find_by_role("incoming.c4_prime")
+		var axis_y: float = ring_positions[c4_id].y
+		ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+		c1_local = ring_positions[c1_id]
+
 	# Bug V verification (docs/MolecularStructure_BasePairExpansion.md):
 	# unlike anchor_alignment_dot below (a DIFFERENT, pre-existing metric —
 	# the BASE ring's own anchor-vs-partner check, from an independent
