@@ -991,3 +991,27 @@ func _draw() -> void:
 			draw_set_transform(a.position, label_rotation, Vector2.ONE)
 			draw_string(font, draw_pos, a.label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, tm.base_label_color)
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+	# Fork-flip hover disclaimer (docs/superpowers/specs/
+	# 2026-08-04-fork-flip-disclaimer-design.md): drawn last so it renders
+	# on top of atoms/bonds/labels. Hardcoded background/text colors —
+	# no established draw_rect() convention or theme fields exist in this
+	# file to reuse, and this is a small, self-contained overlay, not
+	# something worth a new theme_manager.gd surface for.
+	if _hovered_mirrored_key != "":
+		var hovered_world_pos: Vector2 = Vector2.ZERO
+		for m in _mirrored_residue_layout:
+			if m.key == _hovered_mirrored_key:
+				hovered_world_pos = m.world_pos
+				break
+		var tooltip_font: Font = tm.base_label_font if tm.base_label_font != null else ThemeDB.fallback_font
+		if tooltip_font != null:
+			var tooltip_font_size: int = tm.molecular_atom_label_font_size
+			var text_size: Vector2 = tooltip_font.get_string_size(MIRRORED_RESIDUE_TOOLTIP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, tooltip_font_size)
+			var padding: Vector2 = Vector2(6.0, 4.0)
+			var tooltip_offset: Vector2 = Vector2(-text_size.x / 2.0, -tm.molecular_atom_radius * 4.0)
+			var box_pos: Vector2 = hovered_world_pos + tooltip_offset - padding
+			var box_size: Vector2 = text_size + padding * 2.0
+			draw_rect(Rect2(box_pos, box_size), Color(0.0, 0.0, 0.0, 0.75), true)
+			var text_pos: Vector2 = hovered_world_pos + tooltip_offset + Vector2(0.0, tooltip_font.get_ascent(tooltip_font_size))
+			draw_string(tooltip_font, text_pos, MIRRORED_RESIDUE_TOOLTIP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, tooltip_font_size, Color.WHITE)
