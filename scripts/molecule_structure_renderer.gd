@@ -564,33 +564,22 @@ func _rebuild_layout() -> void:
 		# the exact original fixed sign, byte-identical to before.
 		var is_self_paired_template: bool = (entry.strand == "template_top" or entry.strand == "template_bottom") and partner_key.begins_with("template_")
 		var substituent_positions: Dictionary = {}
-		# Fork-flip build (docs/MolecularStructureDesign.md, "Self-paired
-		# fork-flip as a deliberate, labeled 2D mirror"): direction_sign < 0
-		# self-paired residues (template_bottom) no longer go through
-		# bake_self_paired_geometry()'s collision-search rotation -- they
-		# get the pedagogical mirror instead, derived from their own
-		# natural (direction_sign >= 0) ring/substituent placement.
-		# template_top (direction_sign >= 0) is untouched, still the bake
-		# path, same as leading/lagging's own `else` branch below is
-		# untouched.
-		if is_self_paired_template and neighbor_sign < 0.0:
-			var natural_substituents: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
-			var c4_id: int = topology.find_by_role("incoming.c4_prime")
-			var axis_y: float = ring_positions[c4_id].y
-			ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
-			substituent_positions = RiboseDeriver.reflect_about_backbone_axis(natural_substituents, axis_y)
-		elif is_self_paired_template:
-			var self_paired_cache_key: String = "%s:%d" % [entry.strand, entry.slot]
-			if not _self_paired_geometry_cache.has(self_paired_cache_key):
-				_self_paired_geometry_cache[self_paired_cache_key] = RiboseDeriver.bake_self_paired_geometry(topology, "incoming.", bond_length, pairing_direction, toward_next, toward_previous, tm.molecular_atom_radius)
-			var baked: Dictionary = _self_paired_geometry_cache[self_paired_cache_key]
-			ring_positions = baked.ring_positions
-			substituent_positions = baked.substituent_positions
-		else:
-			ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
-
-		if not is_self_paired_template:
-			substituent_positions = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
+		# STAGE 1 (docs/superpowers/plans -- reconstruction of the self-
+		# paired pentose/phosphate geometry, staged deliberately after the
+		# fork-flip mirror and the bake were both found to have real
+		# geometry bugs -- see the F9 dump: mirror path produced an exact
+		# O3'=C4'/C5'=C3' overlap, bake path produced a C1'-farther-than-
+		# C4'-from-base "cross-twist"). Both bake_self_paired_geometry()
+		# and reflect_about_backbone_axis() are DELIBERATELY bypassed here,
+		# not deleted -- self-paired residues now fall through to the exact
+		# same plain formula leading/lagging already use below, matching
+		# the fake leading/lagging residues in the test chamber, to
+		# establish a known-clean ring/chain baseline before layering
+		# orientation-correctness back on top in a later stage. Expected to
+		# look orientation-wrong (no antiparallel/self-paired correction)
+		# -- that is intentional for this stage, not a regression.
+		ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
+		substituent_positions = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
 
 		var local_positions: Dictionary = {}
 		for id in ring_positions:
@@ -635,7 +624,12 @@ func _rebuild_layout() -> void:
 				nucleotide_slot = entry.slot,
 			})
 
-		if is_self_paired_template and neighbor_sign < 0.0:
+		# STAGE 1: bypassed alongside the mirror call above -- nothing is
+		# actually mirrored this stage, so nothing should be hoverable
+		# either (this is a SEPARATE condition check from the bypassed
+		# derivation above, not structurally tied to it -- see that
+		# block's own comment -- so it needed its own bypass here).
+		if false and is_self_paired_template and neighbor_sign < 0.0:
 			_mirrored_residue_layout.append({
 				world_pos = world_pos,
 				radius = residue_max_extent + tm.molecular_atom_radius,
