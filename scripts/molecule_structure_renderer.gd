@@ -66,6 +66,11 @@ var _h_bond_layout: Array[Dictionary] = []
 ## while inactive.
 var _mirrored_residue_layout: Array[Dictionary] = []
 
+## Key ("strand:slot") of the mirrored residue currently under the mouse,
+## or "" if none. Recomputed once per frame in _process(), read by _draw()
+## to decide whether to draw the fork-flip disclaimer tooltip.
+var _hovered_mirrored_key: String = ""
+
 ## Last hysteresis decision. Gates ONLY the draw calls — layout below runs
 ## unconditionally every frame regardless of this, per the render-mode
 ## transition decision (Open Question 10): no first-crossing hitch.
@@ -348,6 +353,7 @@ func _process(_delta: float) -> void:
 		return
 	_active = _compute_active()
 	_rebuild_layout()
+	_hovered_mirrored_key = _compute_hovered_mirrored_key()
 	queue_redraw()
 
 	var key_down: bool = Input.is_key_pressed(KEY_F9)
@@ -368,6 +374,22 @@ func _compute_active() -> bool:
 	if _active:
 		return z >= tm.molecular_zoom_exit_threshold
 	return z >= tm.molecular_zoom_enter_threshold
+
+
+## Nearest mirrored residue whose radius contains the mouse, or "" if none
+## qualify. _mirrored_residue_layout is already empty whenever _active is
+## false (Task 1) or no residue is currently fork-flip-mirrored, so no
+## extra gating is needed here.
+func _compute_hovered_mirrored_key() -> String:
+	var mouse_pos: Vector2 = get_global_mouse_position()
+	var best_key: String = ""
+	var best_dist: float = INF
+	for m in _mirrored_residue_layout:
+		var dist: float = mouse_pos.distance_to(m.world_pos)
+		if dist <= m.radius and dist < best_dist:
+			best_dist = dist
+			best_key = m.key
+	return best_key
 
 
 func _rebuild_layout() -> void:
