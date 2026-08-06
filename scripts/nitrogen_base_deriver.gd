@@ -69,20 +69,31 @@ static func _build_pyrimidine_ring(topology: MoleculeTopology, role_prefix: Stri
 	topology.add_bond(ids.c6, ids.n1)
 	return ids
 
+## Ring double bonds N3=C4, C5=C6 (docs/superpowers/specs bond-thickness
+## design pass — re-derived from valence counting, not recalled: cytosine's
+## exocyclic C2=O2 plus C4-N4 amino substituents fully pin down a UNIQUE
+## Kekulé structure here, unlike adenine's ring which has no such anchor).
 static func build_cytosine_seed_into(topology: MoleculeTopology, role_prefix: String) -> void:
 	var ring := _build_pyrimidine_ring(topology, role_prefix)
+	topology.set_bond_order(ring.n3, ring.c4, 2)
+	topology.set_bond_order(ring.c5, ring.c6, 2)
 	var o2 := topology.add_atom("O", role_prefix + "o2")
-	topology.add_bond(ring.c2, o2)
+	topology.add_bond(ring.c2, o2, 2)
 	var n4 := topology.add_atom("N", role_prefix + "n4")
 	topology.add_bond(ring.c4, n4)
 	_attach_glycosidic_bond(topology, role_prefix, "n1")
 
+## Ring double bond C5=C6 ONLY — thymine's two exocyclic carbonyls
+## (C2=O2, C4=O4) already saturate C2/C4's valence, leaving a single
+## UNIQUE ring double bond (re-derived via valence counting, see
+## build_cytosine_seed_into's comment).
 static func build_thymine_seed_into(topology: MoleculeTopology, role_prefix: String) -> void:
 	var ring := _build_pyrimidine_ring(topology, role_prefix)
+	topology.set_bond_order(ring.c5, ring.c6, 2)
 	var o2 := topology.add_atom("O", role_prefix + "o2")
-	topology.add_bond(ring.c2, o2)
+	topology.add_bond(ring.c2, o2, 2)
 	var o4 := topology.add_atom("O", role_prefix + "o4")
-	topology.add_bond(ring.c4, o4)
+	topology.add_bond(ring.c4, o4, 2)
 	var c5_methyl := topology.add_atom("C", role_prefix + "c5_methyl")
 	topology.add_bond(ring.c5, c5_methyl)
 	_attach_glycosidic_bond(topology, role_prefix, "n1")
@@ -111,16 +122,36 @@ static func _build_purine_rings(topology: MoleculeTopology, role_prefix: String)
 	topology.add_bond(ids.n7, ids.c5)
 	return ids
 
+## Ring double bonds N1=C2, N3=C4, C5=C6, C8=N7 — adenine has NO exocyclic
+## carbonyl (C6 carries an amino group, not oxygen), so unlike the other
+## three bases, valence counting confirms TWO equally valid Kekulé
+## structures exist here (genuine resonance ambiguity, not something
+## guessed past). This is the fully-alternating form, user-confirmed as
+## the convention to render — documented as *a* valid resonance structure,
+## not asserted as more "true" than the alternative (docs/superpowers
+## bond-thickness design pass).
 static func build_adenine_seed_into(topology: MoleculeTopology, role_prefix: String) -> void:
 	var ring := _build_purine_rings(topology, role_prefix)
+	topology.set_bond_order(ring.n1, ring.c2, 2)
+	topology.set_bond_order(ring.n3, ring.c4, 2)
+	topology.set_bond_order(ring.c5, ring.c6, 2)
+	topology.set_bond_order(ring.c8, ring.n7, 2)
 	var n6 := topology.add_atom("N", role_prefix + "n6")
 	topology.add_bond(ring.c6, n6)
 	_attach_glycosidic_bond(topology, role_prefix, "n9")
 
+## Ring double bonds C2=N3, C4=C5 (six/five-ring fusion bond), C8=N7 —
+## UNIQUE solution: the exocyclic C6=O6 carbonyl anchor plus C2-NH2 fully
+## propagate around both fused rings (re-derived via valence counting, see
+## build_cytosine_seed_into's comment; unlike adenine, guanine's carbonyl
+## removes the ambiguity adenine's ring has).
 static func build_guanine_seed_into(topology: MoleculeTopology, role_prefix: String) -> void:
 	var ring := _build_purine_rings(topology, role_prefix)
+	topology.set_bond_order(ring.c2, ring.n3, 2)
+	topology.set_bond_order(ring.c4, ring.c5, 2)
+	topology.set_bond_order(ring.c8, ring.n7, 2)
 	var o6 := topology.add_atom("O", role_prefix + "o6")
-	topology.add_bond(ring.c6, o6)
+	topology.add_bond(ring.c6, o6, 2)
 	var n2 := topology.add_atom("N", role_prefix + "n2")
 	topology.add_bond(ring.c2, n2)
 	_attach_glycosidic_bond(topology, role_prefix, "n9")

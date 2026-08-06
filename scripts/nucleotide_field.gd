@@ -134,8 +134,7 @@ func _ready() -> void:
 	zoom_mgr = get_node_or_null("%ZoomManager")
 	z_index = field_z_index
 	modulate.a = tm.nucleotide_field_alpha
-	visible = enabled
-	set_process(enabled)
+	_apply_effective_state()
 	_font = tm.base_label_font if tm.base_label_font != null else ThemeDB.fallback_font
 	_font_size = tm.base_label_font_size
 	if particle_radius <= 0.0:
@@ -192,7 +191,7 @@ func _fill_for(bt: String) -> Color:
 
 func _process(delta: float) -> void:
 	modulate.a = tm.nucleotide_field_alpha
-	if not enabled or _pos.is_empty():
+	if not enabled or _blocked_by_atom_tier or _pos.is_empty():
 		return
 	var rect = _visible_world_rect()
 	var minx = rect.position.x - edge_margin
@@ -255,7 +254,7 @@ func _resolve_separation() -> void:
 # ==========================================
 
 func _draw() -> void:
-	if not enabled:
+	if not enabled or _blocked_by_atom_tier:
 		return
 	var label_color: Color = tm.base_label_color if tm != null else Color.BLACK
 	var label_rotation: float = zoom_mgr.get_label_counter_rotation() if zoom_mgr != null else 0.0
@@ -341,8 +340,33 @@ func _visible_world_rect() -> Rect2:
 
 func set_enabled(v: bool) -> void:
 	enabled = v
-	visible = v
-	set_process(v)
+	_apply_effective_state()
+
+## True while atom-tier skeletal rendering is active
+## (molecule_structure_renderer.gd's is_molecular_mode_active()) — the
+## ambient dNTP-pool cloud is visually and conceptually incompatible with
+## atom-level rendering (drawn "behind" a DNA that's no longer bead-glyph,
+## depicting a free-nucleotide pool concept that doesn't apply once
+## individual incorporated atoms are on screen). Kept separate from
+## `enabled` (the user's own PlayerUI NCloudToggle intent) so the block
+## doesn't silently flip the checkbox, and re-enabling from atom-tier
+## doesn't require the user to re-toggle it — only the EFFECTIVE
+## visibility is gated, `enabled` itself is untouched. Written only by
+## simulation.gd, which owns both this node and the molecular renderer as
+## siblings — single writer, same "one writer per property" discipline
+## zoom_manager.gd's highlight dims already follow.
+var _blocked_by_atom_tier: bool = false
+
+func set_atom_tier_blocked(blocked: bool) -> void:
+	if blocked == _blocked_by_atom_tier:
+		return
+	_blocked_by_atom_tier = blocked
+	_apply_effective_state()
+
+func _apply_effective_state() -> void:
+	var effective: bool = enabled and not _blocked_by_atom_tier
+	visible = effective
+	set_process(effective)
 
 func set_field_z_index(v: int) -> void:
 	field_z_index = v

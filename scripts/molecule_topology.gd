@@ -28,6 +28,21 @@ func add_atom(element: String, role: String, formal_charge: int = 0) -> int:
 func add_bond(a: int, b: int, order: int = 1) -> void:
 	bonds.append({a = a, b = b, order = order})
 
+## Overrides an existing bond's order after construction — needed when a
+## shared ring-building helper (e.g. nitrogen_base_deriver.gd's
+## _build_pyrimidine_ring()/_build_purine_rings(), reused across multiple
+## bases with different Kekulé double-bond placements) can't hardcode a
+## single order for a bond it adds generically. Still a construction-time
+## primitive alongside add_bond()/add_atom() — called only while a
+## *_seed_into() function is still building its own topology, never on a
+## topology already handed off by MoleculeFoldEngine.fold() (see this
+## file's header on the never-mutated-after-construction contract).
+func set_bond_order(a: int, b: int, order: int) -> void:
+	for bond in bonds:
+		if (bond.a == a and bond.b == b) or (bond.a == b and bond.b == a):
+			bond.order = order
+			return
+
 ## Role tags are the ONLY way operators reference atoms (never raw ids/
 ## indices — see reaction_operator.gd's header for why). Linear scan is
 ## fine at this scale (~30 atoms per molecule, per the design doc's own

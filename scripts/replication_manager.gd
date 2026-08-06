@@ -814,7 +814,16 @@ func _apply_highlight() -> void:
 	for i in range(leading_hydrogen_bonds.size()):
 		var bond = leading_hydrogen_bonds[i]
 		if bond == null or not is_instance_valid(bond): continue
-		var bond_molecular_active: bool = molecule_renderer != null and molecule_renderer.is_slot_active("leading", i)
+		# ORs the partner template strand too (PARTNER_STRAND["leading"] =
+		# "template_top", molecule_structure_renderer.gd:175-177) — matching
+		# simulation.gd's already-correct template_hydrogen_bonds pattern.
+		# _active_slots is populated independently per "strand:slot" from two
+		# separate sources (get_synthesized_nucleotides() vs.
+		# get_template_nucleotides()), so leading:i and template_top:i can
+		# disagree on atom-tier activity; checking only "leading" left the
+		# bead-level pair line fully opaque whenever the TEMPLATE half of the
+		# pair was the one actually rendered at atom scale — the reported bug.
+		var bond_molecular_active: bool = molecule_renderer != null and (molecule_renderer.is_slot_active("leading", i) or molecule_renderer.is_slot_active("template_top", i))
 		bond.modulate.a = 0.0 if bond_molecular_active else strand_dim
 
 	if lagging_backbone_line != null: lagging_backbone_line.modulate.a = 0.0 if lagging_strand_active else strand_dim
@@ -823,7 +832,12 @@ func _apply_highlight() -> void:
 	for i in range(lagging_hydrogen_bonds.size()):
 		var bond = lagging_hydrogen_bonds[i]
 		if bond == null or not is_instance_valid(bond): continue
-		var bond_molecular_active: bool = molecule_renderer != null and not _is_still_primer(i) and molecule_renderer.is_slot_active("lagging", i)
+		# ORs the partner template strand too — same fix as leading's bond
+		# above (PARTNER_STRAND["lagging"] = "template_bottom"). _is_still_primer()
+		# gating stays leading-side-only (a primer slot has no synthesized
+		# lagging base yet to occlude), but the template partner can still be
+		# atom-tier-active independently, so it's still checked unconditionally.
+		var bond_molecular_active: bool = molecule_renderer != null and ((not _is_still_primer(i) and molecule_renderer.is_slot_active("lagging", i)) or molecule_renderer.is_slot_active("template_bottom", i))
 		bond.modulate.a = 0.0 if bond_molecular_active else strand_dim
 	for frag in lagging_fragments:
 		if frag.backbone != null and is_instance_valid(frag.backbone):

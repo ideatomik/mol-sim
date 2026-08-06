@@ -1,40 +1,39 @@
 extends Node2D
 
 # ==========================================
-# v 82 — self-paired reflect fix + atom-tier label zoom tiers
-# - Self-paired residues (template_top/template_bottom pairing with
-#   themselves at the fork) now render via RiboseDeriver.
-#   reflect_about_backbone_axis() — both residues reflected about their
-#   own POST-rotation C3'-C4' line, not the pre-rotation natural ring
-#   (the actual bug: the old mirror reflected one frame while the
-#   substituent chain was built from the other, producing an exact
-#   O3'=C4'/C5'=C3' coordinate collision). The old bake system
-#   (bake_self_paired_geometry(), the bounded rotation-angle search) is
-#   bypassed, not deleted, in case it's needed again.
-# - Carries an on-screen hover disclaimer while the reflect transform is
-#   active — "in 2D molecular representations this rotation doesn't
-#   really exist, but for didactic reasons, we're showing you this way."
-#   (docs/superpowers/specs/2026-08-04-fork-flip-disclaimer-design.md)
-# - Fixed an unrelated spacing bug found along the way: self-paired
-#   strands' render-only MOLECULAR_ROW_PUSH was 50 units wider than
-#   leading/lagging's own spacing; halved to match exactly.
-# - New docs/MolecularStructureDesign.md correction: the chirality-safety
-#   shoelace check is a flat 2D proxy for a 3D property, correctly scoped
-#   to catch only in-page rotations — an out-of-page rotation (this fix's
-#   own reflect) is physically chirality-preserving but indistinguishable
-#   from a mirror on this renderer's flat projection, hence the
-#   disclaimer rather than pretending it's chirality-neutral.
-# - Diagnostics extracted out of molecule_structure_renderer.gd into a
-#   new scripts/molecule_geometry_diagnostics.gd (F9 dump, unchanged
-#   behavior, just relocated).
-# - Atom-tier skeletal labels (docs/atomtier/AtomTier_VisualDesign.md
-#   Part 1): a second, nested zoom threshold inside skeletal mode
-#   (molecular_label_zoom_enter_threshold / _exit_threshold, its own
-#   hysteresis pair, independent of the skeletal on/off pair) now
-#   switches atom labels between two fixed bands — element-only (C, O,
-#   P, N) further out, full chemistry notation (C3', Pα, ...) once
-#   zoomed in past the new threshold — each with its own ThemeManager
-#   font-size field, no continuous interpolation.
+# v 83 — atom-tier colors/bond rendering + nucleotide-field auto-block
+# - Per-element atom colors exposed (molecular_carbon_color/oxygen_color/
+#   phosphorus_color) — previously hardcoded CPK literals in
+#   _element_color(); standard CPK doesn't read well against this
+#   project's dark 2D background. New molecular_backbone_bond_color,
+#   distinct from molecular_bond_color, so the phosphodiester backbone
+#   reads as its own visual thread instead of blending into ring bonds.
+# - New molecular_backbone_bond_width mirrors the color split — backbone
+#   renders thicker than ring/substituent bonds.
+# - Real double-bond (parallel-trace) rendering, wired end-to-end through
+#   molecule_topology.gd's previously-unused bond.order field. Chemistry
+#   re-derived from valence counting, not recalled: cytosine (N3=C4,
+#   C5=C6, C2=O2), thymine (C5=C6, C2=O2, C4=O4), guanine (C2=N3, C4=C5,
+#   C8=N7, C6=O6) all have a UNIQUE Kekulé solution; adenine has none (no
+#   carbonyl anchor) — genuine resonance ambiguity, resolved via a
+#   user-confirmed alternating convention (N1=C2, N3=C4, C5=C6, C8=N7).
+#   One P=O per phosphate (alpha_O1). Tied to the existing Part 1 label
+#   zoom tier: only carbonyls double at the coarse (element-only) band,
+#   everything doubles at the full-geometry band. Each double-bond trace
+#   draws at half the normal bond width, so two strokes read as one bond.
+# - Ambient nucleotide field (the decorative free-dNTP cloud) now
+#   auto-blocked while atom-tier skeletal rendering is active — new
+#   molecule_structure_renderer.gd.is_molecular_mode_active() getter,
+#   polled once per frame from simulation.gd, forwarded to
+#   nucleotide_field.gd.set_atom_tier_blocked(). Keeps the user's own
+#   NCloudToggle intent (`enabled`) separate from the effective on-screen
+#   state, so the checkbox isn't silently flipped.
+# - PARTIAL fix, not fully resolved: replication_manager.gd's
+#   leading_hydrogen_bonds/lagging_hydrogen_bonds suppression now ORs the
+#   paired template strand's atom-tier state too (mirroring
+#   simulation.gd's already-correct template_hydrogen_bonds pattern) —
+#   but the underlying bead-level base-pair-line bug still reproduces in
+#   some form. Deeper debugging deferred to a future session.
 #
 # CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md — when
 # delivering a new version, move this block there first, then write the new
@@ -885,6 +884,16 @@ func _process(delta):
 			top_strand_slots[last].position.y + top_strand_backbone_delta[last] + wobble_last
 		)
 	background_rect.color = %ThemeManager.background_color
+
+	# ---- Ambient nucleotide field: blocked while atom-tier is active ----
+	# The decorative free-dNTP cloud is visually/conceptually incompatible
+	# with atom-level skeletal rendering — auto-disabled and blocked from
+	# re-enabling via NCloudToggle while molecule_renderer is showing real
+	# atoms, per nucleotide_field.gd's set_atom_tier_blocked() (the user's
+	# own toggle intent, `enabled`, is left untouched — only the effective
+	# visibility is gated, so the checkbox doesn't silently flip).
+	if nucleotide_field != null and molecule_renderer != null:
+		nucleotide_field.set_atom_tier_blocked(molecule_renderer.is_molecular_mode_active())
 
 # ==========================================
 # SCRUBBER API (Public Functions for UI)

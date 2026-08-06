@@ -323,11 +323,36 @@ const ATOM_DISPLAY_LABELS: Dictionary = {
 func _atom_display_label(role: String, element: String, full_geometry: bool) -> String:
 	if not full_geometry:
 		return element
-	var suffix: String = role
+	var suffix: String = _role_suffix(role)
+	return ATOM_DISPLAY_LABELS.get(suffix, element)
+
+## Shared by _atom_display_label() above and _bond_is_carbonyl() below —
+## topology.atoms' role strings are always "incoming.<suffix>" or
+## "chain.<suffix>" (see molecule_topology.gd's add_atom()).
+func _role_suffix(role: String) -> String:
 	var dot: int = role.rfind(".")
 	if dot != -1:
-		suffix = role.substr(dot + 1)
-	return ATOM_DISPLAY_LABELS.get(suffix, element)
+		return role.substr(dot + 1)
+	return role
+
+## Carbonyl oxygens (C=O, always double regardless of label zoom tier —
+## bond-thickness design pass): the exocyclic ring substituent oxygens,
+## never the ribose/phosphate oxygens (o4_prime, alpha_O1, etc. — full
+## suffixes, not matched by this short-suffix set).
+const CARBONYL_OXYGEN_SUFFIXES: Array[String] = ["o2", "o4", "o6"]
+
+## Whether a bond is a carbonyl C=O — shows double even at the wider,
+## element-only label band (see _draw()'s draw_double decision), unlike
+## other order==2 bonds (aromatic ring, phosphate P=O) which only show
+## double once _label_full_geometry_active. Checked by role suffix, not a
+## new authoring-time flag — carbonyls are already order==2 in the
+## topology (see nitrogen_base_deriver.gd), this just identifies WHICH
+## order==2 bonds those are.
+func _bond_is_carbonyl(topology: MoleculeTopology, bond: Dictionary) -> bool:
+	var atom_a: Dictionary = topology.get_atom(bond.a)
+	var atom_b: Dictionary = topology.get_atom(bond.b)
+	return CARBONYL_OXYGEN_SUFFIXES.has(_role_suffix(atom_a.get("role", ""))) \
+		or CARBONYL_OXYGEN_SUFFIXES.has(_role_suffix(atom_b.get("role", "")))
 
 
 func _ready() -> void:
@@ -364,6 +389,14 @@ func is_strand_active(strand: String) -> bool:
 		if key.begins_with(strand + ":"):
 			return true
 	return false
+
+## Public accessor for _active — simulation.gd polls this to auto-block
+## nucleotide_field.gd's ambient dNTP cloud while atom-tier skeletal
+## rendering is active (the ambient cloud is visually/conceptually
+## incompatible with atom-level rendering — see nucleotide_field.gd's
+## set_atom_tier_blocked()).
+func is_molecular_mode_active() -> bool:
+	return _active
 
 
 func _process(_delta: float) -> void:
@@ -707,6 +740,9 @@ func _rebuild_layout() -> void:
 					world_pos + (local_positions[bond.a] - anchor_offset),
 					world_pos + (local_positions[bond.b] - anchor_offset),
 				],
+				is_backbone = false,
+				order = bond.order,
+				always_double = _bond_is_carbonyl(topology, bond),
 			})
 
 		var o3_id: int = topology.find_by_role("incoming.o3_prime")
@@ -774,12 +810,12 @@ func _build_backbone_bonds(o3_by_key: Dictionary, alpha_by_key: Dictionary) -> v
 				if alpha_by_key.has(next_key):
 					var from_pos: Vector2 = o3_by_key[key]
 					var to_pos: Vector2 = alpha_by_key[next_key]
-					_bond_layout.append({points = _build_bond_points(strand, from_pos, to_pos, mode_switch_threshold)})
+					_bond_layout.append({points = _build_bond_points(strand, from_pos, to_pos, mode_switch_threshold), is_backbone = true, order = 1, always_double = false})
 			else:
 				if o3_by_key.has(next_key) and alpha_by_key.has(key):
 					var from_pos: Vector2 = o3_by_key[next_key]
 					var to_pos: Vector2 = alpha_by_key[key]
-					_bond_layout.append({points = _build_bond_points(strand, from_pos, to_pos, mode_switch_threshold)})
+					_bond_layout.append({points = _build_bond_points(strand, from_pos, to_pos, mode_switch_threshold), is_backbone = true, order = 1, always_double = false})
 
 ## Option C fix (docs/MolecularStructure_BasePairExpansion.md): a
 ## covalent phosphodiester backbone bond does not stretch — helicase
@@ -951,10 +987,10 @@ func _current_viewport_world_rect() -> Rect2:
 
 func _element_color(element: String) -> Color:
 	match element:
-		"C": return Color(0.75, 0.75, 0.78)
+		"C": return tm.molecular_carbon_color
 		"N": return tm.molecular_nitrogen_color
-		"O": return Color(0.85, 0.25, 0.2)
-		"P": return Color(0.95, 0.6, 0.15)
+		"O": return tm.molecular_oxygen_color
+		"P": return tm.molecular_phosphorus_color
 		_: return tm.molecular_bond_color
 
 
@@ -993,27 +1029,52 @@ func _draw() -> void:
 	# docs/MolecularStructure_BasePairExpansion.md) are never inset, since
 	# they're pure curve geometry, not atom centres — only the true
 	# first/last points get the inset treatment.
-	var half_width: float = tm.molecular_bond_width * 0.5
 	for b in _bond_layout:
 		var points: Array = b.points
 		if points.size() < 2:
 			continue
-		var drawn_points: Array = points.duplicate()
-		var inset_first: PackedVector2Array = ProceduralShapeUtils.inset_segment(
-			points[0], points[1], tm.molecular_atom_radius, 0.0
-		)
-		if inset_first.size() >= 1:
-			drawn_points[0] = inset_first[0]
-		var last_i: int = points.size() - 1
-		var inset_last: PackedVector2Array = ProceduralShapeUtils.inset_segment(
-			points[last_i - 1], points[last_i], 0.0, tm.molecular_atom_radius
-		)
-		if inset_last.size() >= 2:
-			drawn_points[last_i] = inset_last[1]
-		for i in range(drawn_points.size() - 1):
-			draw_line(drawn_points[i], drawn_points[i + 1], tm.molecular_bond_color, tm.molecular_bond_width, false)
-		for p in drawn_points:
-			draw_circle(p, half_width, tm.molecular_bond_color, true, -1.0, false)
+		var bond_color: Color = tm.molecular_backbone_bond_color if b.is_backbone else tm.molecular_bond_color
+		var bond_width: float = tm.molecular_backbone_bond_width if b.is_backbone else tm.molecular_bond_width
+		# Double-bond parallel trace (bond-thickness design pass): only ever
+		# order==2 intra-residue bonds (carbonyl/aromatic/phosphate P=O) —
+		# backbone bonds are always order 1 (a phosphodiester linkage never
+		# doubles), so this never has to contend with curve-following
+		# multi-point polylines (Option C), only plain 2-point chords.
+		# Coarse (element-only) label band shows ONLY carbonyls double
+		# (b.always_double); the full-geometry band shows every real
+		# double bond.
+		var draw_double: bool = b.order == 2 and (_label_full_geometry_active or b.always_double)
+		# Each trace of a double bond is drawn at half the regular width —
+		# two full-width lines side by side would read as "twice as thick,"
+		# not "one double bond."
+		if draw_double:
+			bond_width *= 0.5
+		var bond_half_width: float = bond_width * 0.5
+		var segments: Array = [points]
+		if draw_double and points.size() == 2:
+			var direction: Vector2 = (points[1] - points[0]).normalized()
+			var perp: Vector2 = direction.rotated(PI / 2.0) * (tm.molecular_double_bond_offset * 0.5)
+			segments = [
+				[points[0] + perp, points[1] + perp],
+				[points[0] - perp, points[1] - perp],
+			]
+		for seg_points in segments:
+			var drawn_points: Array = seg_points.duplicate()
+			var inset_first: PackedVector2Array = ProceduralShapeUtils.inset_segment(
+				seg_points[0], seg_points[1], tm.molecular_atom_radius, 0.0
+			)
+			if inset_first.size() >= 1:
+				drawn_points[0] = inset_first[0]
+			var last_i: int = seg_points.size() - 1
+			var inset_last: PackedVector2Array = ProceduralShapeUtils.inset_segment(
+				seg_points[last_i - 1], seg_points[last_i], 0.0, tm.molecular_atom_radius
+			)
+			if inset_last.size() >= 2:
+				drawn_points[last_i] = inset_last[1]
+			for i in range(drawn_points.size() - 1):
+				draw_line(drawn_points[i], drawn_points[i + 1], bond_color, bond_width, false)
+			for p in drawn_points:
+				draw_circle(p, bond_half_width, bond_color, true, -1.0, false)
 
 	# Hydrogen bonds: one dotted line per REAL atom pair
 	# (docs/MolecularStructure_BasePairExpansion.md — supersedes the old

@@ -56,6 +56,47 @@ header.
 ---
 
 # ==========================================
+# v 82 — self-paired reflect fix + atom-tier label zoom tiers
+# - Self-paired residues (template_top/template_bottom pairing with
+#   themselves at the fork) now render via RiboseDeriver.
+#   reflect_about_backbone_axis() — both residues reflected about their
+#   own POST-rotation C3'-C4' line, not the pre-rotation natural ring
+#   (the actual bug: the old mirror reflected one frame while the
+#   substituent chain was built from the other, producing an exact
+#   O3'=C4'/C5'=C3' coordinate collision). The old bake system
+#   (bake_self_paired_geometry(), the bounded rotation-angle search) is
+#   bypassed, not deleted, in case it's needed again.
+# - Carries an on-screen hover disclaimer while the reflect transform is
+#   active — "in 2D molecular representations this rotation doesn't
+#   really exist, but for didactic reasons, we're showing you this way."
+#   (docs/superpowers/specs/2026-08-04-fork-flip-disclaimer-design.md)
+# - Fixed an unrelated spacing bug found along the way: self-paired
+#   strands' render-only MOLECULAR_ROW_PUSH was 50 units wider than
+#   leading/lagging's own spacing; halved to match exactly.
+# - New docs/MolecularStructureDesign.md correction: the chirality-safety
+#   shoelace check is a flat 2D proxy for a 3D property, correctly scoped
+#   to catch only in-page rotations — an out-of-page rotation (this fix's
+#   own reflect) is physically chirality-preserving but indistinguishable
+#   from a mirror on this renderer's flat projection, hence the
+#   disclaimer rather than pretending it's chirality-neutral.
+# - Diagnostics extracted out of molecule_structure_renderer.gd into a
+#   new scripts/molecule_geometry_diagnostics.gd (F9 dump, unchanged
+#   behavior, just relocated).
+# - Atom-tier skeletal labels (docs/atomtier/AtomTier_VisualDesign.md
+#   Part 1): a second, nested zoom threshold inside skeletal mode
+#   (molecular_label_zoom_enter_threshold / _exit_threshold, its own
+#   hysteresis pair, independent of the skeletal on/off pair) now
+#   switches atom labels between two fixed bands — element-only (C, O,
+#   P, N) further out, full chemistry notation (C3', Pα, ...) once
+#   zoomed in past the new threshold — each with its own ThemeManager
+#   font-size field, no continuous interpolation.
+#
+# CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md — when
+# delivering a new version, move this block there first, then write the new
+# one here. This header never accumulates more than one version.
+# ==========================================
+
+# ==========================================
 # v 81 — NAD+ pass (bacterial ligase gets its cofactor)
 # - is_enabled("ligase_cofactor") stopped being a topology GATE and became a
 #   plain proxy for cofactor_activation_enabled — ligase has a cofactor in

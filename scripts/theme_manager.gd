@@ -551,9 +551,24 @@ extends Node
 ## other across the whole sweep, so this is a balance point, not a value
 ## that clears both with room to spare.
 @export var molecular_ring_bond_length_ratio: float = 0.287
-## Line width for skeletal bonds, world units (scales with zoom like
-## everything else drawn in world space). NOT YET TUNED.
+## Line width for RING/SUBSTITUENT skeletal bonds (intra-residue chemistry
+## — NOT the phosphodiester backbone, see molecular_backbone_bond_width
+## below), world units (scales with zoom like everything else drawn in
+## world space). NOT YET TUNED.
 @export var molecular_bond_width: float = 2.5
+## Line width for the phosphodiester BACKBONE chain only, mirroring
+## molecular_backbone_bond_color's split from molecular_bond_color —
+## deliberately thicker so the 5'->3' thread reads as visually heavier
+## than the ring/substituent chemistry around it, matching the common
+## skeletal-diagram convention of a bolder main chain. NOT YET TUNED.
+@export var molecular_backbone_bond_width: float = 4.0
+## World-space perpendicular gap between the two parallel lines of a
+## rendered double bond (real C=O/C=C/C=N/P=O bonds, per bond.order in
+## molecule_topology.gd — see molecule_structure_renderer.gd's _draw()).
+## Kept small relative to molecular_atom_radius (6.0) so a double bond
+## reads as ONE bond with two strokes, not two separate bonds. NOT YET
+## TUNED.
+@export var molecular_double_bond_offset: float = 2.5
 ## Atom circle radius, world units. NOT YET TUNED.
 @export var molecular_atom_radius: float = 6.0
 ## Font size (px) for skeletal atom element-symbol labels. Deliberately its
@@ -595,11 +610,23 @@ extends Node
 ## chord was a rendering approximation, not a data problem. "A handful" —
 ## 5 segments. NOT YET TUNED.
 @export var molecular_curve_sample_count: int = 6
-## Fill color for skeletal bonds and any atom with no per-element color
-## defined below (the element color table itself lives in
-## molecule_structure_renderer.gd, matching simulation.gd's
-## _get_base_fill() pattern rather than duplicating a color table here).
+## Fill color for RING/SUBSTITUENT skeletal bonds (intra-residue chemistry
+## — NOT the phosphodiester backbone chain, see molecular_backbone_bond_
+## color below) and any atom with no per-element color defined below (the
+## element color table itself lives in molecule_structure_renderer.gd,
+## matching simulation.gd's _get_base_fill() pattern rather than
+## duplicating a color table here).
 @export var molecular_bond_color: Color = Color(0.6, 0.6, 0.65)
+## Fill color for the phosphodiester BACKBONE chain only (the inter-residue
+## O3'->alpha-phosphate bonds built in _build_backbone_bonds() — the actual
+## 5'->3' thread running through a strand), deliberately distinct from
+## molecular_bond_color's ring/substituent bonds so a learner can trace the
+## backbone visually instead of it blending into the rest of a residue's
+## chemistry. One flat color for every strand — no per-strand variation, no
+## in-segment gradient (kept deliberately simple per design discussion).
+## NOT YET TUNED — starting point only, chosen distinct from
+## molecular_bond_color's cool gray on purpose.
+@export var molecular_backbone_bond_color: Color = Color(0.95, 0.75, 0.35)
 ## World-space padding added to a nucleotide's derived ring/substituent
 ## extent when building its per-molecule culling bounding box. NOT YET
 ## TUNED.
@@ -611,6 +638,21 @@ extends Node
 ## real base topology (with several N atoms per residue) started rendering.
 ## Standard CPK convention: blue. NOT YET TUNED.
 @export var molecular_nitrogen_color: Color = Color(0.25, 0.35, 0.95)
+## Atom-tier color exposure pass: carbon/oxygen/phosphorus were still
+## hardcoded literals inside _element_color() while nitrogen (above) was
+## the only element pulled out to a tunable field — standard CPK doesn't
+## read well against this project's dark 2D background, so all three are
+## now editor-tunable too. Default carries over the exact prior hardcoded
+## value, so landing this field is a pure mechanism change (hardcode ->
+## field) with zero visual difference until retuned in the Inspector. NOT
+## YET TUNED beyond that.
+@export var molecular_carbon_color: Color = Color(0.75, 0.75, 0.78)
+## Same pass as molecular_carbon_color above — default carries over the
+## prior hardcoded oxygen literal unchanged. NOT YET TUNED.
+@export var molecular_oxygen_color: Color = Color(0.85, 0.25, 0.2)
+## Same pass as molecular_carbon_color above — default carries over the
+## prior hardcoded phosphorus literal unchanged. NOT YET TUNED.
+@export var molecular_phosphorus_color: Color = Color(0.95, 0.6, 0.15)
 ## Growth Session 2: additional cull-bbox padding accounting for a base
 ## pair's real extent now spanning BOTH strands (the hydrogen-bond span),
 ## not just one ribose ring. Sized off the same live gap

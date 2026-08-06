@@ -103,7 +103,12 @@ static func build_incoming_nucleotide_seed(role_prefix: String = "incoming.", ba
 	t.add_bond(o5, alpha_p)
 	var alpha_o1 := t.add_atom("O", role_prefix + "alpha_O1")
 	var alpha_o2 := t.add_atom("O", role_prefix + "alpha_O2")
-	t.add_bond(alpha_p, alpha_o1)
+	# One P=O double bond per phosphate (bond-thickness design pass) —
+	# alpha_O1/alpha_O2 are chemically equivalent non-bridging oxygens
+	# (resonance-delocalized in reality); picking alpha_O1 is standard
+	# skeletal-diagram convention, not an approximation of something more
+	# "correct" than picking alpha_O2 instead.
+	t.add_bond(alpha_p, alpha_o1, 2)
 	t.add_bond(alpha_p, alpha_o2)
 	var alpha_beta_bridge := t.add_atom("O", role_prefix + "alpha_beta_bridge_O")
 	t.add_bond(alpha_p, alpha_beta_bridge)
