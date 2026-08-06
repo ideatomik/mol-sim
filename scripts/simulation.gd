@@ -1,34 +1,40 @@
 extends Node2D
 
 # ==========================================
-# v 81 — NAD+ pass (bacterial ligase gets its cofactor)
-# - is_enabled("ligase_cofactor") stopped being a topology GATE and became a
-#   plain proxy for cofactor_activation_enabled — ligase has a cofactor in
-#   BOTH modes now. WHICH one is a separate question, answered by the new
-#   ComplexityManager.ligase_uses_nad() (true in Circular/bacterial mode),
-#   deliberately kept out of is_enabled() itself: mixing a mode PARAMETER
-#   into that boolean would make "false" ambiguous between "lens off" and
-#   "wrong donor for this mode."
-# - ligase_cofactor.gd: _ppi_group -> _leaving_group. New donor_is_nad flag,
-#   set by replication_manager.gd from ligase_uses_nad() before every
-#   begin_carry() (topology can change between one seal and the next). New
-#   _apply_donor(): ATP -> second bead "P" + thick fused link (PPi, must not
-#   read as two loose Pi); NAD+ -> second bead "N" + ordinary link (NMN's two
-#   beads are already visually distinct by colour, so the fused treatment
-#   would falsely claim a "rigid unit" NMN doesn't have). The AMP half is
-#   entirely untouched — adenylylation is chemically identical for both
-#   donors, so nothing there needed to change.
-# - New ThemeManager field: cofactor_nicotinamide_color.
-# - complexity_setup_popup.gd: _update_cofactor_mode_note() REMOVED — it
-#   explained an absence ("ligase has no cofactor here"), and the absence is
-#   filled. Left as a comment rather than silently deleted.
-# - ui_strings.csv: UI_ATP_TOGGLE_LABEL / UI_ATP_BYPRODUCTS_TOGGLE_LABEL /
-#   UI_ATP_BYPRODUCTS_REQUIRES_ATP_TOOLTIP -> UI_COFACTOR_* (copy updated:
-#   byproducts list now includes NMN). UI_ATP_BACTERIAL_LIGASE_NAD_TOOLTIP
-#   deleted outright, not carried forward.
-# - Zero helicase changes. Its bonds and byproducts are still pure ATP
-#   (helicase runs on ATP in every domain — see v80's header on why atp_*
-#   stayed atp_* there).
+# v 82 — self-paired reflect fix + atom-tier label zoom tiers
+# - Self-paired residues (template_top/template_bottom pairing with
+#   themselves at the fork) now render via RiboseDeriver.
+#   reflect_about_backbone_axis() — both residues reflected about their
+#   own POST-rotation C3'-C4' line, not the pre-rotation natural ring
+#   (the actual bug: the old mirror reflected one frame while the
+#   substituent chain was built from the other, producing an exact
+#   O3'=C4'/C5'=C3' coordinate collision). The old bake system
+#   (bake_self_paired_geometry(), the bounded rotation-angle search) is
+#   bypassed, not deleted, in case it's needed again.
+# - Carries an on-screen hover disclaimer while the reflect transform is
+#   active — "in 2D molecular representations this rotation doesn't
+#   really exist, but for didactic reasons, we're showing you this way."
+#   (docs/superpowers/specs/2026-08-04-fork-flip-disclaimer-design.md)
+# - Fixed an unrelated spacing bug found along the way: self-paired
+#   strands' render-only MOLECULAR_ROW_PUSH was 50 units wider than
+#   leading/lagging's own spacing; halved to match exactly.
+# - New docs/MolecularStructureDesign.md correction: the chirality-safety
+#   shoelace check is a flat 2D proxy for a 3D property, correctly scoped
+#   to catch only in-page rotations — an out-of-page rotation (this fix's
+#   own reflect) is physically chirality-preserving but indistinguishable
+#   from a mirror on this renderer's flat projection, hence the
+#   disclaimer rather than pretending it's chirality-neutral.
+# - Diagnostics extracted out of molecule_structure_renderer.gd into a
+#   new scripts/molecule_geometry_diagnostics.gd (F9 dump, unchanged
+#   behavior, just relocated).
+# - Atom-tier skeletal labels (docs/atomtier/AtomTier_VisualDesign.md
+#   Part 1): a second, nested zoom threshold inside skeletal mode
+#   (molecular_label_zoom_enter_threshold / _exit_threshold, its own
+#   hysteresis pair, independent of the skeletal on/off pair) now
+#   switches atom labels between two fixed bands — element-only (C, O,
+#   P, N) further out, full chemistry notation (C3', Pα, ...) once
+#   zoomed in past the new threshold — each with its own ThemeManager
+#   font-size field, no continuous interpolation.
 #
 # CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md — when
 # delivering a new version, move this block there first, then write the new

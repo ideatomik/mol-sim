@@ -56,6 +56,41 @@ header.
 ---
 
 # ==========================================
+# v 81 — NAD+ pass (bacterial ligase gets its cofactor)
+# - is_enabled("ligase_cofactor") stopped being a topology GATE and became a
+#   plain proxy for cofactor_activation_enabled — ligase has a cofactor in
+#   BOTH modes now. WHICH one is a separate question, answered by the new
+#   ComplexityManager.ligase_uses_nad() (true in Circular/bacterial mode),
+#   deliberately kept out of is_enabled() itself: mixing a mode PARAMETER
+#   into that boolean would make "false" ambiguous between "lens off" and
+#   "wrong donor for this mode."
+# - ligase_cofactor.gd: _ppi_group -> _leaving_group. New donor_is_nad flag,
+#   set by replication_manager.gd from ligase_uses_nad() before every
+#   begin_carry() (topology can change between one seal and the next). New
+#   _apply_donor(): ATP -> second bead "P" + thick fused link (PPi, must not
+#   read as two loose Pi); NAD+ -> second bead "N" + ordinary link (NMN's two
+#   beads are already visually distinct by colour, so the fused treatment
+#   would falsely claim a "rigid unit" NMN doesn't have). The AMP half is
+#   entirely untouched — adenylylation is chemically identical for both
+#   donors, so nothing there needed to change.
+# - New ThemeManager field: cofactor_nicotinamide_color.
+# - complexity_setup_popup.gd: _update_cofactor_mode_note() REMOVED — it
+#   explained an absence ("ligase has no cofactor here"), and the absence is
+#   filled. Left as a comment rather than silently deleted.
+# - ui_strings.csv: UI_ATP_TOGGLE_LABEL / UI_ATP_BYPRODUCTS_TOGGLE_LABEL /
+#   UI_ATP_BYPRODUCTS_REQUIRES_ATP_TOOLTIP -> UI_COFACTOR_* (copy updated:
+#   byproducts list now includes NMN). UI_ATP_BACTERIAL_LIGASE_NAD_TOOLTIP
+#   deleted outright, not carried forward.
+# - Zero helicase changes. Its bonds and byproducts are still pure ATP
+#   (helicase runs on ATP in every domain — see v80's header on why atp_*
+#   stayed atp_* there).
+#
+# CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md — when
+# delivering a new version, move this block there first, then write the new
+# one here. This header never accumulates more than one version.
+# ==========================================
+
+# ==========================================
 # v 80 — cofactor rename (no behavior change)
 # - The ATP lens outgrew its name before shipping a second cofactor. NAD+ is
 #   next, and FAD / CoA / GTP arrive with Krebs; a namespace called after one
