@@ -276,6 +276,29 @@ static func _rotate_180(local_positions: Dictionary, pivot: Vector2) -> Dictiona
 		rotated[id] = 2.0 * pivot - local_positions[id]
 	return rotated
 
+## Pedagogical fork-flip (docs/MolecularStructureDesign.md, "Self-paired
+## fork-flip as a deliberate, labeled 2D mirror"): reflects every atom
+## about the horizontal line y = axis_y, i.e. (x, y) -> (x, 2*axis_y - y).
+## This is the flat-plane projection of a real 180-degree rotation about an
+## in-plane axis (here, the residue's own C4'-C5' bond, which sits exactly
+## horizontal in the natural, unrotated local frame). Unlike
+## apply_strand_direction()'s point-reflection (det +1 in 2D, winding-order
+## safe), this is a 2D mirror (det -1) by construction: the whole point is
+## to visually show the residue turning around its own backbone bond, which
+## this flat renderer cannot represent as a true rotation. Deliberately
+## separate from apply_strand_direction() rather than folded into it -- the
+## two answer different questions (which way is 5'->3' running vs. which
+## face of the residue is toward the viewer) and callers choose one or the
+## other, never both, for a given residue. Callers MUST pair this with the
+## on-screen didactic disclaimer the design doc requires -- this function
+## does not and cannot enforce that itself.
+static func reflect_about_backbone_axis(local_positions: Dictionary, axis_y: float) -> Dictionary:
+	var reflected: Dictionary = {}
+	for id in local_positions:
+		var p: Vector2 = local_positions[id]
+		reflected[id] = Vector2(p.x, 2.0 * axis_y - p.y)
+	return reflected
+
 ## Self-paired geometry bake, Stage 1: ring construction (docs/
 ## MolecularStructureDesign.md, "Self-paired geometry is baked once per
 ## residue, not recomputed live", 2026-08-04). Reuses the proven Tier 1
