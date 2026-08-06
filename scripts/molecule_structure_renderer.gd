@@ -58,6 +58,16 @@ var _h_bond_layout: Array[Dictionary] = []
 ## unconditionally every frame regardless of this, per the render-mode
 ## transition decision (Open Question 10): no first-crossing hitch.
 var _active: bool = false
+## Second-tier hysteresis nested inside skeletal mode (Part 1,
+## docs/atomtier/AtomTier_VisualDesign.md): true = closer band, full
+## geometry labels (C3', Pα, ...); false = wider band, element-only
+## labels (C, O, P, N). Meaningless while _active is false — reset to
+## false alongside it so re-entering skeletal mode always starts in the
+## wider band rather than resuming stale state. Mirrors
+## _compute_active()'s own enter/exit hysteresis exactly, against its
+## own ThemeManager pair (molecular_label_zoom_enter_threshold /
+## _exit_threshold) — independent of the skeletal on/off pair.
+var _label_full_geometry_active: bool = false
 
 ## Which "strand:slot" keys are actually rendered in skeletal mode THIS
 ## frame — backs is_slot_active(), polled live by replication_manager.gd/
@@ -262,7 +272,9 @@ const ATOM_DISPLAY_LABELS: Dictionary = {
 	"n6": "N6", "o6": "O6", "n2": "N2", "o2": "O2", "o4": "O4", "c5_methyl": "C5-Me",
 }
 
-func _atom_display_label(role: String, element: String) -> String:
+func _atom_display_label(role: String, element: String, full_geometry: bool) -> String:
+	if not full_geometry:
+		return element
 	var suffix: String = role
 	var dot: int = role.rfind(".")
 	if dot != -1:
@@ -310,6 +322,7 @@ func _process(_delta: float) -> void:
 	if replication_mgr == null or zoom_mgr == null or tm == null:
 		return
 	_active = _compute_active()
+	_label_full_geometry_active = _compute_label_full_geometry_active()
 	_rebuild_layout()
 	queue_redraw()
 
@@ -331,6 +344,18 @@ func _compute_active() -> bool:
 	if _active:
 		return z >= tm.molecular_zoom_exit_threshold
 	return z >= tm.molecular_zoom_enter_threshold
+
+
+## Nested inside skeletal mode: only meaningful while _active is true.
+## Same enter/exit hysteresis shape as _compute_active(), against the
+## label-band-specific threshold pair.
+func _compute_label_full_geometry_active() -> bool:
+	if not _active:
+		return false
+	var z: float = zoom_mgr.zoom.x
+	if _label_full_geometry_active:
+		return z >= tm.molecular_label_zoom_exit_threshold
+	return z >= tm.molecular_label_zoom_enter_threshold
 
 
 func _rebuild_layout() -> void:
@@ -545,7 +570,7 @@ func _rebuild_layout() -> void:
 			_atom_layout.append({
 				position = world,
 				element = atom.element,
-				label = _atom_display_label(atom.role, atom.element),
+				label = _atom_display_label(atom.role, atom.element, _label_full_geometry_active),
 				atom_id = atom.id,
 				nucleotide_slot = entry.slot,
 			})
@@ -883,12 +908,14 @@ func _draw() -> void:
 	# continues and the next atom's draw_circle() uses absolute coords.
 	var label_rotation: float = zoom_mgr.get_label_counter_rotation() if zoom_mgr != null else 0.0
 	var font: Font = tm.base_label_font if tm.base_label_font != null else ThemeDB.fallback_font
-	# Dedicated field, NOT tm.base_label_font_size — that value is
+	# Dedicated fields, NOT tm.base_label_font_size — that value is
 	# proportioned for the bead-glyph mode's base_radius (15 world units);
 	# reused directly against molecular_atom_radius (6.0) it was ~2.5x too
-	# large relative to its own atom circle. See the field's own doc
-	# comment in theme_manager.gd.
-	var font_size: int = tm.molecular_atom_label_font_size
+	# large relative to its own atom circle. See the fields' own doc
+	# comments in theme_manager.gd. Selects between the closer band's
+	# full-geometry size and the wider band's element-only size (Part 1,
+	# docs/atomtier/AtomTier_VisualDesign.md), per _label_full_geometry_active.
+	var font_size: int = tm.molecular_atom_label_font_size if _label_full_geometry_active else tm.molecular_atom_label_font_size_element_only
 	for a in _atom_layout:
 		draw_circle(a.position, tm.molecular_atom_radius, _element_color(a.element), true, -1.0, false)
 		if font != null:

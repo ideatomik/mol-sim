@@ -510,6 +510,30 @@ extends Node
 ## alongside the enter threshold, keeping a comparable hysteresis gap.
 ## NOT YET TUNED.
 @export var molecular_zoom_exit_threshold: float = 5.5
+## Second, INNER zoom threshold (Part 1, docs/atomtier/
+## AtomTier_VisualDesign.md) — nested inside skeletal mode, not an
+## alternative to molecular_zoom_enter_threshold. Zoom scalar crossed
+## GOING UP, while already in skeletal mode, that switches atom labels
+## from element-only (C, O, P, N) to full chemistry-notation geometry
+## labels (C3', Pα, ...). Independent tunable, deliberately not derived
+## from molecular_zoom_enter_threshold even though it must end up larger
+## in practice — see this file's own "never let two independently-tuned
+## numbers coincidentally agree" rule. MUST stay below
+## zoom_free_camera_max_zoom_in (8.0) — that's the hard ceiling
+## free-camera zoom is clamped to (_free_camera_scroll_zoom in
+## zoom_manager.gd), so a threshold at or above it can never be crossed
+## and the full-geometry band becomes unreachable (caught live: the
+## original placeholder here was 9.5, above the 8.0 ceiling, and the
+## band never activated even at max zoom). NOT YET TUNED beyond fitting
+## inside the reachable 6.5-8.0 window.
+@export var molecular_label_zoom_enter_threshold: float = 7.3
+## Zoom scalar crossed GOING DOWN that switches labels back to
+## element-only. Strictly less than molecular_label_zoom_enter_threshold,
+## same hysteresis-gap convention as the skeletal on/off pair. Also
+## constrained to the reachable 6.5-8.0 window — see
+## molecular_label_zoom_enter_threshold's comment. NOT YET TUNED beyond
+## that.
+@export var molecular_label_zoom_exit_threshold: float = 6.9
 ## World-space bond length for one ribose-ring edge, expressed as a
 ## fraction of nucleotide_slot_spacing (sim.gd) rather than a literal
 ## Ångström constant — relative bond-length ratios only, per
@@ -544,7 +568,22 @@ extends Node
 ## actual radius. NOT YET TUNED — a reasoned starting point, not a final
 ## answer; residual overlap after this is the signal to tune
 ## molecular_atom_radius/molecular_ring_bond_length_ratio next.
+## Post-Part-1 (docs/atomtier/AtomTier_VisualDesign.md): this field is now
+## specifically the CLOSER-band / full-geometry font size, paired with
+## molecular_label_zoom_*_threshold above. The wider/element-only band
+## uses molecular_atom_label_font_size_element_only instead. Name kept
+## as-is (not renamed to *_full_geometry) to avoid orphaning the existing
+## scene-file override (scenes/simulation.tscn, currently 4) that Godot
+## would otherwise silently drop back to this default.
 @export var molecular_atom_label_font_size: int = 6
+## Font size (px) for skeletal atom labels in the WIDER band
+## (element-only: C, O, P, N — molecular_label_zoom_*_threshold not yet
+## crossed). Deliberately its own field, not derived from
+## molecular_atom_label_font_size — a 1-2 char element label can
+## legibly run larger inside the same fixed molecular_atom_radius circle
+## than the 2-3 char geometry labels the other field is sized for. NOT
+## YET TUNED.
+@export var molecular_atom_label_font_size_element_only: int = 8
 ## Option C fix (docs/MolecularStructure_BasePairExpansion.md): number of
 ## points sampled along the actual template rail curve for an
 ## inter-residue bond whose straight-chord length exceeds
