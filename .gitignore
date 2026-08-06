@@ -2,6 +2,7 @@
 .godot/
 *.import
 *.translation
+*.tmp
 
 # Ignore OS-specific files
 .DS_Store
