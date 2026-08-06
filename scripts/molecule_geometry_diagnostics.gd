@@ -318,8 +318,7 @@ static func _derive_full_residue(renderer: Node2D, entry: Dictionary, partner_wo
 	# this function mirrors it: this dump must report the same geometry the
 	# live renderer actually draws, never a second independent computation
 	# that can silently drift out of sync (as this one just did).
-	var self_paired_sign: float = renderer._strand_direction_sign(strand)
-	if is_self_paired_template and self_paired_sign < 0.0:
+	if is_self_paired_template and neighbor_sign < 0.0:
 		var natural_substituents: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
 		var c4_id: int = topology.find_by_role("incoming.c4_prime")
 		var axis_y: float = ring_positions[c4_id].y

@@ -56,14 +56,14 @@ var _h_bond_layout: Array[Dictionary] = []
 
 ## {world_pos: Vector2, radius: float, key: String} — one entry per
 ## residue currently rendered via RiboseDeriver.reflect_about_backbone_axis()
-## (the fork-flip mirror) this frame. Populated inline at the exact call
-## site of that mirror in _rebuild_layout() — never a separate opt-in step
-## — so a residue cannot be mirrored without becoming hoverable, closing
-## the disclaimer requirement in reflect_about_backbone_axis()'s own doc
-## comment. Read by _process() to compute _hovered_mirrored_key, and
-## indirectly by _draw() through that. Inherits the _active zoom-tier gate
-## for free: _rebuild_layout() early-returns before this is ever touched
-## while inactive.
+## (the fork-flip mirror) this frame. Populated in _rebuild_layout() by a
+## registration branch guarded by the identical condition
+## (is_self_paired_template and neighbor_sign < 0.0) as the mirror
+## branch above it — keep the two conditions in sync if either changes.
+## Read by _process() to compute _hovered_mirrored_key, and indirectly by
+## _draw() through that. Inherits the _active zoom-tier gate for free:
+## _rebuild_layout() early-returns before this is ever touched while
+## inactive.
 var _mirrored_residue_layout: Array[Dictionary] = []
 
 ## Key ("strand:slot") of the mirrored residue currently under the mouse,
@@ -573,8 +573,7 @@ func _rebuild_layout() -> void:
 		# template_top (direction_sign >= 0) is untouched, still the bake
 		# path, same as leading/lagging's own `else` branch below is
 		# untouched.
-		var self_paired_sign: float = _strand_direction_sign(entry.strand)
-		if is_self_paired_template and self_paired_sign < 0.0:
+		if is_self_paired_template and neighbor_sign < 0.0:
 			var natural_substituents: Dictionary = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
 			var c4_id: int = topology.find_by_role("incoming.c4_prime")
 			var axis_y: float = ring_positions[c4_id].y
@@ -636,7 +635,7 @@ func _rebuild_layout() -> void:
 				nucleotide_slot = entry.slot,
 			})
 
-		if is_self_paired_template and self_paired_sign < 0.0:
+		if is_self_paired_template and neighbor_sign < 0.0:
 			_mirrored_residue_layout.append({
 				world_pos = world_pos,
 				radius = residue_max_extent + tm.molecular_atom_radius,
@@ -1000,18 +999,22 @@ func _draw() -> void:
 	# something worth a new theme_manager.gd surface for.
 	if _hovered_mirrored_key != "":
 		var hovered_world_pos: Vector2 = Vector2.ZERO
+		var hovered_radius: float = 0.0
 		for m in _mirrored_residue_layout:
 			if m.key == _hovered_mirrored_key:
 				hovered_world_pos = m.world_pos
+				hovered_radius = m.radius
 				break
 		var tooltip_font: Font = tm.base_label_font if tm.base_label_font != null else ThemeDB.fallback_font
 		if tooltip_font != null:
 			var tooltip_font_size: int = tm.molecular_atom_label_font_size
 			var text_size: Vector2 = tooltip_font.get_string_size(MIRRORED_RESIDUE_TOOLTIP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, tooltip_font_size)
 			var padding: Vector2 = Vector2(6.0, 4.0)
-			var tooltip_offset: Vector2 = Vector2(-text_size.x / 2.0, -tm.molecular_atom_radius * 4.0)
-			var box_pos: Vector2 = hovered_world_pos + tooltip_offset - padding
+			var tooltip_offset: Vector2 = Vector2(-text_size.x / 2.0, -hovered_radius)
+			var box_pos: Vector2 = tooltip_offset - padding
 			var box_size: Vector2 = text_size + padding * 2.0
+			draw_set_transform(hovered_world_pos, label_rotation, Vector2.ONE)
 			draw_rect(Rect2(box_pos, box_size), Color(0.0, 0.0, 0.0, 0.75), true)
-			var text_pos: Vector2 = hovered_world_pos + tooltip_offset + Vector2(0.0, tooltip_font.get_ascent(tooltip_font_size))
-			draw_string(tooltip_font, text_pos, MIRRORED_RESIDUE_TOOLTIP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, tooltip_font_size, Color.WHITE)
+			var text_pos: Vector2 = tooltip_offset + Vector2(0.0, tooltip_font.get_ascent(tooltip_font_size))
+			draw_string(tooltip_font, text_pos, MIRRORED_RESIDUE_TOOLTIP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, tooltip_font_size, tm.base_label_color)
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
