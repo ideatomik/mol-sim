@@ -1154,76 +1154,153 @@ level has nothing to preserve or violate. The chirality-safety rule lives
 only in the skeletal tier (`ribose_deriver.gd`, `molecule_structure_
 renderer.gd`), where atoms are actually drawn.
 
-## Self-paired fork-flip as a deliberate, labeled 2D mirror (design intent, not yet built)
+## Self-paired fork-flip as a deliberate, labeled 2D mirror (implemented 2026-08-06)
 
-**Decision recorded 2026-08-04; not implemented.** The project's actual
-pedagogical goal for the self-paired → leading/lagging transition is not
-"pick whichever flat transform avoids collisions" — it is to visually show
-the residue turning around its own backbone as it crosses the fork, the way
-the bead-glyph tier already does implicitly by construction. The skeletal
-tier cannot represent that turn as a true rotation (previous entry) — so
-the decision is to render it anyway, as the one operation whose 2D
-projection matches the intended visual, and label it honestly rather than
-pretend it's chirality-neutral.
+**Decision recorded 2026-08-04; implemented and confirmed live 2026-08-06**,
+in the `self-paired-chain-fix` worktree, branch `worktree-self-paired-chain-fix`
+(commits `ba89089`..`cae443d`) — see the reconstruction summary entry below
+for the full story of how this entry sat unresolved for two days. The
+project's actual pedagogical goal for the self-paired → leading/lagging
+transition is not "pick whichever flat transform avoids collisions" — it is
+to visually show the residue turning around its own backbone as it crosses
+the fork, the way the bead-glyph tier already does implicitly by
+construction. The skeletal tier cannot represent that turn as a true
+rotation (previous entry) — so the decision was to render it anyway, as the
+one operation whose 2D projection matches the intended visual, and label it
+honestly rather than pretend it's chirality-neutral.
 
-Concretely: for the residue that currently gets `apply_strand_direction()`'s
-point-reflection (`direction_sign < 0`), derive its ring/substituents in
-the natural (`direction_sign ≥ 0`) orientation first, read its own C4'
-y-coordinate as `axis_y`, then reflect every atom — ring and substituent
-chain alike — about that height: `(x, y) → (x, 2·axis_y − y)`. This is
-`RiboseDeriver.reflect_about_backbone_axis()`, prototyped and then reverted
-out of the worktree this session (see the open hypothesis below for why it
-was reverted before being kept). The transform is a deliberate 2D mirror
-(determinant −1) of the natural orientation — expected and correct per the
-previous entry, not a regression to catch.
+**What was actually built diverges from this entry's original spec in two
+ways, both discovered live this session — worth stating plainly rather than
+glossing over:**
 
-**Requirement for whenever this is actually built:** the residue must carry
-an on-screen disclaimer while (and only while) this transform is active —
-this project's own stated framing: *"in 2D molecular representations this
-rotation doesn't really exist, but for didactic reasons, we're showing you
-this way."* Without that label, this state would silently contradict every
-other chirality-safety claim this document makes elsewhere; with it, the
-divergence is honest and scoped to exactly the one visual it's for.
+1. **Both residues get reflected, not just `direction_sign < 0`.** The
+   original spec above only described mirroring the `direction_sign < 0`
+   residue (`template_bottom`), derived from the `direction_sign ≥ 0`
+   residue's natural orientation. Live testing found `template_top` had its
+   own, independent defect — a "cross-twist" where the pentose visually
+   crossed its own phosphate backbone bond lines, `C1'` ending up farther
+   from the attached base than `C4'`. The identical reflection technique,
+   applied to `template_top` about its own `C3'-C4'` line, fixed it the
+   same way. So both self-paired residues now reflect, each about its own
+   ring's current `C3'-C4'` line — a more symmetric solution than
+   originally envisioned.
+2. **`axis_y` comes from the ring's own *current, post-rotation* `C4'`, not
+   the pre-rotation natural ring's.** This is the crux of the whole fix.
+   The original spec's wording ("derive its ring/substituents in the
+   natural orientation first... read its own C4' y-coordinate") used the
+   *natural* ring's `C4'` as the mirror axis, then separately reflected
+   that natural ring. When this was actually built exactly as specified,
+   it produced an exact `O3'=C4'`/`C5'=C3'` coordinate collision on every
+   self-paired residue (confirmed via live F9 dump — not a near-miss, the
+   substituent chain's `O3'`/`C5'` landed on the ring's own `C3'`/`C4'` to
+   four decimal places). The fix: read `axis_y` from *this ring's own*
+   `C4'` *after* `apply_strand_direction()` has already run (identity for
+   `template_top`, a 180° rotation for `template_bottom`) — i.e. reflect
+   the ring that's actually about to be rendered, not a separately-derived
+   natural one. `RiboseDeriver.reflect_about_backbone_axis()` itself is
+   unchanged from its original prototype; only which ring gets fed into it
+   changed.
 
-Not yet designed: whether the transition is instantaneous (as today) or an
-actual animated turn over some duration — raised in conversation, favored
-by the user, but no approach was chosen before this session ended. That
-choice, plus the disclaimer's exact trigger condition and visual treatment,
-is the next design step before an implementation plan is written for this
-entry.
+`c1_local` (the anchor/pivot variable threaded through
+`molecule_structure_renderer.gd`'s `_rebuild_layout()`) is reassigned to
+the reflected `C1'` immediately after each reflection, so both
+`anchor_offset` and the `NitrogenBaseDeriver.derive_base_layout()` call
+pick up the change automatically — the base re-derives correctly bonded to
+wherever `C1'` now sits, no separate parameter threading needed. One
+visible, accepted side effect: each reflected residue's backbone (`C3'`,
+`C4'`, `O3'`, `C5'`, `O5'`, alpha-P) renders shifted by a uniform constant
+in world space (the doubled reflection distance) relative to where the
+pre-reflection plain formula had it — uniform across every residue on a
+strand, so the backbone stays straight and continuous, just at a different
+height.
 
-## Open hypothesis: the self-paired collision may be a spacing problem, not a rotation-formula problem (unresolved)
+**Disclaimer requirement: satisfied.** The residue now carries an
+on-screen hover tooltip while (and only while) this transform is active,
+carrying this project's exact stated framing — *"in 2D molecular
+representations this rotation doesn't really exist, but for didactic
+reasons, we're showing you this way."* Design and implementation:
+`docs/superpowers/specs/2026-08-04-fork-flip-disclaimer-design.md` and
+`docs/superpowers/plans/2026-08-04-fork-flip-disclaimer.md` (both in the
+worktree above), reviewed clean (task-level and final whole-branch review).
 
-**Raised and partially tested 2026-08-04; inconclusive, not yet resolved.**
-The entry above ("Self-paired geometry is baked once per residue") treats
-the self-paired ring/chain collision as a geometry problem requiring a
-bake-time search. A real alternative hypothesis surfaced this session:
-leading/lagging use the *plain* formula (`apply_strand_direction()` +
-`derive_substituents()`, no search, no cache) and never collide — not
-because their geometry is special, but because by the time a residue is
-leading/lagging, its partner strand has already been pushed apart by
-`dna_ribbons_gap`. The self-paired state's two template strands sit at real
-base-pair distance instead — tight by comparison — which may be the actual
-source of the collision the bake system was built to solve geometrically.
+**Still not yet designed** (unchanged from the original entry, genuinely
+out of scope for this reconstruction): whether the transition is
+instantaneous (as today) or an actual animated turn over some duration.
 
-If true, this would mean the bake's rotation/elbow-flex search
-(`_search_self_paired_ring()`, `_search_substituent()`) is solving a
-self-inflicted problem: the same plain formula leading/lagging already use
-safely might render self-paired residues cleanly too, if self-paired
-spacing were widened toward (not necessarily all the way to) the
-leading/lagging ribbons-gap separation.
+## Resolved: the self-paired collision was a reference-frame bug, not a spacing problem (was: open hypothesis, 2026-08-04)
 
-**This was set up as a live experiment in the test chamber** — the
-self-paired branch temporarily bypassed `bake_self_paired_geometry()`
-entirely, reusing the plain formula (natural derivation for
-`direction_sign ≥ 0`, the fork-flip mirror above for `direction_sign < 0`)
-at real, unwidened self-paired spacing — **but the experiment was reverted (uncommitted — `git checkout` back to
-the pre-experiment HEAD, not preserved as a commit) before its result was
-visually confirmed.** The hypothesis is therefore open, not decided either
-way. Next session: reapply the plain-formula bypass described above
-(`direction_sign ≥ 0` → natural `derive_substituents()` unchanged;
-`direction_sign < 0` → natural derivation, then
-`reflect_about_backbone_axis()` about the residue's own C4' height, in
-place of `bake_self_paired_geometry()`), check the F9 dump/screenshot for
-collision, and only then decide whether the bake system above should be
-kept as-is, simplified, or retired in favor of a spacing fix.
+**Falsified 2026-08-06**, not confirmed — worth being precise about the
+distinction. The hypothesis below (that self-paired's real, unwidened
+strand spacing was itself the cause of the ring/chain collision) predicted
+that widening self-paired spacing toward leading/lagging's would fix the
+collision without any change to the rotation/reflection formula. The actual
+test (`self-paired-chain-fix` worktree, Stage 1: bypass both the bake
+*and* the mirror, fall back to the exact plain `apply_strand_direction()` +
+`derive_substituents()` formula leading/lagging already use, at real
+*unwidened* self-paired spacing — no widening applied at all) rendered
+collision-free on the first try (`10.8000` clearance, live F9 dump,
+matching leading/lagging's own value exactly). The collision was never
+about spacing — it was the reference-frame bug described in the entry
+above (the old mirror reflecting the pre-rotation natural ring while the
+substituent chain was built from the post-rotation one). Once that
+reference-frame mismatch was fixed, the existing bake system's
+rotation/elbow-flex search became unnecessary and was left bypassed
+(`bake_self_paired_geometry()` and `_self_paired_geometry_cache` are still
+defined, just unreferenced from the live call path) rather than deleted, in
+case a future need resurrects it.
+
+**A separate, unrelated spacing finding, discovered afterward — not a
+confirmation of this hypothesis:** once the geometry itself was fixed
+(Stages 1-3), a live F9 dump measurement found self-paired's *rendered*
+strand-to-strand distance (a render-only cosmetic push,
+`MOLECULAR_ROW_PUSH` in `molecule_structure_renderer.gd`, never touching
+the real simulated `dna_ribbons_gap`) was actually **50 units wider** than
+leading/lagging's own spacing (`160` vs `110`) — the opposite direction
+this hypothesis guessed, and for an unrelated reason (an uneven
+`MOLECULAR_ROW_PUSH` multiplier, not `dna_ribbons_gap`). Stage 4 halved
+`template_top`/`template_bottom`'s push multiplier to match leading/
+lagging's spacing exactly. See the reconstruction summary below for the
+full stage-by-stage account.
+
+## How self-paired rendering was reconstructed after an accidental revert (2026-08-06)
+
+**Context for future readers:** the two entries above sat unresolved for
+two days because of a real, instructive accident, not because the work was
+hard to start. A session on 2026-08-04 got the fork-flip mirror and the
+spacing experiment (described in both entries above) working through live
+iteration in the editor — by the user's own account, "almost had it right."
+Before that state was committed or even screenshotted for confirmation, an
+assistant session ran an unscoped `git checkout` intending to revert one
+specific, unrelated modification that hadn't worked out — and reverted the
+entire worktree session instead, discarding the near-working state along
+with it. It was never stashed or committed, so it was gone: confirmed
+unrecoverable via `git reflog`/`git fsck` at the start of the reconstruction
+(nothing dangling matched it).
+
+**The reconstruction (2026-08-06, same worktree, fresh branch state) was
+deliberately staged, each stage independently committed and live-verified
+before moving on** — specifically so a bad step could be discarded with a
+plain `git reset` to the last good commit, never another broad revert:
+
+- **Stage 1** (`ba89089`): bypass both `bake_self_paired_geometry()` and
+  the (buggy) mirror entirely, fall back to the exact plain
+  `apply_strand_direction()` + `derive_substituents()` formula leading/
+  lagging already use, at real unwidened self-paired spacing. Confirmed via
+  live F9 dump: collision-free (falsifying the spacing hypothesis above),
+  matching the pre-accident state by the user's own visual confirmation.
+- **Stage 2** (`bbbee2a`): reflect `template_bottom`'s `C1'`/`C2'`/`O4'`
+  about its own (post-rotation) `C3'-C4'` line — the reference-frame-correct
+  version of the original mirror entry above. Confirmed live: `C1'` flips
+  to the exact predicted coordinate, backbone/chain untouched, base
+  re-bonds with no stretch, screenshot shows clean geometry.
+- **Stage 3** (`5b6837a`): found the identical transform independently
+  fixes `template_top`'s separate cross-twist defect (not anticipated by
+  the original mirror entry, which only ever described `template_bottom`).
+  Confirmed live the same way.
+- **Stage 4** (`cae443d`): found and fixed the unrelated
+  `MOLECULAR_ROW_PUSH` spacing mismatch described above.
+
+Each stage's live F9-dump numbers and screenshots are the evidence of
+record; see the git log on the worktree branch (`ba89089..cae443d`) for the
+full commit messages, which restate the measured before/after values
+directly rather than pointing elsewhere.
