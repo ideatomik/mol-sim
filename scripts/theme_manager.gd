@@ -470,6 +470,11 @@ extends Node
 ## while already in free-camera mode (zoom *= this per step in, /= this per
 ## step out). NOT YET TUNED.
 @export var zoom_free_camera_scroll_step: float = 1.15
+## Exponential ease-in speed (per second) for catching the applied zoom up to
+## the scroll-wheel target — higher = snappier, lower = floatier. Shared by
+## both free-camera scroll-zoom and follow-mode nudge-zoom (same step
+## smoothing, same feel). NOT YET TUNED.
+@export var zoom_scroll_ease_speed: float = 12.0
 
 @export_subgroup("Follow Mode")
 ## Zoom-out floor while following (double-click an enzyme). Deliberately its

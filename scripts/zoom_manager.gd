@@ -89,6 +89,13 @@ var highlight_enabled: bool = false
 # (reset_zoom()) — no automatic snap-back on its own.
 var _free_camera_mode: bool = false
 var _free_camera_zoom: float = 1.0
+# Where scroll-zoom is EASING toward — _free_camera_zoom is the applied
+# value _process() lerps toward this every frame (see _ease_free_camera_zoom()).
+# Stepped from its own current value (not the eased one) so rapid successive
+# ticks compound correctly mid-ease instead of restarting from wherever the
+# ease happens to be that frame.
+var _free_camera_target_zoom: float = 1.0
+var _free_camera_zoom_anchor_screen: Vector2 = Vector2.ZERO
 var _free_camera_position: Vector2 = Vector2.ZERO
 var _free_camera_dragging: bool = false
 var _free_camera_drag_last_mouse: Vector2 = Vector2.ZERO
@@ -113,6 +120,9 @@ var _free_camera_recenter_tween: Tween = null  # separate from _pan_release_twee
 var _follow_mode: bool = false
 var _follow_target_id: String = ""
 var _follow_zoom: float = 1.0
+# Scroll-nudge target that _process() eases _follow_zoom toward each frame —
+# same applied-vs-target split as free camera's _free_camera_target_zoom.
+var _follow_target_zoom: float = 1.0
 
 # A background press while following doesn't immediately decide what it is —
 # it could resolve as a tap (drop follow, enter free camera), a hold (pause
@@ -291,7 +301,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _process(delta):
 	if _free_camera_mode:
-		return  # camera fully owned by _unhandled_input() while this is active
+		# Position/drag are still fully owned by _unhandled_input() while this
+		# is active; only the scroll-zoom ease runs here.
+		_ease_free_camera_zoom(delta)
+		return
 
 	if _follow_mode:
 		# Same fade-out safety net as the level-based target branch below —
@@ -311,6 +324,8 @@ func _process(delta):
 					_follow_resuming = false
 			else:
 				global_position = _compute_follow_position()
+				var ease_t: float = 1.0 - exp(-tm.zoom_scroll_ease_speed * delta)
+				_follow_zoom = lerp(_follow_zoom, _follow_target_zoom, ease_t)
 			zoom = Vector2(_follow_zoom, _follow_zoom)
 		return  # position/zoom fully owned by follow mode while this is active —
 		        # same "one writer" shape as free camera above; arrow-key pan and
@@ -824,6 +839,7 @@ func _enter_free_camera_mode() -> void:
 	if not _free_camera_mode:
 		_free_camera_mode = true
 		_free_camera_zoom = zoom.x
+		_free_camera_target_zoom = zoom.x
 		_free_camera_position = global_position
 		if _transition_tween != null and _transition_tween.is_valid():
 			_transition_tween.kill()
@@ -846,16 +862,34 @@ func _free_camera_scroll_zoom(mouse_screen: Vector2, direction: int) -> void:
 	_enter_free_camera_mode()
 	if _free_camera_recenter_tween != null and _free_camera_recenter_tween.is_valid():
 		_free_camera_recenter_tween.kill()
-	var old_zoom: float = _free_camera_zoom
 	var step: float = tm.zoom_free_camera_scroll_step
-	_free_camera_zoom = old_zoom * step if direction > 0 else old_zoom / step
-	_free_camera_zoom = clamp(_free_camera_zoom, _compute_free_camera_min_zoom(), tm.zoom_free_camera_max_zoom_in)
+	_free_camera_target_zoom = _free_camera_target_zoom * step if direction > 0 else _free_camera_target_zoom / step
+	_free_camera_target_zoom = clamp(_free_camera_target_zoom, _compute_free_camera_min_zoom(), tm.zoom_free_camera_max_zoom_in)
+	# Held constant across the whole ease (not recomputed per-frame from the
+	# CURRENT mouse position) — the point under the cursor AT SCROLL TIME
+	# stays anchored as the eased zoom catches up, same convention the old
+	# instant-apply math used.
+	_free_camera_zoom_anchor_screen = mouse_screen
+
+## Per-frame catch-up for _free_camera_target_zoom, called from _process()
+## while free-camera mode is active. Reuses the same cursor-anchored
+## compensation math the old instant-apply version of _free_camera_scroll_zoom()
+## used, just applied incrementally (old_zoom -> this frame's eased zoom)
+## instead of in one jump.
+func _ease_free_camera_zoom(delta: float) -> void:
+	if is_equal_approx(_free_camera_zoom, _free_camera_target_zoom):
+		return
+	var old_zoom: float = _free_camera_zoom
+	var t: float = 1.0 - exp(-tm.zoom_scroll_ease_speed * delta)
+	_free_camera_zoom = lerp(_free_camera_zoom, _free_camera_target_zoom, t)
+	if abs(_free_camera_zoom - _free_camera_target_zoom) < 0.001:
+		_free_camera_zoom = _free_camera_target_zoom
 
 	# viewport_size * 0.5 is the SCREEN centre — a genuinely screen-space
 	# quantity, so it is NOT axis-swapped. Only the screen->world conversion of
 	# the resulting offset is orientation-aware.
 	var viewport_size: Vector2 = get_viewport_rect().size
-	var screen_offset: Vector2 = mouse_screen - viewport_size * 0.5
+	var screen_offset: Vector2 = _free_camera_zoom_anchor_screen - viewport_size * 0.5
 	var world_before: Vector2 = _free_camera_position + _screen_to_world_offset(screen_offset, old_zoom)
 	var world_after: Vector2 = _free_camera_position + _screen_to_world_offset(screen_offset, _free_camera_zoom)
 	_free_camera_position += world_before - world_after
@@ -913,6 +947,7 @@ func request_follow(id: String) -> void:
 	# same seed-then-clamp shape _enter_free_camera_mode()/_free_camera_scroll_zoom()
 	# already use for their own zoom var.
 	_follow_zoom = clamp(zoom.x, tm.zoom_follow_min_zoom, tm.zoom_free_camera_max_zoom_in)
+	_follow_target_zoom = _follow_zoom
 	if _transition_tween != null and _transition_tween.is_valid():
 		_transition_tween.kill()
 	target_changed.emit(id)
@@ -952,8 +987,8 @@ func _compute_follow_position() -> Vector2:
 ## isn't player-controlled here), clamped into the follow-specific range.
 func _follow_nudge_zoom(direction: int) -> void:
 	var step: float = tm.zoom_free_camera_scroll_step
-	_follow_zoom = _follow_zoom * step if direction > 0 else _follow_zoom / step
-	_follow_zoom = clamp(_follow_zoom, tm.zoom_follow_min_zoom, tm.zoom_free_camera_max_zoom_in)
+	_follow_target_zoom = _follow_target_zoom * step if direction > 0 else _follow_target_zoom / step
+	_follow_target_zoom = clamp(_follow_target_zoom, tm.zoom_follow_min_zoom, tm.zoom_free_camera_max_zoom_in)
 
 ## A background press while following freezes the camera in place
 ## immediately — "click and hold: hold camera in current place" — rather
