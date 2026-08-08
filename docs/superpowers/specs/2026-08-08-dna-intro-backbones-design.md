@@ -58,19 +58,33 @@ points.
 
 ### Z-order: reuse `top_is_front`, no new sign logic
 
-A bead's own backbone point is drawn *behind* that bead exactly when the
-bead is the "front" one of its top/bottom pair, and *in front of* it
-otherwise:
+A bead's own backbone point shares that bead's own front/back status —
+never the opposite. Real backbone (sugar-phosphate) sits on the *outside*
+of a double helix; bases sit on the *inside* and meet near the axis. Since
+the backbone point is on a strictly larger radius than the bead at the
+same phase (see Geometry above), it's always further along whichever
+direction — toward or away from the viewer — the bead is currently
+leaning: when the bead is the "front" one of its pair, its backbone is
+*even more* forward, i.e. drawn in front of the bead; when the bead is
+the "back" one, its backbone is *even more* recessed, i.e. drawn behind
+it. Concretely:
 
-- Top strand: behind when `top_is_front`, in front when `not top_is_front`.
-- Bottom strand: behind when `not top_is_front`, in front when `top_is_front`.
+- Top strand: in front when `top_is_front`, behind when `not top_is_front`.
+- Bottom strand: in front when `not top_is_front`, behind when `top_is_front`.
 
 No new trig or sign rule — this is the existing `sin(phase) > 0` flag,
-reused. Confirmed against the diagrammed checkpoints (see brainstorming
-session): at phase 0°/180° (a bead's own Y extreme, where its backbone
-offset is maximal) `sin(phase) = 0`, so the flip is invisible, same
-"flip only happens where it can't be seen" property the existing
-top/bottom bead-pair occlusion already relies on.
+reused, just applied with the same sign rather than flipped. Net visual
+effect: right at a crossing (a bead's own vertical midpoint, where its
+backbone offset passes through 0), the *front* bead's own backbone is
+what's drawn last of the four primitives at that slot, momentarily
+covering part of that bead — we never see a full bead exactly at the
+midpoint between strands, since the backbone is the outermost thing at
+that instant. (The 0°/180° boundary where `top_is_front` itself flips is
+still where a bead's own backbone offset is *maximal*, i.e. `sin(phase) =
+0` there, so that flip is still invisible — same "flip only happens where
+it can't be seen" property the existing top/bottom bead-pair occlusion
+relies on; it's the crossing at 90°/270° where the backbone-over-bead
+effect is actually visible, not the 0°/180° flip point.)
 
 ### Segments and draw order (two-pass restructure)
 
@@ -102,14 +116,14 @@ processed, `_draw()`'s per-slot loop is restructured into two passes:
    then compose the four remaining primitives (top bead, top backbone
    segment to `i+1`, bottom bead, bottom backbone segment to `i+1`).
    Whichever bead is the pair's "back" bead (per `top_is_front`) draws as
-   `[bead, backbone]` — its backbone drawn after it, i.e. in front of it,
-   per the z-order rule above. Whichever bead is the pair's "front" bead
-   draws as `[backbone, bead]` — its backbone drawn before it, i.e. behind
+   `[backbone, bead]` — its backbone drawn before it, i.e. behind it, per
+   the z-order rule above. Whichever bead is the pair's "front" bead draws
+   as `[bead, backbone]` — its backbone drawn after it, i.e. in front of
    it. The two units compose in the existing back-then-front order:
    - `top_is_front` (back = bottom, front = top):
-     `bottom_bead, bottom_backbone, top_backbone, top_bead`
+     `bottom_backbone, bottom_bead, top_bead, top_backbone`
    - `not top_is_front` (back = top, front = bottom):
-     `top_bead, top_backbone, bottom_backbone, bottom_bead`
+     `top_backbone, top_bead, bottom_bead, bottom_backbone`
 
    The rightmost slot (`num_slots - 1`) has no outgoing segment (nothing
    to its right) — same as a `Line2D`'s last point.
@@ -159,9 +173,10 @@ exists for this script and none is being added (pure `_draw()`-driven
 animation). Run the app, load a sequence, and confirm:
 
 1. Each strand shows a continuous backbone line through its beads during
-   the rotation phase, crossing over its own beads at the checkpoints
-   confirmed in the brainstorming session (behind at 0°/180°-adjacent
-   crossings, in front at the alternating set).
+   the rotation phase; at each 90°/270°-adjacent crossing (a bead's own
+   vertical midpoint), the currently-front bead's own backbone briefly
+   covers part of it, so no bead reads as a full, unoccluded circle right
+   at the strands' crossing point.
 2. No visible popping/tearing at segment boundaries where left-slot
    ownership disagrees with the segment's right endpoint.
 3. The fully-settled frame's backbone lines match the live rail view's
