@@ -6,8 +6,9 @@ extends ColorRect
 ## into play() are the real on-screen values the live rail view itself
 ## would use (see player_ui.gd's _play_dna_intro()) — this script does no
 ## ThemeManager or simulation lookups of its own, and the settle phase
-## (below) lands every bead at the exact real position, so the handoff to
-## the live view is seamless, not a hard cut. Still a bead-tier
+## (below) lands every bead — and, since the backbone points ride the same
+## settle lerp, every backbone segment too — at its exact real position, so
+## the handoff to the live view is seamless, not a hard cut. Still a bead-tier
 ## abstraction — no base-letter labels, no 5'->3' direction arrowheads, no
 ## derived molecular geometry.
 ##
@@ -119,10 +120,11 @@ const BP_PER_TURN: float = 10.5
 ## Multiplies the biologically-derived spatial winding (num_slots /
 ## BP_PER_TURN) for decorative purposes only — packs more visible twists
 ## into the same fixed dot count (num_slots is real data, not something
-## this script can add more samples to), so the winding pattern is dense
-## enough to read as a spiral from the dots alone, without a connecting
-## backbone curve. Kept modest (not much higher) since too few dots per
-## revolution starts looking undersampled/jagged rather than smooth.
+## this script can add more samples to), so the winding pattern (both the
+## dots themselves and the backbone curve connecting them) reads as a
+## dense, legible spiral rather than a loose, undersampled one. Kept
+## modest (not much higher) since too few dots per revolution starts
+## looking undersampled/jagged rather than smooth.
 ## Live-tune by eye alongside TOTAL_SPIN_TURNS below.
 const SPATIAL_TWIST_DENSITY: float = 1.5
 ## Rotation radius (each bead's Y-distance from center) as a multiple of
@@ -135,7 +137,12 @@ const SPATIAL_TWIST_DENSITY: float = 1.5
 ## construction, not by tuning a separate amplitude constant against it
 ## (the old AMPLITUDE_RATIO/gap_bias split this replaces needed exactly
 ## that kind of tuning, and still overshot). Live-tune by eye if a
-## deliberately larger/smaller twist is wanted later.
+## deliberately larger/smaller twist is wanted later. The backbone's
+## seamless settle-handoff (no visible pop when the settle phase takes
+## over) additionally assumes this stays 1.0 — at other ratios the
+## backbone (not the bead) would show a small discontinuity at the settle
+## trigger instant, since the trigger condition is derived from the
+## bead's own geometry, not the backbone's.
 const ROTATION_RADIUS_RATIO: float = 1.0
 ## Real hydrogen-bond lines are inset from each bead's center by roughly
 ## base_radius - 3.0 (theme_manager.gd's real geometry: 15.0 - 3.0 = 12.0)
@@ -146,12 +153,11 @@ const BOND_INSET_RATIO: float = 0.8
 ## winding — this is what makes the pattern visibly spin/travel along the
 ## strand throughout. Rotation runs at this constant rate through every lap
 ## but the last, which eases out instead (see _rotation_state()) — never
-## holding or stopping before that. With no connecting backbone curve, this
-## rotation speed is the main cue that reads as "two winding strands"
-## rather than a static dot scatter — a faster spin gives the eye a
-## traveling-wave motion cue to infer continuity from, standing in for
-## what a connecting line would otherwise show explicitly. Decorative
-## only — no real quantity to derive this from — live-tune by eye.
+## holding or stopping before that. This rotation speed controls how fast
+## the winding pattern — dots and connecting backbone curve alike — visibly
+## travels along the strand, which is what reads as "two winding strands"
+## rather than a static twisted shape. Decorative only — no real quantity
+## to derive this from — live-tune by eye.
 const TOTAL_SPIN_TURNS: float = 3.0
 
 var _elapsed: float = 0.0
@@ -455,7 +461,7 @@ func _draw() -> void:
 	# ---- Pass 1: compute every slot's geometry, no drawing ----
 	# A backbone segment from slot i to i+1 needs both endpoints' Y before
 	# either can be drawn, so geometry is computed for every slot first and
-	# stored, then Pass 2 (Task 3) draws using these arrays by index.
+	# stored, then Pass 2 draws using these arrays by index.
 	var xs: Array[float] = []
 	var ys_top: Array[float] = []
 	var ys_bottom: Array[float] = []
@@ -467,26 +473,39 @@ func _draw() -> void:
 		var x: float = final_left_x + float(slot) * _pixel_spacing
 		var phase: float = float(slot) / float(num_slots - 1) * turns * TAU + rotation_angle
 
-		# Bead Y: unchanged from the single-pass version — see top-of-file
-		# "Rotation math" comment.
-		var y_offset: float = rotation_radius * (cos(phase) - mean_cos)
+		# Bead Y: the two beads at this slot are a true mirror pair around
+		# center, both driven by the same cos(phase) term (one positive, one
+		# negative) rather than two independently-offset functions; sin(phase)
+		# is the unrendered depth axis, and its sign is what top_is_front
+		# below hands to Pass 2 to decide which bead — and, by extension,
+		# which bead's own backbone point — draws in front this frame. See
+		# the top-of-file "Rotation math" comment for the full derivation.
+		var swing: float = cos(phase) - mean_cos
+		var y_offset: float = rotation_radius * swing
 		var y_top: float = center_y - y_offset
 		var y_bottom: float = center_y + y_offset
 		var top_is_front: bool = sin(phase) > 0.0
 
-		# Backbone Y: the exact same phase/mean_cos as the bead, just a
-		# larger radius — a second point on the same rotating rod (see
-		# design spec's "Geometry" section).
-		var backbone_offset: float = backbone_radius * (cos(phase) - mean_cos)
+		# Backbone Y: the exact same phase/mean_cos as the bead (reuses
+		# `swing` above), just a larger radius — a second point on the same
+		# rotating rod (see design spec's "Geometry" section).
+		var backbone_offset: float = backbone_radius * swing
 		var backbone_y_top: float = center_y - backbone_offset
 		var backbone_y_bottom: float = center_y + backbone_offset
 
-		# Settle phase: identical slot_t to the existing bead lerp, applied
-		# to both bead and backbone so they arrive home the same instant
-		# (see design spec's "Settle-phase target" section). The backbone
-		# target mirrors on_bonded=true in simulation.gd's own backbone
-		# logic (the whole strand is still bonded pre-replication): outward
-		# from each strand's own flat resting row by _backbone_offset_px.
+		# Settle phase: each slot's own start delay is staggered right to
+		# left — stagger_fraction is 0 for the rightmost slot (settles
+		# immediately) and 1 for the leftmost (settles last), and scales
+		# automatically with however many slots are loaded (the division by
+		# num_slots - 1) so the cascade's total span stays
+		# SETTLE_STAGGER_SECONDS regardless of sequence length. slot_t is
+		# then a plain linear ramp from 0 to 1 over SETTLE_LERP_SECONDS once
+		# a slot's own delay has elapsed, applied to both bead and backbone
+		# so they arrive home the same instant (see design spec's
+		# "Settle-phase target" section). The backbone target mirrors
+		# on_bonded=true in simulation.gd's own backbone logic (the whole
+		# strand is still bonded pre-replication): outward from each
+		# strand's own flat resting row by _backbone_offset_px.
 		var settle_elapsed: float = max(0.0, _elapsed - _settle_start_elapsed) if _settle_triggered else 0.0
 		var stagger_fraction: float = float(num_slots - 1 - slot) / float(num_slots - 1)
 		var settle_delay: float = stagger_fraction * SETTLE_STAGGER_SECONDS
@@ -519,6 +538,12 @@ func _draw() -> void:
 		var y_bottom: float = ys_bottom[slot]
 		var top_is_front: bool = fronts[slot]
 
+		# Inset each bond line's endpoints off the bead centers by
+		# bond_inset_now, mirroring simulation.gd's own real H-bond line
+		# inset. Uses the sign of the top-to-bottom span (dir), not a fixed
+		# +/-, so the inset direction is always "inward" regardless of which
+		# of y_top/y_bottom happens to be numerically larger at this phase
+		# (they swap as the pair rotates through each other).
 		var span: float = y_bottom - y_top
 		var dir: float = sign(span) if span != 0.0 else 1.0
 		var line_top: float = y_top + dir * bond_inset_now
@@ -530,6 +555,12 @@ func _draw() -> void:
 		var bundle_start_x: float = x - bundle_span * 0.5
 		for b in range(bond_count):
 			var bx: float = bundle_start_x + float(b) * bond_spacing_now
+			# draw_line has no round-cap equivalent, unlike the real Line2D
+			# nodes (simulation.gd's hydrogen-bond lines) this reproduces —
+			# so a small circle of radius bond_width_now * 0.5 is drawn at
+			# each line endpoint to approximate one. The backbone segments
+			# below reuse this exact same technique for their own caps/joints,
+			# with _backbone_width_px * 0.5 in place of bond_width_now * 0.5.
 			draw_line(Vector2(bx, line_top), Vector2(bx, line_bottom), bond_color, bond_width_now)
 			draw_circle(Vector2(bx, line_top), bond_width_now * 0.5, bond_color)
 			draw_circle(Vector2(bx, line_bottom), bond_width_now * 0.5, bond_color)
@@ -554,17 +585,34 @@ func _draw() -> void:
 		# [bead, backbone] (backbone in front of it, momentarily covering
 		# it right at each crossing). The two units compose back-then-front,
 		# same as the existing top/bottom order.
+		# Each backbone segment's draw_line is immediately followed by two
+		# cap-circle draw_circle calls at its own endpoints, same technique
+		# and same reason as the bond bundle's caps above (Line2D — what
+		# this is standing in for, see simulation.gd's backbone_line/
+		# top_strand_backbone_line — has LINE_JOINT_ROUND and round end caps;
+		# draw_line has neither). A circle at a shared vertex between two
+		# consecutive segments gets drawn twice (once per segment), which is
+		# harmless — same circle, same place — and doubles as that vertex's
+		# rounded joint; at the strand's two ends it's the round end cap.
 		if top_is_front:
 			if has_segment:
 				draw_line(bottom_backbone_from, bottom_backbone_to, _backbone_color, _backbone_width_px)
+				draw_circle(bottom_backbone_from, _backbone_width_px * 0.5, _backbone_color)
+				draw_circle(bottom_backbone_to, _backbone_width_px * 0.5, _backbone_color)
 			draw_circle(Vector2(x, y_bottom), bead_radius_now, _bottom_colors[slot], true, -1.0, true)
 			draw_circle(Vector2(x, y_top), bead_radius_now, _top_colors[slot], true, -1.0, true)
 			if has_segment:
 				draw_line(top_backbone_from, top_backbone_to, _backbone_color, _backbone_width_px)
+				draw_circle(top_backbone_from, _backbone_width_px * 0.5, _backbone_color)
+				draw_circle(top_backbone_to, _backbone_width_px * 0.5, _backbone_color)
 		else:
 			if has_segment:
 				draw_line(top_backbone_from, top_backbone_to, _backbone_color, _backbone_width_px)
+				draw_circle(top_backbone_from, _backbone_width_px * 0.5, _backbone_color)
+				draw_circle(top_backbone_to, _backbone_width_px * 0.5, _backbone_color)
 			draw_circle(Vector2(x, y_top), bead_radius_now, _top_colors[slot], true, -1.0, true)
 			draw_circle(Vector2(x, y_bottom), bead_radius_now, _bottom_colors[slot], true, -1.0, true)
 			if has_segment:
 				draw_line(bottom_backbone_from, bottom_backbone_to, _backbone_color, _backbone_width_px)
+				draw_circle(bottom_backbone_from, _backbone_width_px * 0.5, _backbone_color)
+				draw_circle(bottom_backbone_to, _backbone_width_px * 0.5, _backbone_color)
