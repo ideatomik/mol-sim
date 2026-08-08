@@ -170,6 +170,9 @@ var _bond_spacing_px: float = 0.0
 var _wobble_amplitude_px: float = 0.0
 var _wobble_speed: float = 0.0
 var _wobble_enabled: bool = false
+var _backbone_offset_px: float = 0.0
+var _backbone_color: Color = Color.WHITE
+var _backbone_width_px: float = 0.0
 
 ## Free-running clock driving the per-bead wobble jitter (see _wobble_y()) —
 ## simulation.gd's own wobble_time is a persistent whole-session accumulator
@@ -207,7 +210,9 @@ func play(top_colors: Array[Color], bottom_colors: Array[Color],
 		pixel_spacing: float, strand_gap_px: float,
 		bead_diameter_px: float, bond_width_px: float,
 		bond_spacing_px: float, wobble_amplitude_px: float,
-		wobble_speed: float, wobble_enabled: bool) -> void:
+		wobble_speed: float, wobble_enabled: bool,
+		backbone_offset_px: float, backbone_color: Color,
+		backbone_width_px: float) -> void:
 	_top_colors = top_colors
 	_bottom_colors = bottom_colors
 	_bond_colors = bond_colors
@@ -220,6 +225,9 @@ func play(top_colors: Array[Color], bottom_colors: Array[Color],
 	_wobble_amplitude_px = wobble_amplitude_px
 	_wobble_speed = wobble_speed
 	_wobble_enabled = wobble_enabled
+	_backbone_offset_px = backbone_offset_px
+	_backbone_color = backbone_color
+	_backbone_width_px = backbone_width_px
 	_wobble_time = 0.0
 
 	_elapsed = FREEZE_T * TOTAL_DURATION_SECONDS if FREEZE_AT_TWISTED_STATE else 0.0

@@ -662,7 +662,10 @@ func _play_dna_intro(dna_intro) -> bool:
 		tm.hydrogen_bond_spacing * zoom_x,
 		simulation.wobble_amplitude * zoom_x,
 		simulation.wobble_speed,
-		tm.wobble_enabled
+		tm.wobble_enabled,
+		tm.backbone_offset_distance * zoom_x,
+		tm.template_backbone_color,
+		tm.backbone_line_width * zoom_x
 	)
 	return true
 
