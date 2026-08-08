@@ -32,9 +32,21 @@ extends ColorRect
 ## both phases throughout, reproducing the real strand's own per-base
 ## jitter.
 ##
-## Geometry technique: one rung per real nucleotide slot, no connecting
-## backbone curve — bare rungs only, matching the reference sketch's
-## structure exactly. Each rung's two endpoints are drawn as real
+## Geometry technique: one rung per real nucleotide slot, connected by a
+## per-strand backbone polyline (straight draw_line segments between
+## consecutive slots' backbone points, no Line2D/Curve2D — matching how
+## the real strand's own backbone is just a polyline through per-slot
+## points). Each backbone point is a second point on the same rotating rod
+## as its bead — same phase and mean_cos, a larger radius
+## (rotation_radius + backbone_offset_px) — so it traces the bead's own
+## curve at a wider swing, coinciding with the bead at the bead's own
+## midpoint and separating fully at the bead's own Y extremes. Z-order
+## between a bead and its own backbone point reuses top_is_front directly:
+## a bead's backbone shares that bead's own front/back status (real
+## backbone sits outside the helix, bases inside), so the front bead's own
+## backbone momentarily covers it right at each crossing — see
+## docs/superpowers/specs/2026-08-08-dna-intro-backbones-design.md for the
+## full derivation. Each rung's two endpoints are drawn as real
 ## nucleotide bead glyphs (plain filled circles, colored by the base's
 ## real ThemeManager.base_color_{a,t,c,g}, no outline — reproducing
 ## nitrogen_base.gd's _draw() exactly), connected by a real hydrogen-bond
@@ -501,13 +513,6 @@ func _draw() -> void:
 		backbone_ys_bottom.append(backbone_y_bottom)
 
 	# ---- Pass 2: draw ----
-	# Naive z-order for now — the whole backbone drawn first (behind
-	# everything). Task 3 replaces this with correct per-segment,
-	# per-bead-pair interleaving.
-	for slot in range(num_slots - 1):
-		draw_line(Vector2(xs[slot], backbone_ys_top[slot]), Vector2(xs[slot + 1], backbone_ys_top[slot + 1]), _backbone_color, _backbone_width_px)
-		draw_line(Vector2(xs[slot], backbone_ys_bottom[slot]), Vector2(xs[slot + 1], backbone_ys_bottom[slot + 1]), _backbone_color, _backbone_width_px)
-
 	for slot in range(num_slots):
 		var x: float = xs[slot]
 		var y_top: float = ys_top[slot]
@@ -529,9 +534,37 @@ func _draw() -> void:
 			draw_circle(Vector2(bx, line_top), bond_width_now * 0.5, bond_color)
 			draw_circle(Vector2(bx, line_bottom), bond_width_now * 0.5, bond_color)
 
+		# This slot's own outgoing backbone segments (to slot+1), owned by
+		# this slot ("left-slot ownership" — see design spec's "Segments
+		# and draw order" section). None for the rightmost slot.
+		var has_segment: bool = slot < num_slots - 1
+		var top_backbone_from: Vector2 = Vector2(x, backbone_ys_top[slot])
+		var bottom_backbone_from: Vector2 = Vector2(x, backbone_ys_bottom[slot])
+		var top_backbone_to: Vector2
+		var bottom_backbone_to: Vector2
+		if has_segment:
+			top_backbone_to = Vector2(xs[slot + 1], backbone_ys_top[slot + 1])
+			bottom_backbone_to = Vector2(xs[slot + 1], backbone_ys_bottom[slot + 1])
+
+		# Z-order: a bead's own backbone point shares that bead's own
+		# front/back status (real backbone sits outside the helix, bases
+		# inside — see design spec's "Z-order" section) — never the
+		# opposite. Whichever bead is this pair's "back" bead draws as
+		# [backbone, bead] (backbone behind it); the "front" bead draws as
+		# [bead, backbone] (backbone in front of it, momentarily covering
+		# it right at each crossing). The two units compose back-then-front,
+		# same as the existing top/bottom order.
 		if top_is_front:
+			if has_segment:
+				draw_line(bottom_backbone_from, bottom_backbone_to, _backbone_color, _backbone_width_px)
 			draw_circle(Vector2(x, y_bottom), bead_radius_now, _bottom_colors[slot], true, -1.0, true)
 			draw_circle(Vector2(x, y_top), bead_radius_now, _top_colors[slot], true, -1.0, true)
+			if has_segment:
+				draw_line(top_backbone_from, top_backbone_to, _backbone_color, _backbone_width_px)
 		else:
+			if has_segment:
+				draw_line(top_backbone_from, top_backbone_to, _backbone_color, _backbone_width_px)
 			draw_circle(Vector2(x, y_top), bead_radius_now, _top_colors[slot], true, -1.0, true)
 			draw_circle(Vector2(x, y_bottom), bead_radius_now, _bottom_colors[slot], true, -1.0, true)
+			if has_segment:
+				draw_line(bottom_backbone_from, bottom_backbone_to, _backbone_color, _backbone_width_px)
