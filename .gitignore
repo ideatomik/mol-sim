@@ -14,3 +14,6 @@ Thumbs.db
 *.sln
 *.csproj
 .worktrees/
+
+# Superpowers brainstorming visual companion sessions
+.superpowers/
