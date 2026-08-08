@@ -659,7 +659,10 @@ func _play_dna_intro(dna_intro) -> bool:
 		simulation.dna_ribbons_gap * zoom_x,
 		tm.base_radius * 2.0 * zoom_x,
 		tm.hydrogen_bond_width * zoom_x,
-		tm.hydrogen_bond_spacing * zoom_x
+		tm.hydrogen_bond_spacing * zoom_x,
+		simulation.wobble_amplitude * zoom_x,
+		simulation.wobble_speed,
+		tm.wobble_enabled
 	)
 	return true
 
@@ -669,6 +672,12 @@ func _on_sequence_loaded_intro_done() -> void:
 	# would look wrong on a fresh load.
 	if zoom_mgr and zoom_mgr.has_method("reset_zoom_instant"):
 		zoom_mgr.reset_zoom_instant()
+
+	# Ease the ambient nucleotide field in rather than letting it pop to
+	# full opacity the instant the intro's opaque overlay disappears — it's
+	# already fully rebuilt/repositioned behind that overlay by this point.
+	if simulation and simulation.nucleotide_field != null:
+		simulation.nucleotide_field.start_load_fade_in()
 
 	# Reset the scrubber
 	scrubber.value = 0.0

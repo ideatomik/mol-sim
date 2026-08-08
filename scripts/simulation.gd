@@ -750,7 +750,7 @@ func _process(delta):
 		# further down, once backbone_points/bond_marks are finalized —
 		# see the reversed decision noted there.
 		if molecule_renderer != null:
-			nucleotide_bases[i].modulate.a = 0.0 if molecule_renderer.is_slot_active("template_bottom", i) else 1.0
+			nucleotide_bases[i].modulate.a = 0.0 if molecule_renderer.is_slot_bead_suppressed("template_bottom", i) else 1.0
 
 		var mid_y = template_strand_y + (new_bottom_template_y - template_strand_y) * 0.5
 		var on_bonded = slot_y < mid_y
@@ -817,7 +817,7 @@ func _process(delta):
 		# template loop above. Backbone line suppression is below, once
 		# top_strand_points/its bond marks are finalized.
 		if molecule_renderer != null:
-			top_strand_bases[i].modulate.a = 0.0 if molecule_renderer.is_slot_active("template_top", i) else 1.0
+			top_strand_bases[i].modulate.a = 0.0 if molecule_renderer.is_slot_bead_suppressed("template_top", i) else 1.0
 
 		var mid_y = new_top_template_y + (template_strand_y - dna_ribbons_gap - new_top_template_y) * 0.5
 		var on_bonded = slot_y > mid_y
@@ -844,7 +844,7 @@ func _process(delta):
 			# it (two writers on the same property would be a real bug;
 			# modulate.a is untouched elsewhere on this node).
 			if molecule_renderer != null:
-				template_hydrogen_bonds[i].modulate.a = 0.0 if (molecule_renderer.is_slot_active("template_bottom", i) or molecule_renderer.is_slot_active("template_top", i)) else 1.0
+				template_hydrogen_bonds[i].modulate.a = 0.0 if (molecule_renderer.is_slot_bead_suppressed("template_bottom", i) or molecule_renderer.is_slot_bead_suppressed("template_top", i)) else 1.0
 	top_strand_backbone_line.points = top_strand_points
 	top_strand_backbone_line.width = %ThemeManager.backbone_line_width
 	_update_bond_marks_top_strand(top_strand_points)

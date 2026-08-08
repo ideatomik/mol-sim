@@ -823,7 +823,7 @@ func _apply_highlight() -> void:
 		# disagree on atom-tier activity; checking only "leading" left the
 		# bead-level pair line fully opaque whenever the TEMPLATE half of the
 		# pair was the one actually rendered at atom scale — the reported bug.
-		var bond_molecular_active: bool = molecule_renderer != null and (molecule_renderer.is_slot_active("leading", i) or molecule_renderer.is_slot_active("template_top", i))
+		var bond_molecular_active: bool = molecule_renderer != null and (molecule_renderer.is_slot_bead_suppressed("leading", i) or molecule_renderer.is_slot_bead_suppressed("template_top", i))
 		bond.modulate.a = 0.0 if bond_molecular_active else strand_dim
 
 	if lagging_backbone_line != null: lagging_backbone_line.modulate.a = 0.0 if lagging_strand_active else strand_dim
@@ -837,7 +837,7 @@ func _apply_highlight() -> void:
 		# gating stays leading-side-only (a primer slot has no synthesized
 		# lagging base yet to occlude), but the template partner can still be
 		# atom-tier-active independently, so it's still checked unconditionally.
-		var bond_molecular_active: bool = molecule_renderer != null and ((not _is_still_primer(i) and molecule_renderer.is_slot_active("lagging", i)) or molecule_renderer.is_slot_active("template_bottom", i))
+		var bond_molecular_active: bool = molecule_renderer != null and ((not _is_still_primer(i) and molecule_renderer.is_slot_bead_suppressed("lagging", i)) or molecule_renderer.is_slot_bead_suppressed("template_bottom", i))
 		bond.modulate.a = 0.0 if bond_molecular_active else strand_dim
 	for frag in lagging_fragments:
 		if frag.backbone != null and is_instance_valid(frag.backbone):
@@ -1020,6 +1020,14 @@ func get_synthesized_nucleotides() -> Array[Dictionary]:
 
 func _leading_reset(num_slots: int) -> void:
 	leading_fade_in_started = false
+	# Clear before appending — matches _lagging_reset()'s pattern. Without
+	# this, a reload left the array holding whatever _leading_teardown()
+	# had queue_free()'d (see that function's own fix comment): the fresh
+	# num_slots nulls landed AFTER the stale entries instead of replacing
+	# them, so leading_synthesized_bases[i] for a freshly loaded sequence
+	# actually read a leftover reference from the PREVIOUS sequence.
+	leading_synthesized_bases.clear()
+	leading_hydrogen_bonds.clear()
 	for i in range(num_slots):
 		leading_synthesized_bases.append(null)
 		leading_hydrogen_bonds.append(null)
@@ -1058,6 +1066,17 @@ func _leading_teardown() -> void:
 		if bond != null and is_instance_valid(bond): bond.queue_free()
 	for mark in leading_strand_bond_marks:
 		if mark != null and is_instance_valid(mark): mark.queue_free()
+	# Crash fix (queue_free on 'previously freed' instance, reported during
+	# reload/scrub): _lagging_teardown() already clears its equivalent three
+	# arrays right after freeing them; this function never did. Without this,
+	# the array kept holding references to the nodes just freed above —
+	# on the next sequence load, _leading_reset() only APPENDED new nulls
+	# (see its own fix) rather than replacing them, so a later render() call
+	# could pop and re-queue_free() a reference that had already been fully
+	# deallocated by the end of THIS frame — Godot's "previously freed" error.
+	leading_synthesized_bases.clear()
+	leading_hydrogen_bonds.clear()
+	leading_strand_bond_marks.clear()
 
 	if leading_backbone_line and is_instance_valid(leading_backbone_line):
 		leading_backbone_line.queue_free()
@@ -1156,8 +1175,8 @@ func _leading_render(ctx: Dictionary) -> void:
 			# to also write those same properties here, racing against
 			# _apply_highlight()'s own strand_dim write later in the same
 			# render() call and losing).
-			var molecular_active: bool = molecule_renderer != null and molecule_renderer.is_slot_active("leading", i)
-			leading_synthesized_bases[i].modulate.a = 0.0 if molecular_active else 1.0
+			var bead_suppressed: bool = molecule_renderer != null and molecule_renderer.is_slot_bead_suppressed("leading", i)
+			leading_synthesized_bases[i].modulate.a = 0.0 if bead_suppressed else 1.0
 			if leading_hydrogen_bonds[i] != null:
 				var top_template_y = new_top_template_y + wobble_y
 				leading_hydrogen_bonds[i].position = Vector2(world_x, top_template_y)
@@ -1253,7 +1272,7 @@ func _update_bond_marks_leading(points: PackedVector2Array) -> void:
 		leading_strand_bond_marks.append(_create_bond_mark_sprite())
 	while leading_strand_bond_marks.size() > needed:
 		var extra = leading_strand_bond_marks.pop_back()
-		extra.queue_free()
+		if extra != null and is_instance_valid(extra): extra.queue_free()
 	for i in range(needed):
 		var a = points[i]
 		var b = points[i + 1]
@@ -2367,9 +2386,9 @@ func _polymerases_move_to_rest() -> void:
 	if _polymerases_at_rest or leading_polymerase == null or lagging_polymerase == null:
 		return
 	_polymerases_at_rest = true
-	var nudge = tm.polymerase_rest_nudge_slots * sim.nucleotide_slot_spacing
+	var nudge = tm.clamp_rest_nudge_slots * sim.nucleotide_slot_spacing
 	var rest_x = leading_polymerase.position.x + nudge
-	var dur = tm.polymerase_rest_move_duration
+	var dur = tm.clamp_rest_move_duration
 	var lt = sim.create_tween()
 	lt.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	lt.tween_property(leading_polymerase, "position:x", rest_x, dur)
@@ -2381,7 +2400,7 @@ func _polymerases_move_to_rest() -> void:
 	lagging_polymerase_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	lagging_polymerase_tween.tween_property(lagging_polymerase, "position:x", rest_x, dur)
 	lagging_polymerase_x = rest_x  # keep the tracking var in sync so no later read snaps it back mid-slide
-	print("[LAGGING] polymerases sliding to rest x=%.1f (leading end + %d slots)" % [rest_x, int(tm.polymerase_rest_nudge_slots)])
+	print("[LAGGING] polymerases sliding to rest x=%.1f (leading end + %d slots)" % [rest_x, int(tm.clamp_rest_nudge_slots)])
 
 ## The top `primer_length` slots of the strand — the terminal primer's
 ## footprint, i.e. the telomere gap. This is the ONE primer that, once removed,
@@ -2632,8 +2651,8 @@ func _lagging_render(ctx: Dictionary) -> void:
 			# never reports them (molecule renderer models DNA incorporation
 			# only, per that method's own comment), so they can never be
 			# molecular-active and should stay fully opaque in bead mode.
-			var molecular_active: bool = molecule_renderer != null and not _is_still_primer(i) and molecule_renderer.is_slot_active("lagging", i)
-			lagging_synthesized_bases[i].modulate.a = 0.0 if molecular_active else 1.0
+			var bead_suppressed: bool = molecule_renderer != null and not _is_still_primer(i) and molecule_renderer.is_slot_bead_suppressed("lagging", i)
+			lagging_synthesized_bases[i].modulate.a = 0.0 if bead_suppressed else 1.0
 			if lagging_hydrogen_bonds[i] != null:
 				var bottom_template_y = template_y + wobble_y
 				lagging_hydrogen_bonds[i].position = Vector2(world_x, bottom_template_y)
@@ -3055,7 +3074,7 @@ func _update_bond_marks_lagging(points: PackedVector2Array) -> void:
 		lagging_bond_marks.append(sim._create_bond_mark_sprite_reversed())
 	while lagging_bond_marks.size() > needed:
 		var extra = lagging_bond_marks.pop_back()
-		extra.queue_free()
+		if extra != null and is_instance_valid(extra): extra.queue_free()
 	for i in range(needed):
 		var a = points[i]
 		var b = points[i + 1]

@@ -54,6 +54,12 @@ extends Node2D
 @export var particle_radius: float = 0.0
 ## Draw order — kept behind the DNA (the backbone sits at z_index -1).
 @export var field_z_index: int = -10 : set = set_field_z_index
+## How long the field takes to ease from invisible to its normal opacity
+## after start_load_fade_in() is called (player_ui.gd, right when the DNA
+## unwind intro hands off to the live view) — softens what would otherwise
+## be an instant pop, since the field is already fully rebuilt/repositioned
+## behind the intro's opaque overlay well before that moment.
+@export var load_fade_in_duration: float = 0.6
 
 @export_group("Motion")
 ## Peak drift speed (px/sec).
@@ -110,6 +116,7 @@ var _font: Font = null
 var _font_size: int = 14
 var particle_count: int = 0  # computed from particles_per_slot * num_slots — not exported, see on_sequence_changed()
 var _rebuild_generation: int = 0  # guards against a stale deferred rebuild firing after a newer sequence load
+var _load_fade_t: float = 1.0  # 1.0 = fully faded in / no fade in progress; see start_load_fade_in()
 var _soft_circle_tex: ImageTexture = null  # cached soft-edge alpha mask, shared by every particle
 
 # ---------- PARTICLE STATE (parallel arrays; one entry per particle) ----------
@@ -154,6 +161,16 @@ func on_sequence_changed(num_slots: int) -> void:
 	particle_count = min(max(0, roundi(particles_per_slot * num_slots)), max_particles)
 	_request_rebuild()
 
+## Called by player_ui.gd right when the DNA unwind intro hands off to the
+## live view (or immediately if no intro played) — NOT from
+## on_sequence_changed() above, since the field is already rebuilt and
+## sitting behind the intro's opaque overlay well before that handoff
+## moment; starting the fade there would finish it before anyone could see
+## it. See _process() for the actual fade and load_fade_in_duration's doc
+## comment.
+func start_load_fade_in() -> void:
+	_load_fade_t = 0.0
+
 func _request_rebuild() -> void:
 	_rebuild_generation += 1
 	var gen = _rebuild_generation
@@ -190,7 +207,9 @@ func _fill_for(bt: String) -> Color:
 # ==========================================
 
 func _process(delta: float) -> void:
-	modulate.a = tm.nucleotide_field_alpha
+	if _load_fade_t < 1.0 and load_fade_in_duration > 0.0:
+		_load_fade_t = min(1.0, _load_fade_t + delta / load_fade_in_duration)
+	modulate.a = tm.nucleotide_field_alpha * _load_fade_t
 	if not enabled or _blocked_by_atom_tier or _pos.is_empty():
 		return
 	var rect = _visible_world_rect()

@@ -92,6 +92,34 @@ var _label_full_geometry_active: bool = false
 ## _rebuild_layout(), never a separately-maintained cache.
 var _active_slots: Dictionary = {}
 
+## Superset of _active_slots — also includes, for every active residue, its
+## one immediate OUTWARD same-strand neighbor (the slot on the far side from
+## cluster_center_x). Backs is_slot_bead_suppressed(), polled by the same
+## callers as is_slot_active() but specifically for bead-GLYPH occlusion.
+##
+## Why this exists (screenshot bug, 2026-08-07): _molecular_render_pos()'s
+## outward spread push (tm.molecular_extra_slot_spacing) is scaled by
+## distance from cluster_center_x so ADJACENT ACTIVE residues clear each
+## other's ring geometry — provably a constant +extra_slot_spacing added to
+## every active-active gap (see that function's own PROOF comment). But the
+## same push moves the OUTERMOST active residue TOWARD its next, INACTIVE
+## neighbor (which never moves — bead-tier positions are plain
+## nucleotide_original_x, computed in simulation.gd/replication_manager.gd
+## with zero knowledge of this push), shrinking that one gap by the same
+## amount instead of growing it. Verified live (headless repro, real
+## project constants: slot_spacing=54, molecular_extra_slot_spacing=30,
+## viewport=1280px): the normal 54-unit gap shrinks to 24 exactly at the
+## atom/bead boundary, while active-active gaps correctly grow to 84 — the
+## bead-tier letter glyph ends up overlapping the atom cluster next to it.
+##
+## Fix is occlusion, not a geometry rewrite: suppressing the one bead-glyph
+## that would otherwise sit in the crowded gap is the same pattern this file
+## already uses for is_slot_active() itself (Bug A) and nucleotide_field.gd's
+## atom-tier auto-block — hide what atom-tier rendering makes redundant or
+## incompatible, rather than reworking the invariant-proven push math and
+## risking the ring-collision behavior it was built to prevent.
+var _bead_suppressed_slots: Dictionary = {}
+
 ## TEMPORARY diagnostic (docs/MolecularStructure_BasePairExpansion.md, Bug
 ## D follow-up) — press F9 while the scene is running (before or during
 ## play) to write a full geometry dump for template/leading/lagging, tied
@@ -376,6 +404,26 @@ func set_template_source(sim: Node) -> void:
 func is_slot_active(strand: String, slot: int) -> bool:
 	return _active and _active_slots.has("%s:%d" % [strand, slot])
 
+## Bead-tier-visual occlusion — true for every truly-active atom-tier slot
+## PLUS the one boundary slot just outside the cluster on each side. Use
+## this (not is_slot_active()) for anything positioned the same raw,
+## un-pushed way the letter-glyph circles are — the letter glyphs
+## themselves (nucleotide_bases/top_strand_bases/leading_synthesized_bases/
+## lagging_synthesized_bases) AND the per-slot hydrogen-bond dash lines
+## (template_hydrogen_bonds/leading_hydrogen_bonds/lagging_hydrogen_bonds)
+## — both sit at fixed bead-tier coordinates with no knowledge of this
+## file's outward spread push, so both crowd the same boundary residue the
+## same way. See _bead_suppressed_slots' doc comment for why the plain
+## is_slot_active() boundary is not enough.
+##
+## Stays on is_slot_active() instead: the backbone Line2D nodes
+## (leading_backbone_line, lagging_backbone_line, top/bottom template
+## backbone lines) — those are suppressed whole-strand via
+## is_strand_active() (Line2D has no per-point alpha), so they were never
+## subject to this per-residue boundary artifact in the first place.
+func is_slot_bead_suppressed(strand: String, slot: int) -> bool:
+	return _active and _bead_suppressed_slots.has("%s:%d" % [strand, slot])
+
 ## Whole-strand version of is_slot_active() — true if ANY slot of this
 ## strand is currently skeletal-active. Used for Line2D backbone
 ## suppression, which has no per-point alpha, so per-slot granularity
@@ -478,6 +526,7 @@ func _rebuild_layout() -> void:
 	_bond_layout.clear()
 	_h_bond_layout.clear()
 	_active_slots.clear()
+	_bead_suppressed_slots.clear()
 	_mirrored_residue_layout.clear()
 	if not _active:
 		return
@@ -558,7 +607,7 @@ func _rebuild_layout() -> void:
 		# case, below, needs the real partner direction BEFORE choosing
 		# which way to rotate the ring, not after). Also still feeds
 		# derive_substituents()/derive_base_layout() exactly as before.
-		var partner_key: String = _pair_for_slot(entry.strand, entry.slot, base_type_by_key, position_by_key)
+		var partner_key: String = _pair_for_slot(entry.strand, entry.slot, base_type_by_key)
 		var pairing_direction: Vector2 = Vector2.ZERO
 		if partner_key != "" and position_by_key.has(partner_key):
 			pairing_direction = position_by_key[partner_key] - world_pos
@@ -759,8 +808,22 @@ func _rebuild_layout() -> void:
 		if not bond_atoms.is_empty():
 			base_bond_atoms_by_key[key] = bond_atoms
 
+	# Bead-glyph boundary buffer (see _bead_suppressed_slots' doc comment):
+	# run only after _active_slots is FULLY populated above, since this
+	# needs to know each active residue's own pushed x to decide which side
+	# of cluster_center_x it's on — not attemptable inside the main loop,
+	# where later entries in `all_entries` haven't been visited yet.
+	for key in _active_slots.keys():
+		_bead_suppressed_slots[key] = true
+		var sep: int = key.rfind(":")
+		var strand: String = key.substr(0, sep)
+		var slot: int = int(key.substr(sep + 1))
+		var x: float = position_by_key[key].x
+		var outward_slot: int = slot + 1 if x > cluster_center_x else slot - 1
+		_bead_suppressed_slots["%s:%d" % [strand, outward_slot]] = true
+
 	_build_backbone_bonds(o3_by_key, alpha_by_key)
-	_build_hydrogen_bonds(base_bond_atoms_by_key, base_type_by_key, position_by_key)
+	_build_hydrogen_bonds(base_bond_atoms_by_key, base_type_by_key)
 
 
 ## Bug-B fix: connects residue N's own already-positioned O3' to residue
@@ -888,7 +951,7 @@ func _build_bond_points(strand: String, from_pos: Vector2, to_pos: Vector2, thre
 ## gap-zone pair's cull-boundary sensitivity (only drawn when both
 ## residues' anchors survive this frame's cull rect), not a separate bug —
 ## fixed at the root by switching to the real, authoritative condition.
-func _pair_for_slot(strand: String, slot: int, base_type_by_key: Dictionary, position_by_key: Dictionary) -> String:
+func _pair_for_slot(strand: String, slot: int, base_type_by_key: Dictionary) -> String:
 	if PARTNER_STRAND.has(strand):
 		var partner: String = "%s:%d" % [PARTNER_STRAND[strand], slot]
 		return partner if base_type_by_key.has(partner) else ""
@@ -906,9 +969,25 @@ func _pair_for_slot(strand: String, slot: int, base_type_by_key: Dictionary, pos
 		var synth_key: String = "%s:%d" % [synth_strand, slot]
 		if base_type_by_key.has(synth_key):
 			return synth_key
-		var self_key: String = "%s:%d" % [strand, slot]
-		if template_sim != null and position_by_key.has(self_key):
-			var world_x: float = position_by_key[self_key].x
+		# First-pair boundary bug fix (screenshot, 2026-08-07): this used to
+		# compare position_by_key[self_key].x — a camera-relative RENDER
+		# position (_molecular_render_pos()'s outward spread push, up to
+		# ~150 world units) — against template_sim.helicase_x, a raw
+		# simulation coordinate. Slot 0 is the leftmost residue in the whole
+		# molecule, so any camera framing that doesn't center exactly on it
+		# (the natural way to view "the first pair," since nothing exists
+		# further left to balance the view) pushed its compared x further
+		# left, often enough to dip below the raw helicase_x and wrongly
+		# report slot 0 as already-unzipped — even paused, helicase never
+		# having moved. Fixed by comparing raw-to-raw:
+		# nucleotide_original_x lives in the exact same unpushed coordinate
+		# space helicase_x does (simulation.gd, built once per sequence load
+		# from row_start_x + i * nucleotide_slot_spacing). This also brings
+		# the real renderer in line with molecule_geometry_diagnostics.gd's
+		# own (already raw-vs-raw) unzipped-slot check, which is why the F9
+		# dump could never have caught this on its own.
+		if template_sim != null and slot >= 0 and slot < template_sim.nucleotide_original_x.size():
+			var world_x: float = template_sim.nucleotide_original_x[slot]
 			if world_x < template_sim.helicase_x:
 				return ""  # already past the helicase — no longer paired with the other template strand
 		var other: String = "template_top:%d" % slot if strand == "template_bottom" else "template_bottom:%d" % slot
@@ -925,7 +1004,7 @@ func _pair_for_slot(strand: String, slot: int, base_type_by_key: Dictionary, pos
 ## an intentionally different, coarser Tier-1 rendering this file doesn't
 ## touch). Only drawn when BOTH sides of a pair are rendered this frame,
 ## same accepted-simplification rule as the backbone bonds above.
-func _build_hydrogen_bonds(base_bond_atoms_by_key: Dictionary, base_type_by_key: Dictionary, position_by_key: Dictionary) -> void:
+func _build_hydrogen_bonds(base_bond_atoms_by_key: Dictionary, base_type_by_key: Dictionary) -> void:
 	var seen: Dictionary = {}
 	for key in base_bond_atoms_by_key.keys():
 		if seen.has(key):
@@ -933,7 +1012,7 @@ func _build_hydrogen_bonds(base_bond_atoms_by_key: Dictionary, base_type_by_key:
 		var parts: PackedStringArray = key.split(":")
 		var strand: String = parts[0]
 		var slot: int = int(parts[1])
-		var partner_key: String = _pair_for_slot(strand, slot, base_type_by_key, position_by_key)
+		var partner_key: String = _pair_for_slot(strand, slot, base_type_by_key)
 		if partner_key == "" or not base_bond_atoms_by_key.has(partner_key):
 			continue
 		seen[key] = true

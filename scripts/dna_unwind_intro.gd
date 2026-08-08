@@ -1,29 +1,36 @@
 extends ColorRect
 
 ## Startup animation: a simplified version of the real strand about to be
-## shown, playing a twisted double helix at fixed geometry before handing
-## off to the live rail view. Colors and sizing passed into play() are the
-## real on-screen values the live rail view itself would use (see
-## player_ui.gd's _play_dna_intro()) — this script does no ThemeManager or
-## simulation lookups of its own — but the twisted pose itself does NOT
-## ease into the live view's flat layout: the overlay just disappears when
-## it finishes, handing off with a hard cut rather than a seamless morph
-## (a deliberate, current trade-off — see the Motion model paragraph
-## below). Still a bead-tier abstraction — no base-letter labels, no
-## 5'->3' direction arrowheads, no derived molecular geometry.
+## shown, playing a twisted double helix that settles into the live rail
+## view's exact flat layout before handing off. Colors and sizing passed
+## into play() are the real on-screen values the live rail view itself
+## would use (see player_ui.gd's _play_dna_intro()) — this script does no
+## ThemeManager or simulation lookups of its own, and the settle phase
+## (below) lands every bead at the exact real position, so the handoff to
+## the live view is seamless, not a hard cut. Still a bead-tier
+## abstraction — no base-letter labels, no 5'->3' direction arrowheads, no
+## derived molecular geometry.
 ##
-## Motion model: one continuous rotation, nothing else animated. Only
-## rotation_angle moves — a pure linear function of elapsed time,
-## reproducing the reference p5.js sketch's `angle += frequency` every
-## frame, forever. Every other quantity (rotation radius, strand gap,
-## horizontal spacing, bead radius, H-bond bundle width/spacing) is a
-## plain constant for the whole animation — no easing/growing-in — same as
-## the reference sketch's fixed h/space/size. This means the overlay's
-## final frame does NOT match the live rail view's flat layout; the
-## disappearance at the end of the animation is a visible hard cut, not a
-## pixel-matched handoff. Accepted deliberately for now, to isolate and
-## tune the rotation itself; revisit if the handoff needs to be seamless
-## again.
+## Motion model: two sequential phases. First, one continuous rotation —
+## only rotation_angle moves, reproducing the reference p5.js sketch's
+## `angle += frequency` every frame, at a constant rate through every lap
+## except the last, which eases out (see _rotation_state()) so the eventual
+## freeze reads as a smooth glide-to-a-stop rather than a fast sweep hitting
+## a wall. Every other quantity (rotation radius, strand gap, horizontal
+## spacing, bead radius, H-bond bundle width/spacing) is a plain constant
+## throughout this phase — no easing/growing-in of its own — same as the
+## reference sketch's fixed h/space/size. Rotation freezes not at a fixed
+## clock time but at the natural moment the rightmost bead pair's rotating
+## Y already coincides with its real resting Y (see _process()), so the
+## first bead to move needs zero motion to "start" — falls back to freezing
+## at ROTATION_DURATION_SECONDS if that coincidence never occurs. Second,
+## the settle phase (see _draw()'s per-slot loop): once rotation has frozen,
+## each bead individually glides in Y from that frozen pose to its real
+## resting row, staggered right to left so the strand appears to settle
+## into place as a wave — see SETTLE_STAGGER_SECONDS/SETTLE_LERP_SECONDS
+## below. A small ambient wobble (see _wobble_y()) is layered on top of
+## both phases throughout, reproducing the real strand's own per-base
+## jitter.
 ##
 ## Geometry technique: one rung per real nucleotide slot, no connecting
 ## backbone curve — bare rungs only, matching the reference sketch's
@@ -71,13 +78,30 @@ signal intro_finished
 
 ## Temporary debug scaffolding for iterating on the geometry in isolation:
 ## freezes _elapsed at FREEZE_T * TOTAL_DURATION_SECONDS (still dismissible
-## via click/keypress) — a specific point within the single continuous
+## via click/keypress) — a specific point within the full rotation+settle
 ## timeline. Set back to false once the geometry looks right — not a
 ## shipped feature, remove when no longer needed.
 const FREEZE_AT_TWISTED_STATE: bool = false
 const FREEZE_T: float = 0.15
 
-const TOTAL_DURATION_SECONDS: float = 4.4
+const ROTATION_DURATION_SECONDS: float = 4.4
+## Span across which per-bead settle START delays are spread, right to
+## left — the rightmost slot begins settling the instant this phase
+## starts, the leftmost slot begins SETTLE_STAGGER_SECONDS later. Scales
+## automatically with however many beads are loaded (see _draw()), so the
+## cascade's total length stays this constant regardless of sequence
+## length. Live-tune by eye.
+const SETTLE_STAGGER_SECONDS: float = 1.0
+## How long each individual bead's own glide from its frozen rotating
+## position to its real resting Y takes, once its turn arrives. Live-tune
+## by eye.
+const SETTLE_LERP_SECONDS: float = 0.4
+## Derived, not tuned directly: the last bead to start settling (the
+## leftmost slot, at SETTLE_STAGGER_SECONDS in) still needs
+## SETTLE_LERP_SECONDS more to finish, so this is the true full-timeline
+## length _process()'s finish-trigger and the FREEZE_T debug freeze above
+## both key off.
+const TOTAL_DURATION_SECONDS: float = ROTATION_DURATION_SECONDS + SETTLE_STAGGER_SECONDS + SETTLE_LERP_SECONDS
 
 const BP_PER_TURN: float = 10.5
 ## Multiplies the biologically-derived spatial winding (num_slots /
@@ -108,8 +132,9 @@ const ROTATION_RADIUS_RATIO: float = 1.0
 const BOND_INSET_RATIO: float = 0.8
 ## Full rotations over the whole animation, on top of the spatial sin/cos
 ## winding — this is what makes the pattern visibly spin/travel along the
-## strand throughout. Rotation runs at this constant rate the entire time,
-## never holding or stopping. With no connecting backbone curve, this
+## strand throughout. Rotation runs at this constant rate through every lap
+## but the last, which eases out instead (see _rotation_state()) — never
+## holding or stopping before that. With no connecting backbone curve, this
 ## rotation speed is the main cue that reads as "two winding strands"
 ## rather than a static dot scatter — a faster spin gives the eye a
 ## traveling-wave motion cue to infer continuity from, standing in for
@@ -120,6 +145,19 @@ const TOTAL_SPIN_TURNS: float = 3.0
 var _elapsed: float = 0.0
 var _playing: bool = false
 
+## Settle-phase trigger state: rather than starting the settle cascade at
+## a fixed clock time, _process() watches the rightmost bead pair during
+## the rotation's final lap for the natural moment its rotating Y already
+## coincides with its real resting Y, and fires the whole settle phase
+## right then (zero discontinuity for the first bead to move). See
+## _process()/_rotation_state(). _settle_start_elapsed is only meaningful
+## once _settle_triggered is true. _prev_rightmost_diff(_valid) track the
+## previous frame's (rotating - target) offset for zero-crossing detection.
+var _settle_triggered: bool = false
+var _settle_start_elapsed: float = 0.0
+var _prev_rightmost_diff: float = 0.0
+var _prev_rightmost_diff_valid: bool = false
+
 var _top_colors: Array[Color] = []
 var _bottom_colors: Array[Color] = []
 var _bond_colors: Array[Color] = []
@@ -129,6 +167,16 @@ var _strand_gap_px: float = 0.0
 var _bead_diameter_px: float = 0.0
 var _bond_width_px: float = 0.0
 var _bond_spacing_px: float = 0.0
+var _wobble_amplitude_px: float = 0.0
+var _wobble_speed: float = 0.0
+var _wobble_enabled: bool = false
+
+## Free-running clock driving the per-bead wobble jitter (see _wobble_y()) —
+## simulation.gd's own wobble_time is a persistent whole-session accumulator
+## and this is a fresh temporary animation each play(), so restarting at 0
+## each time is simplest; the wobble's per-bead hash phases already keep it
+## from ever looking synchronized/flag-like regardless of starting phase.
+var _wobble_time: float = 0.0
 
 
 func _ready() -> void:
@@ -150,11 +198,16 @@ func _ready() -> void:
 ## pixel_spacing/strand_gap_px/bead_diameter_px/bond_width_px/bond_spacing_px
 ## are all already real on-screen pixel values (world units pre-multiplied
 ## by the real camera fit zoom) — see player_ui.gd's _play_dna_intro().
+## wobble_amplitude_px is likewise pre-scaled (simulation.wobble_amplitude *
+## zoom_x); wobble_speed is a temporal rate so it's passed through as-is;
+## wobble_enabled mirrors ThemeManager.wobble_enabled so the intro respects
+## the same accessibility toggle the real strand's wobble does.
 func play(top_colors: Array[Color], bottom_colors: Array[Color],
 		bond_colors: Array[Color], bond_counts: Array[int],
 		pixel_spacing: float, strand_gap_px: float,
 		bead_diameter_px: float, bond_width_px: float,
-		bond_spacing_px: float) -> void:
+		bond_spacing_px: float, wobble_amplitude_px: float,
+		wobble_speed: float, wobble_enabled: bool) -> void:
 	_top_colors = top_colors
 	_bottom_colors = bottom_colors
 	_bond_colors = bond_colors
@@ -164,11 +217,67 @@ func play(top_colors: Array[Color], bottom_colors: Array[Color],
 	_bead_diameter_px = bead_diameter_px
 	_bond_width_px = bond_width_px
 	_bond_spacing_px = bond_spacing_px
+	_wobble_amplitude_px = wobble_amplitude_px
+	_wobble_speed = wobble_speed
+	_wobble_enabled = wobble_enabled
+	_wobble_time = 0.0
 
 	_elapsed = FREEZE_T * TOTAL_DURATION_SECONDS if FREEZE_AT_TWISTED_STATE else 0.0
 	_playing = true
+	_settle_triggered = false
+	_settle_start_elapsed = 0.0
+	_prev_rightmost_diff = 0.0
+	_prev_rightmost_diff_valid = false
 	visible = true
 	queue_redraw()
+
+
+## Rotation geometry as a function of how much of the rotation phase has
+## elapsed — shared by _process()'s settle-trigger detection and _draw()'s
+## rendering so the two can never drift out of sync. rotation_elapsed is
+## typically _elapsed (still rotating) or the frozen _settle_start_elapsed
+## (once triggered) — see call sites.
+##
+## Constant angular speed through every lap except the last: the final lap
+## (the same window _process() watches for the natural settle-coincidence)
+## decelerates to a stop instead, so rotation is already slowing by the
+## time any trigger fires — freezing then reads as a glide-to-a-stop
+## rather than a fast sweep hitting an instant wall. Both branches sweep
+## the exact same phase range either way (only the pacing within the final
+## lap changes), so this has no effect on whether a natural coincidence
+## exists or where in phase-space it's found — only on how gently the
+## motion gets there.
+##
+## eased_lap_t = -u^3 + u^2 + u (a cubic Hermite curve from 0 to 1 with
+## start slope 1 and end slope 0) is used instead of a plain ease-out
+## (1-(1-u)^3) deliberately: a plain ease-out's slope AT u=0 is 3, not 1 —
+## it would make rotation suddenly speed up 3x right at the lap boundary,
+## the opposite of smooth. This Hermite curve's slope is continuous with
+## the incoming constant angular speed at u=0 and eases down to exactly 0
+## at u=1, so there's no velocity discontinuity anywhere in the whole
+## rotation phase, only a true deceleration to rest.
+func _rotation_state(rotation_elapsed: float, num_slots: int) -> Dictionary:
+	var turns: float = max(1.0, float(num_slots) / BP_PER_TURN) * SPATIAL_TWIST_DENSITY
+	var clamped_elapsed: float = clamp(rotation_elapsed, 0.0, ROTATION_DURATION_SECONDS)
+	var lap_duration: float = ROTATION_DURATION_SECONDS / TOTAL_SPIN_TURNS
+	var final_lap_start: float = ROTATION_DURATION_SECONDS - lap_duration
+	var rotation_angle: float
+	if clamped_elapsed <= final_lap_start:
+		rotation_angle = (clamped_elapsed / ROTATION_DURATION_SECONDS) * TOTAL_SPIN_TURNS * TAU
+	else:
+		var u: float = clamp((clamped_elapsed - final_lap_start) / lap_duration, 0.0, 1.0)
+		var eased_lap_t: float = -pow(u, 3.0) + pow(u, 2.0) + u
+		rotation_angle = (TOTAL_SPIN_TURNS - 1.0) * TAU + eased_lap_t * TAU
+	var theta: float = turns * TAU
+	var mean_cos: float = (sin(rotation_angle + theta) - sin(rotation_angle)) / theta
+	var rotation_radius: float = _strand_gap_px * 0.5 * ROTATION_RADIUS_RATIO
+	return {
+		"turns": turns,
+		"rotation_angle": rotation_angle,
+		"theta": theta,
+		"mean_cos": mean_cos,
+		"rotation_radius": rotation_radius,
+	}
 
 
 func _process(delta: float) -> void:
@@ -178,10 +287,41 @@ func _process(delta: float) -> void:
 	if FREEZE_AT_TWISTED_STATE:
 		return
 
+	# Settle-phase trigger: watch the rightmost bead pair during the
+	# rotation's final lap for the natural instant its rotating Y already
+	# coincides with its real resting Y (see top-of-file "Rotation math"
+	# and the class-level comment above _settle_triggered). Both beads at
+	# a slot reach their target simultaneously (they're always exact
+	# mirrors of each other), so only one zero-crossing check is needed.
+	if not _settle_triggered:
+		var num_slots: int = _top_colors.size()
+		if num_slots >= 2:
+			var st: Dictionary = _rotation_state(min(_elapsed, ROTATION_DURATION_SECONDS), num_slots)
+			if st.rotation_angle >= (TOTAL_SPIN_TURNS - 1.0) * TAU:
+				var phase_rightmost: float = st.theta + st.rotation_angle
+				var diff: float = st.rotation_radius * (cos(phase_rightmost) - st.mean_cos) - _strand_gap_px * 0.5
+				if _prev_rightmost_diff_valid and sign(diff) != sign(_prev_rightmost_diff):
+					_settle_triggered = true
+					_settle_start_elapsed = _elapsed
+				_prev_rightmost_diff = diff
+				_prev_rightmost_diff_valid = true
+		# Fallback — never found a natural crossing (e.g. mean_cos made it
+		# mathematically unreachable this lap): start the settle phase at
+		# the rotation's fixed duration anyway, so the animation is never
+		# stuck spinning forever.
+		if not _settle_triggered and _elapsed >= ROTATION_DURATION_SECONDS:
+			_settle_triggered = true
+			_settle_start_elapsed = _elapsed
+
 	_elapsed = min(_elapsed + delta, TOTAL_DURATION_SECONDS)
+	_wobble_time += delta
 	queue_redraw()
 
-	if _elapsed >= TOTAL_DURATION_SECONDS:
+	# The real total is dynamic now (rotation can end before
+	# ROTATION_DURATION_SECONDS on a natural coincidence) — TOTAL_DURATION_SECONDS
+	# remains only a worst-case ceiling (used above for the _elapsed cap and
+	# by play()'s debug freeze), not the real finish condition.
+	if _settle_triggered and _elapsed >= _settle_start_elapsed + SETTLE_STAGGER_SECONDS + SETTLE_LERP_SECONDS:
 		_finish()
 
 
@@ -202,6 +342,34 @@ func _finish() -> void:
 	intro_finished.emit()
 
 
+## Deterministic pseudo-random [0,1) value from a seed — reproduced verbatim
+## from simulation.gd's _wobble_hash01() so the intro's wobble has the exact
+## same "chaotic per-bead personality" feel as the real strand's, not just a
+## similar-looking one.
+func _wobble_hash01(seed: float) -> float:
+	var x: float = sin(seed) * 43758.5453
+	return x - floor(x)
+
+
+## Per-slot wobble Y-offset, reproduced verbatim from simulation.gd's
+## get_wobble_y() (same hash-seeded blend of two sine waves per index, same
+## 0.7/0.3 blend weights) so a slot's wobble looks identical in style to the
+## live view it hands off to — just not phase-synced with it (_wobble_time
+## restarts at 0 each play(), see its own comment). Real _strand_gap_px-scale
+## amplitude, not a decorative guess — see play()'s wobble_amplitude_px doc.
+func _wobble_y(index: int, wobble_t: float) -> float:
+	if not _wobble_enabled or _wobble_amplitude_px <= 0.0:
+		return 0.0
+	var phase_a: float = _wobble_hash01(float(index) * 12.9898) * TAU
+	var freq_a: float = 0.85 + _wobble_hash01(float(index) * 78.233) * 0.5
+	var phase_b: float = _wobble_hash01(float(index) * 39.425) * TAU
+	var freq_b: float = 1.1 + _wobble_hash01(float(index) * 91.731) * 0.6
+
+	var wave_a: float = sin(wobble_t * _wobble_speed * freq_a * TAU + phase_a)
+	var wave_b: float = sin(wobble_t * _wobble_speed * freq_b * TAU + phase_b)
+	return (wave_a * 0.7 + wave_b * 0.3) * _wobble_amplitude_px
+
+
 func _draw() -> void:
 	if not visible:
 		return
@@ -212,23 +380,25 @@ func _draw() -> void:
 
 	var center_x: float = size.x * 0.5
 	var center_y: float = size.y * 0.5
-	var turns: float = max(1.0, float(num_slots) / BP_PER_TURN) * SPATIAL_TWIST_DENSITY
 	var final_span: float = float(num_slots - 1) * _pixel_spacing
 	var final_left_x: float = center_x - final_span * 0.5
 
-	# One continuous animation from a single elapsed-time clock. t drives
-	# rotation_angle, linearly, so rotation never holds or stops for the
-	# whole duration (reproducing the reference sketch's `angle +=
-	# frequency` every frame, forever). Nothing else is eased in from a
-	# collapsed state anymore — see the constants below.
-	var t: float = clamp(_elapsed / TOTAL_DURATION_SECONDS, 0.0, 1.0)
-
-	# rotation_angle advances at a constant rate for the whole animation, no
-	# offset — phase 0 is a valid, physically sensible resting pose (one
-	# bead at max Y, its pair at min Y), unlike the old sin/cos-oscillation
-	# model this replaces, which needed a PI/4 fudge to avoid an ugly
-	# literal-zero start. Not needed here.
-	var rotation_angle: float = t * TOTAL_SPIN_TURNS * TAU
+	# Rotation freezes at _settle_start_elapsed once the settle phase has
+	# triggered (either the natural coincidence or the _process() fallback
+	# — see there), instead of always at the fixed ROTATION_DURATION_SECONDS
+	# clock boundary: the whole point of this round's change is that the
+	# freeze point is now dynamic, whatever instant the rightmost bead pair
+	# naturally lined up with its target. Before that, it's still just
+	# _elapsed, rotating continuously (reproducing the reference sketch's
+	# `angle += frequency` every frame). Nothing else about the rotation is
+	# eased in from a collapsed state — see the constants below.
+	var rotation_elapsed: float = _settle_start_elapsed if _settle_triggered else _elapsed
+	var st: Dictionary = _rotation_state(rotation_elapsed, num_slots)
+	var turns: float = st.turns
+	var rotation_angle: float = st.rotation_angle
+	var theta: float = st.theta
+	var mean_cos: float = st.mean_cos
+	var rotation_radius: float = st.rotation_radius
 
 	# No growing-in: every quantity below is a plain constant instead of
 	# easing from a collapsed start toward a real/flat target, matching the
@@ -238,7 +408,6 @@ func _draw() -> void:
 	# strand's gap by construction (see ROTATION_RADIUS_RATIO's own
 	# comment). bead_radius/bond_width/bond_spacing are pinned to their
 	# real final sizes rather than 0/invisible.
-	var rotation_radius: float = _strand_gap_px * 0.5 * ROTATION_RADIUS_RATIO
 	var bead_radius_now: float = _bead_diameter_px * 0.5
 	var bond_width_now: float = _bond_width_px
 	var bond_spacing_now: float = _bond_spacing_px
@@ -260,8 +429,6 @@ func _draw() -> void:
 	# beads are exact negatives of each other, this single correction
 	# re-centers both at once — no separate mean_sin/mean_cos needed like
 	# the old two-different-functions model required.
-	var theta: float = turns * TAU
-	var mean_cos: float = (sin(rotation_angle + theta) - sin(rotation_angle)) / theta
 
 	# No connecting backbone curve — bare rungs only, matching the
 	# reference sketch's structure. Each rung is a real hydrogen-bond
@@ -282,6 +449,41 @@ func _draw() -> void:
 		var y_top: float = center_y - y_offset
 		var y_bottom: float = center_y + y_offset
 		var top_is_front: bool = sin(phase) > 0.0
+
+		# Settle phase: once _process() has triggered it (either the
+		# natural rightmost-pair coincidence during the final lap, or the
+		# fallback at ROTATION_DURATION_SECONDS — see _process()), each
+		# bead individually glides from that shared frozen pose to its
+		# real resting Y — center_y -+ _strand_gap_px * 0.5, exactly where
+		# the live template_top/template_bottom glyph for this slot
+		# actually sits (see player_ui.gd's _play_dna_intro()) — so the
+		# fully-settled frame matches the live rail view exactly. Before
+		# triggering, settle_elapsed is 0 for every slot (slot_t stays 0).
+		# Staggered right to left: stagger_fraction is 0 for the rightmost
+		# slot (starts immediately once triggered) and 1 for the leftmost
+		# (starts last), scaling automatically with however many beads are
+		# loaded so the cascade's total span stays SETTLE_STAGGER_SECONDS
+		# regardless of sequence length. slot_t is a literal linear lerp, 0
+		# before this slot's delay has elapsed, ramping to 1 over
+		# SETTLE_LERP_SECONDS.
+		var settle_elapsed: float = max(0.0, _elapsed - _settle_start_elapsed) if _settle_triggered else 0.0
+		var stagger_fraction: float = float(num_slots - 1 - slot) / float(num_slots - 1)
+		var settle_delay: float = stagger_fraction * SETTLE_STAGGER_SECONDS
+		var slot_t: float = clamp((settle_elapsed - settle_delay) / SETTLE_LERP_SECONDS, 0.0, 1.0)
+		y_top = lerp(y_top, center_y - _strand_gap_px * 0.5, slot_t)
+		y_bottom = lerp(y_bottom, center_y + _strand_gap_px * 0.5, slot_t)
+
+		# Ambient wobble, reproducing simulation.gd's real per-base jitter
+		# (get_wobble_y()) — applied last, on top of whatever y_top/y_bottom
+		# currently are (still rotating, mid-settle, or fully settled),
+		# exactly like the real strand adds it as a final offset over its
+		# own resting position. Both beads at a slot use the SAME wobble_y
+		# (same index), moving together as a rigid pair rather than
+		# independently, matching how the real top/bottom strand calls both
+		# pass the same index into get_wobble_y().
+		var wobble_y: float = _wobble_y(slot, _wobble_time)
+		y_top += wobble_y
+		y_bottom += wobble_y
 
 		# Inset each bond line's endpoints away from the bead centers by
 		# bond_inset_now, same as simulation.gd's real H-bond lines, using
