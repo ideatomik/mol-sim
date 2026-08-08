@@ -56,6 +56,46 @@ header.
 ---
 
 # ==========================================
+# v 83 — atom-tier colors/bond rendering + nucleotide-field auto-block
+# - Per-element atom colors exposed (molecular_carbon_color/oxygen_color/
+#   phosphorus_color) — previously hardcoded CPK literals in
+#   _element_color(); standard CPK doesn't read well against this
+#   project's dark 2D background. New molecular_backbone_bond_color,
+#   distinct from molecular_bond_color, so the phosphodiester backbone
+#   reads as its own visual thread instead of blending into ring bonds.
+# - New molecular_backbone_bond_width mirrors the color split — backbone
+#   renders thicker than ring/substituent bonds.
+# - Real double-bond (parallel-trace) rendering, wired end-to-end through
+#   molecule_topology.gd's previously-unused bond.order field. Chemistry
+#   re-derived from valence counting, not recalled: cytosine (N3=C4,
+#   C5=C6, C2=O2), thymine (C5=C6, C2=O2, C4=O4), guanine (C2=N3, C4=C5,
+#   C8=N7, C6=O6) all have a UNIQUE Kekulé solution; adenine has none (no
+#   carbonyl anchor) — genuine resonance ambiguity, resolved via a
+#   user-confirmed alternating convention (N1=C2, N3=C4, C5=C6, C8=N7).
+#   One P=O per phosphate (alpha_O1). Tied to the existing Part 1 label
+#   zoom tier: only carbonyls double at the coarse (element-only) band,
+#   everything doubles at the full-geometry band. Each double-bond trace
+#   draws at half the normal bond width, so two strokes read as one bond.
+# - Ambient nucleotide field (the decorative free-dNTP cloud) now
+#   auto-blocked while atom-tier skeletal rendering is active — new
+#   molecule_structure_renderer.gd.is_molecular_mode_active() getter,
+#   polled once per frame from simulation.gd, forwarded to
+#   nucleotide_field.gd.set_atom_tier_blocked(). Keeps the user's own
+#   NCloudToggle intent (`enabled`) separate from the effective on-screen
+#   state, so the checkbox isn't silently flipped.
+# - PARTIAL fix, not fully resolved: replication_manager.gd's
+#   leading_hydrogen_bonds/lagging_hydrogen_bonds suppression now ORs the
+#   paired template strand's atom-tier state too (mirroring
+#   simulation.gd's already-correct template_hydrogen_bonds pattern) —
+#   but the underlying bead-level base-pair-line bug still reproduces in
+#   some form. Deeper debugging deferred to a future session.
+#
+# CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md — when
+# delivering a new version, move this block there first, then write the new
+# one here. This header never accumulates more than one version.
+# ==========================================
+
+# ==========================================
 # v 82 — self-paired reflect fix + atom-tier label zoom tiers
 # - Self-paired residues (template_top/template_bottom pairing with
 #   themselves at the fork) now render via RiboseDeriver.

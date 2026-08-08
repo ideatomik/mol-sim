@@ -1,39 +1,49 @@
 extends Node2D
 
 # ==========================================
-# v 83 — atom-tier colors/bond rendering + nucleotide-field auto-block
-# - Per-element atom colors exposed (molecular_carbon_color/oxygen_color/
-#   phosphorus_color) — previously hardcoded CPK literals in
-#   _element_color(); standard CPK doesn't read well against this
-#   project's dark 2D background. New molecular_backbone_bond_color,
-#   distinct from molecular_bond_color, so the phosphodiester backbone
-#   reads as its own visual thread instead of blending into ring bonds.
-# - New molecular_backbone_bond_width mirrors the color split — backbone
-#   renders thicker than ring/substituent bonds.
-# - Real double-bond (parallel-trace) rendering, wired end-to-end through
-#   molecule_topology.gd's previously-unused bond.order field. Chemistry
-#   re-derived from valence counting, not recalled: cytosine (N3=C4,
-#   C5=C6, C2=O2), thymine (C5=C6, C2=O2, C4=O4), guanine (C2=N3, C4=C5,
-#   C8=N7, C6=O6) all have a UNIQUE Kekulé solution; adenine has none (no
-#   carbonyl anchor) — genuine resonance ambiguity, resolved via a
-#   user-confirmed alternating convention (N1=C2, N3=C4, C5=C6, C8=N7).
-#   One P=O per phosphate (alpha_O1). Tied to the existing Part 1 label
-#   zoom tier: only carbonyls double at the coarse (element-only) band,
-#   everything doubles at the full-geometry band. Each double-bond trace
-#   draws at half the normal bond width, so two strokes read as one bond.
-# - Ambient nucleotide field (the decorative free-dNTP cloud) now
-#   auto-blocked while atom-tier skeletal rendering is active — new
-#   molecule_structure_renderer.gd.is_molecular_mode_active() getter,
-#   polled once per frame from simulation.gd, forwarded to
-#   nucleotide_field.gd.set_atom_tier_blocked(). Keeps the user's own
-#   NCloudToggle intent (`enabled`) separate from the effective on-screen
-#   state, so the checkbox isn't silently flipped.
-# - PARTIAL fix, not fully resolved: replication_manager.gd's
-#   leading_hydrogen_bonds/lagging_hydrogen_bonds suppression now ORs the
-#   paired template strand's atom-tier state too (mirroring
-#   simulation.gd's already-correct template_hydrogen_bonds pattern) —
-#   but the underlying bead-level base-pair-line bug still reproduces in
-#   some form. Deeper debugging deferred to a future session.
+# v 84 — DNA helix-unwind startup intro
+# - New dna_unwind_intro.gd (+ DnaUnwindIntro.tscn, wired into
+#   simulation.tscn under UI) plays a startup animation on every sequence
+#   load: a twisted double-helix pose settles into the live rail view's
+#   exact flat layout before handing off, replacing the previous hard cut
+#   straight to the live view.
+# - Rotation is a real body rotating in the Y-Z plane, viewed edge-on — the
+#   same z-order + periodic-crossing technique HelicaseDesign.md shipped
+#   for the ring's own barrel-roll (docs/Topoisomerase.md explicitly names
+#   it as reusable for any twisted-pair visual). sin(phase)'s SIGN decides
+#   draw order each frame, flipping only at the pair's max-Y-separation
+#   extremes (invisible), not at the crossing itself — an earlier
+#   sin-for-one/cos-for-other approach was a vertical oscillation with no
+#   depth concept at all, not a rotation.
+# - Rungs styled as real nucleotide bead glyphs (plain filled circles,
+#   nitrogen_base.gd's exact draw_circle call) connected by real
+#   hydrogen-bond bundles (2 lines A-T / 3 lines C-G, simulation.gd's
+#   _spawn_template_hydrogen_bonds() styling) instead of generic shapes.
+# - Per-strand backbone line: each backbone point is a second point on the
+#   same rotating rod as its bead (same phase/mean_cos, larger radius),
+#   drawn as antialiased draw_line segments with round-cap circles at every
+#   endpoint (no Line2D/Curve2D). Z-order reuses top_is_front directly — a
+#   bead's own backbone shares that bead's own front/back status (real
+#   backbone sits outside the double helix, bases inside), so the front
+#   bead's own backbone momentarily covers it right at each crossing. See
+#   docs/superpowers/specs/2026-08-08-dna-intro-backbones-design.md.
+# - Settle-phase handoff triggers not on a fixed clock but on the natural
+#   moment the rightmost bead pair's rotating Y already coincides with its
+#   real resting Y (zero-crossing detection during the rotation's final
+#   lap, in _process()) — falls back to a fixed-duration trigger if that
+#   coincidence never occurs. The final lap itself decelerates to a stop
+#   (velocity-continuous cubic Hermite curve, matched to the incoming
+#   constant angular speed) so freezing never reads as an instant cutoff.
+#   Each bead then glides in Y to its real position, staggered right to
+#   left as a settling wave.
+# - Real per-base wobble (simulation.gd's get_wobble_y() hash-seeded double
+#   sine, reproduced verbatim) layered on top of both phases, so the intro
+#   strand jitters the same way the live strand does.
+# - nucleotide_field.gd: new start_load_fade_in()/load_fade_in_duration —
+#   the ambient field now eases in once the intro hands off instead of
+#   popping to full opacity the instant the overlay disappears (it's
+#   already fully rebuilt/repositioned behind that overlay well before the
+#   handoff moment).
 #
 # CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md — when
 # delivering a new version, move this block there first, then write the new

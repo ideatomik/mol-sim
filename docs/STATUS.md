@@ -1434,6 +1434,125 @@ interchangeable" trap):**
 
 ---
 
+## DNA Unwind Startup Intro (v84)
+
+Companion doc: `docs/superpowers/specs/2026-08-07-dna-spiral-continuous-spin-design.md`
+(the original brainstorm/design doc — the motion model changed substantially
+across the session that followed it; this section is the as-shipped account).
+Motivated by a product need, not the roadmap: every sequence load used to cut
+straight to the live rail view with no transition. `dna_unwind_intro.gd`
+(+ `DnaUnwindIntro.tscn`, a full-screen `ColorRect` wired into
+`simulation.tscn` under `UI`, `player_ui.gd`'s `_play_dna_intro()`) now plays
+a twisted-double-helix animation first, settling into the live view's exact
+flat layout before handing off.
+
+### Rotation is a real rotating body, not a vertical oscillation
+
+The two beads at a slot are modeled as a body rotating in the Y-Z plane,
+viewed edge-on, reusing the exact technique `HelicaseDesign.md` shipped for
+the helicase ring's own barrel-roll (`docs/Topoisomerase.md` independently
+names this "the z-order + periodic-crossing pattern" as reusable for any
+twisted-pair visual, before this pass existed to reuse it). Screen Y comes
+from `cos(phase)` for one bead, the exact negative for its pair — a true
+mirror, not two different trig functions offset from each other. A second
+term, `sin(phase)`, is the unrendered depth axis; its SIGN decides draw
+order each frame, and — the detail worth remembering — that sign only flips
+at `phase`'s extremes (maximum Y-separation, so the flip is invisible), not
+at the crossing itself, so whichever bead is "front" going into a crossing
+stays front coming out the other side. An earlier sin-for-one/cos-for-other
+approach looked similar but had no depth concept at all — a vertical
+oscillation, not a rotation — and was replaced once the real physics was
+worked out from first principles (see the design doc's "Rotation math"
+section for the full derivation).
+
+### Geometry: rungs styled as real bead/bond glyphs, connected by a backbone
+
+One rung per real nucleotide slot. Each rung's two endpoints are real
+nucleotide bead glyphs (plain filled circles, colored by
+`ThemeManager.base_color_{a,t,c,g}`, no outline — reproducing
+`nitrogen_base.gd`'s `_draw()` verbatim), connected by a real hydrogen-bond
+bundle (2 parallel lines for A-T, 3 for C-G, colored by pair family via
+`ThemeManager.at_bond_color`/`cg_bond_color` — reproducing `simulation.gd`'s
+`_spawn_template_hydrogen_bonds()` styling) instead of a single generic
+line. Bead count is uncapped — one per real base in the loaded sequence,
+matching `simulation.gd`'s own `num_nucleotide_slots` exactly (that project
+only caps `legible_reference_length` for camera/windowing decisions, never
+for glyph count — a mismatch this intro used to have before it was found and
+fixed).
+
+### Backbone: a second point on the same rotating rod
+
+Each strand's backbone point at a given slot is not an independently-driven
+wave — it reuses that slot's exact `phase`/`mean_cos`, just at a larger
+radius (`rotation_radius + backbone_offset_px`, the real
+`ThemeManager.backbone_offset_distance`, zoom-scaled). So it traces the
+bead's own curve at a wider swing: fully separated at the bead's own Y
+extremes, exactly coincident with the bead at the bead's own midpoint.
+Z-order reuses `top_is_front` directly rather than a new sign rule: a
+bead's own backbone point shares that bead's own front/back status (real
+DNA backbone sits on the *outside* of the double helix, bases sit on the
+*inside*), so the currently-front bead's own backbone is drawn *after* it
+(momentarily covering it right at each strand crossing) and the back
+bead's backbone is drawn *before* it. Rendered as straight, antialiased
+`draw_line` segments between consecutive slots' backbone points (no
+`Line2D`/`Curve2D`), with an antialiased `draw_circle` cap at every segment
+endpoint approximating `Line2D`'s round joints/caps — the same technique
+this intro's hydrogen-bond bundle already used, since raw `draw_line` has
+no native cap support. A segment between slot `i` and `i+1` is owned by
+slot `i` ("left-slot ownership") for z-order purposes, since adjacent
+slots' phases differ enough (~50° on average) that the two endpoints often
+disagree on front/back — imperceptible at this line width. On settle, the
+backbone lerps (same per-slot `slot_t` as its own bead) to the exact flat
+offset the live view shows for an untouched, fully-paired strand
+(`backbone_offset_px` outward from each strand's flat row), so the
+handoff matches `simulation.gd`'s own `backbone_line`/
+`top_strand_backbone_line` exactly. Full derivation:
+`docs/superpowers/specs/2026-08-08-dna-intro-backbones-design.md`.
+
+### Settle-phase handoff: natural coincidence, not a fixed clock
+
+The strand doesn't just spin for a fixed duration and cut. `_process()`
+watches the rightmost bead pair during the rotation's *final lap* for the
+natural instant its rotating Y already coincides with its real resting Y —
+zero-crossing detection on `(rotating y_offset - target y_offset)` — and
+fires the whole settle phase exactly then, so the first bead to move needs
+zero motion to "start." Falls back to a fixed-duration trigger
+(`ROTATION_DURATION_SECONDS`) if that coincidence never occurs, so the
+animation can never get stuck. The final lap itself decelerates to a stop
+rather than spinning at constant speed until an instant freeze — a cubic
+Hermite curve (`-u³+u²+u`) whose slope matches the incoming constant
+angular speed at the lap boundary (no velocity jump) and eases to exactly 0
+by the end, so the eventual freeze reads as a genuine glide-to-a-stop.
+(A plain ease-out cubic was tried first and rejected — its slope AT the lap
+boundary is 3x the incoming speed, which would have made rotation visibly
+*speed up* right at the transition, the opposite of the goal.) Once frozen,
+each bead individually glides in Y to its real resting row, staggered right
+to left (`SETTLE_STAGGER_SECONDS`/`SETTLE_LERP_SECONDS`) so the strand
+appears to settle into place as a wave. Detection and rendering both route
+through one shared `_rotation_state()` helper so the two can never drift
+out of sync with each other.
+
+### Ambient wobble + nucleotide field fade-in
+
+`dna_unwind_intro.gd` reproduces `simulation.gd`'s `get_wobble_y()`
+(hash-seeded blend of two sine waves per bead index) verbatim, layered on
+top of both phases, so the intro strand jitters with the same "chaotic
+per-bead personality" the live strand does — not phase-synced with it
+(`_wobble_time` restarts at 0 each `play()`), but styled identically.
+Respects `ThemeManager.wobble_enabled`, same as the real strand.
+
+Separately, `nucleotide_field.gd` gained `start_load_fade_in()` +
+`load_fade_in_duration`, called from `player_ui.gd`'s
+`_on_sequence_loaded_intro_done()` — right at the animation-to-live-view
+handoff, not at the earlier `on_sequence_changed()` rebuild (which happens
+well before the intro even starts, while the field is already sitting
+fully-built behind the intro's opaque overlay — fading there would finish
+before anyone could see it). Without this, the field's `modulate.a` popped
+straight to `tm.nucleotide_field_alpha` the instant the overlay disappeared;
+now it eases in.
+
+---
+
 ## Scene Structure
 
 ```
@@ -1456,14 +1575,20 @@ root (Node2D, simulation.gd)
 └── UI (CanvasLayer)
     ├── ComplexitySetupPopup           — shown at startup, before SequenceLoaderPopup
     ├── SequenceLoaderPopup
-    └── PlayerUI                       — PlayerUI.tscn instance; `simulation`
-                                         @export is editor-wired here via
-                                         node_paths. REPLACED AT RUNTIME by a
-                                         VerticalPlayerUI.tscn instance (renamed
-                                         to "PlayerUI" to keep the path stable)
-                                         when ZoomManager.vertical_mode is on —
-                                         see simulation.gd's
-                                         _swap_in_vertical_player_ui()
+    ├── PlayerUI                       — PlayerUI.tscn instance; `simulation`
+    │                                    @export is editor-wired here via
+    │                                    node_paths. REPLACED AT RUNTIME by a
+    │                                    VerticalPlayerUI.tscn instance (renamed
+    │                                    to "PlayerUI" to keep the path stable)
+    │                                    when ZoomManager.vertical_mode is on —
+    │                                    see simulation.gd's
+    │                                    _swap_in_vertical_player_ui()
+    └── DnaUnwindIntro                 — DnaUnwindIntro.tscn instance
+                                         (dna_unwind_intro.gd), full-screen
+                                         ColorRect, z_index 51. Started by
+                                         player_ui.gd's _play_dna_intro() on
+                                         every sequence load; see "DNA Unwind
+                                         Startup Intro (v84)" above.
 
 helicase.gd — added as child of simulation.gd at runtime via initialize_simulation()
 replication_manager.gd — added as child of simulation.gd at runtime via initialize_simulation()
