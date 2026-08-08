@@ -438,65 +438,82 @@ func _draw() -> void:
 	# re-centers both at once — no separate mean_sin/mean_cos needed like
 	# the old two-different-functions model required.
 
-	# No connecting backbone curve — bare rungs only, matching the
-	# reference sketch's structure. Each rung is a real hydrogen-bond
-	# bundle (bond_counts[slot] parallel lines, 2 for A-T / 3 for C-G,
-	# colored by pair family) connecting two real-colored nucleotide bead
-	# glyphs, reproducing simulation.gd's/nitrogen_base.gd's actual
-	# bead-tier rendering rather than a generic colored shape. The bond
-	# bundle is drawn first so it visually plugs into the bead edges
-	# rather than the beads sitting under a line.
+	var backbone_radius: float = rotation_radius + _backbone_offset_px
+
+	# ---- Pass 1: compute every slot's geometry, no drawing ----
+	# A backbone segment from slot i to i+1 needs both endpoints' Y before
+	# either can be drawn, so geometry is computed for every slot first and
+	# stored, then Pass 2 (Task 3) draws using these arrays by index.
+	var xs: Array[float] = []
+	var ys_top: Array[float] = []
+	var ys_bottom: Array[float] = []
+	var fronts: Array[bool] = []
+	var backbone_ys_top: Array[float] = []
+	var backbone_ys_bottom: Array[float] = []
+
 	for slot in range(num_slots):
 		var x: float = final_left_x + float(slot) * _pixel_spacing
 		var phase: float = float(slot) / float(num_slots - 1) * turns * TAU + rotation_angle
-		# True mirror pair: y_bottom is the exact negative of y_top's
-		# offset from center, both driven by the same cos(phase). The
-		# unrendered depth axis is sin(phase) — its sign says which bead
-		# is currently nearer the viewer, used below to decide draw order.
+
+		# Bead Y: unchanged from the single-pass version — see top-of-file
+		# "Rotation math" comment.
 		var y_offset: float = rotation_radius * (cos(phase) - mean_cos)
 		var y_top: float = center_y - y_offset
 		var y_bottom: float = center_y + y_offset
 		var top_is_front: bool = sin(phase) > 0.0
 
-		# Settle phase: once _process() has triggered it (either the
-		# natural rightmost-pair coincidence during the final lap, or the
-		# fallback at ROTATION_DURATION_SECONDS — see _process()), each
-		# bead individually glides from that shared frozen pose to its
-		# real resting Y — center_y -+ _strand_gap_px * 0.5, exactly where
-		# the live template_top/template_bottom glyph for this slot
-		# actually sits (see player_ui.gd's _play_dna_intro()) — so the
-		# fully-settled frame matches the live rail view exactly. Before
-		# triggering, settle_elapsed is 0 for every slot (slot_t stays 0).
-		# Staggered right to left: stagger_fraction is 0 for the rightmost
-		# slot (starts immediately once triggered) and 1 for the leftmost
-		# (starts last), scaling automatically with however many beads are
-		# loaded so the cascade's total span stays SETTLE_STAGGER_SECONDS
-		# regardless of sequence length. slot_t is a literal linear lerp, 0
-		# before this slot's delay has elapsed, ramping to 1 over
-		# SETTLE_LERP_SECONDS.
+		# Backbone Y: the exact same phase/mean_cos as the bead, just a
+		# larger radius — a second point on the same rotating rod (see
+		# design spec's "Geometry" section).
+		var backbone_offset: float = backbone_radius * (cos(phase) - mean_cos)
+		var backbone_y_top: float = center_y - backbone_offset
+		var backbone_y_bottom: float = center_y + backbone_offset
+
+		# Settle phase: identical slot_t to the existing bead lerp, applied
+		# to both bead and backbone so they arrive home the same instant
+		# (see design spec's "Settle-phase target" section). The backbone
+		# target mirrors on_bonded=true in simulation.gd's own backbone
+		# logic (the whole strand is still bonded pre-replication): outward
+		# from each strand's own flat resting row by _backbone_offset_px.
 		var settle_elapsed: float = max(0.0, _elapsed - _settle_start_elapsed) if _settle_triggered else 0.0
 		var stagger_fraction: float = float(num_slots - 1 - slot) / float(num_slots - 1)
 		var settle_delay: float = stagger_fraction * SETTLE_STAGGER_SECONDS
 		var slot_t: float = clamp((settle_elapsed - settle_delay) / SETTLE_LERP_SECONDS, 0.0, 1.0)
+
 		y_top = lerp(y_top, center_y - _strand_gap_px * 0.5, slot_t)
 		y_bottom = lerp(y_bottom, center_y + _strand_gap_px * 0.5, slot_t)
+		backbone_y_top = lerp(backbone_y_top, center_y - _strand_gap_px * 0.5 - _backbone_offset_px, slot_t)
+		backbone_y_bottom = lerp(backbone_y_bottom, center_y + _strand_gap_px * 0.5 + _backbone_offset_px, slot_t)
 
-		# Ambient wobble, reproducing simulation.gd's real per-base jitter
-		# (get_wobble_y()) — applied last, on top of whatever y_top/y_bottom
-		# currently are (still rotating, mid-settle, or fully settled),
-		# exactly like the real strand adds it as a final offset over its
-		# own resting position. Both beads at a slot use the SAME wobble_y
-		# (same index), moving together as a rigid pair rather than
-		# independently, matching how the real top/bottom strand calls both
-		# pass the same index into get_wobble_y().
+		# Ambient wobble: same call, same index, added last — applied to
+		# the backbone too so it stays visually attached to its own strand.
 		var wobble_y: float = _wobble_y(slot, _wobble_time)
 		y_top += wobble_y
 		y_bottom += wobble_y
+		backbone_y_top += wobble_y
+		backbone_y_bottom += wobble_y
 
-		# Inset each bond line's endpoints away from the bead centers by
-		# bond_inset_now, same as simulation.gd's real H-bond lines, using
-		# the sign of the top-to-bottom span so this holds regardless of
-		# which of y_top/y_bottom is numerically larger at this phase.
+		xs.append(x)
+		ys_top.append(y_top)
+		ys_bottom.append(y_bottom)
+		fronts.append(top_is_front)
+		backbone_ys_top.append(backbone_y_top)
+		backbone_ys_bottom.append(backbone_y_bottom)
+
+	# ---- Pass 2: draw ----
+	# Naive z-order for now — the whole backbone drawn first (behind
+	# everything). Task 3 replaces this with correct per-segment,
+	# per-bead-pair interleaving.
+	for slot in range(num_slots - 1):
+		draw_line(Vector2(xs[slot], backbone_ys_top[slot]), Vector2(xs[slot + 1], backbone_ys_top[slot + 1]), _backbone_color, _backbone_width_px)
+		draw_line(Vector2(xs[slot], backbone_ys_bottom[slot]), Vector2(xs[slot + 1], backbone_ys_bottom[slot + 1]), _backbone_color, _backbone_width_px)
+
+	for slot in range(num_slots):
+		var x: float = xs[slot]
+		var y_top: float = ys_top[slot]
+		var y_bottom: float = ys_bottom[slot]
+		var top_is_front: bool = fronts[slot]
+
 		var span: float = y_bottom - y_top
 		var dir: float = sign(span) if span != 0.0 else 1.0
 		var line_top: float = y_top + dir * bond_inset_now
@@ -509,15 +526,9 @@ func _draw() -> void:
 		for b in range(bond_count):
 			var bx: float = bundle_start_x + float(b) * bond_spacing_now
 			draw_line(Vector2(bx, line_top), Vector2(bx, line_bottom), bond_color, bond_width_now)
-			# Small end-cap circles approximate Line2D's round caps, which
-			# the real hydrogen-bond lines use but raw draw_line has no
-			# equivalent for.
 			draw_circle(Vector2(bx, line_top), bond_width_now * 0.5, bond_color)
 			draw_circle(Vector2(bx, line_bottom), bond_width_now * 0.5, bond_color)
 
-		# Draw order follows top_is_front so the nearer bead actually
-		# occludes the farther one right at a crossing, instead of an
-		# arbitrary fixed top-then-bottom order.
 		if top_is_front:
 			draw_circle(Vector2(x, y_bottom), bead_radius_now, _bottom_colors[slot], true, -1.0, true)
 			draw_circle(Vector2(x, y_top), bead_radius_now, _top_colors[slot], true, -1.0, true)
