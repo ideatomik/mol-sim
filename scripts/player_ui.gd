@@ -595,6 +595,75 @@ func _on_sequence_loaded(new_sequence: String):
 	# Initialize the simulation with the new sequence
 	simulation.initialize_simulation(new_sequence)
 
+	# Everything that used to run immediately after initialize_simulation()
+	# now runs once the DNA helix-unwind startup intro finishes (or is
+	# skipped via click/keypress) — see _on_sequence_loaded_intro_done().
+	# Deferred purely for timing; if the intro node isn't found, fall back
+	# to running that code immediately so a missing intro can't break load.
+	var dna_intro = get_node_or_null("%DnaUnwindIntro")
+	if dna_intro and _play_dna_intro(dna_intro):
+		dna_intro.intro_finished.connect(_on_sequence_loaded_intro_done, CONNECT_ONE_SHOT)
+	else:
+		_on_sequence_loaded_intro_done()
+
+## Gathers the real sequence colors and on-screen metrics the live rail view
+## uses, and starts the intro with them. Every pixel value handed to
+## dna_intro.play() reproduces zoom_manager.gd's own _compute_track_fit_zoom()
+## formula exactly (including the polymerase footprint in the fitted track
+## length), so the intro's end state matches the real rail view's on-screen
+## geometry rather than approximating it. Returns false (and plays nothing)
+## if ThemeManager or the loaded sequence aren't available, so the caller
+## can fall back to the normal post-load flow immediately.
+func _play_dna_intro(dna_intro) -> bool:
+	var tm = get_node_or_null("%ThemeManager")
+	var seq = simulation.dna_sequence if simulation else null
+	if tm == null or seq == null or seq.is_empty():
+		return false
+
+	# Uncapped: the real live strand spawns one nitrogen_base glyph per
+	# real base regardless of length (simulation.gd's num_nucleotide_slots
+	# = dna_sequence.get_length(), not capped to legible_reference_length —
+	# that cap is only a zoom/windowing threshold, not a glyph-count one),
+	# so the intro shows the same number of beads for a 1:1 match.
+	var count: int = seq.get_length()
+	if count < 2:
+		return false
+
+	var top_colors: Array[Color] = []
+	var bottom_colors: Array[Color] = []
+	var bond_colors: Array[Color] = []
+	var bond_counts: Array[int] = []
+	for i in range(count):
+		var base: String = seq.get_base(i)
+		top_colors.append(tm.get_base_color(base))
+		bottom_colors.append(tm.get_base_color(seq.get_complement(i)))
+		bond_colors.append(tm.cg_bond_color if (base == "C" or base == "G") else tm.at_bond_color)
+		bond_counts.append(NitrogenBaseDeriver.hydrogen_bond_count(base))
+
+	var along_extent: float = get_viewport().get_visible_rect().size.x
+	if zoom_mgr and zoom_mgr.has_method("get_along_extent"):
+		along_extent = zoom_mgr.get_along_extent()
+
+	# Reproduces zoom_manager.gd's _compute_track_fit_zoom(): the real camera
+	# fits (count-1)*spacing + 2*polymerase_offset — not just the nucleotide
+	# span — into along_extent * zoom_along_axis_percentage.
+	var poly_offset: float = simulation.polymerase_x_offset_slots * simulation.nucleotide_slot_spacing
+	var reference_length: float = float(count - 1) * simulation.nucleotide_slot_spacing + 2.0 * poly_offset
+	if reference_length <= 0.0:
+		return false
+	var zoom_x: float = (along_extent * tm.zoom_along_axis_percentage) / reference_length
+
+	dna_intro.play(
+		top_colors, bottom_colors, bond_colors, bond_counts,
+		simulation.nucleotide_slot_spacing * zoom_x,
+		simulation.dna_ribbons_gap * zoom_x,
+		tm.base_radius * 2.0 * zoom_x,
+		tm.hydrogen_bond_width * zoom_x,
+		tm.hydrogen_bond_spacing * zoom_x
+	)
+	return true
+
+func _on_sequence_loaded_intro_done() -> void:
 	# Reset zoom to the overworld and reframe for the new strand length —
 	# instant, not animated, since panning from the old track's framing
 	# would look wrong on a fresh load.
