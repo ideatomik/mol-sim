@@ -596,23 +596,23 @@ func _draw() -> void:
 		# rounded joint; at the strand's two ends it's the round end cap.
 		if top_is_front:
 			if has_segment:
-				draw_line(bottom_backbone_from, bottom_backbone_to, _backbone_color, _backbone_width_px)
-				draw_circle(bottom_backbone_from, _backbone_width_px * 0.5, _backbone_color)
-				draw_circle(bottom_backbone_to, _backbone_width_px * 0.5, _backbone_color)
+				draw_line(bottom_backbone_from, bottom_backbone_to, _backbone_color, _backbone_width_px, true)
+				draw_circle(bottom_backbone_from, _backbone_width_px * 0.5, _backbone_color, true, -1.0, true)
+				draw_circle(bottom_backbone_to, _backbone_width_px * 0.5, _backbone_color, true, -1.0, true)
 			draw_circle(Vector2(x, y_bottom), bead_radius_now, _bottom_colors[slot], true, -1.0, true)
 			draw_circle(Vector2(x, y_top), bead_radius_now, _top_colors[slot], true, -1.0, true)
 			if has_segment:
-				draw_line(top_backbone_from, top_backbone_to, _backbone_color, _backbone_width_px)
-				draw_circle(top_backbone_from, _backbone_width_px * 0.5, _backbone_color)
-				draw_circle(top_backbone_to, _backbone_width_px * 0.5, _backbone_color)
+				draw_line(top_backbone_from, top_backbone_to, _backbone_color, _backbone_width_px, true)
+				draw_circle(top_backbone_from, _backbone_width_px * 0.5, _backbone_color, true, -1.0, true)
+				draw_circle(top_backbone_to, _backbone_width_px * 0.5, _backbone_color, true, -1.0, true)
 		else:
 			if has_segment:
-				draw_line(top_backbone_from, top_backbone_to, _backbone_color, _backbone_width_px)
-				draw_circle(top_backbone_from, _backbone_width_px * 0.5, _backbone_color)
-				draw_circle(top_backbone_to, _backbone_width_px * 0.5, _backbone_color)
+				draw_line(top_backbone_from, top_backbone_to, _backbone_color, _backbone_width_px, true)
+				draw_circle(top_backbone_from, _backbone_width_px * 0.5, _backbone_color, true, -1.0, true)
+				draw_circle(top_backbone_to, _backbone_width_px * 0.5, _backbone_color, true, -1.0, true)
 			draw_circle(Vector2(x, y_top), bead_radius_now, _top_colors[slot], true, -1.0, true)
 			draw_circle(Vector2(x, y_bottom), bead_radius_now, _bottom_colors[slot], true, -1.0, true)
 			if has_segment:
-				draw_line(bottom_backbone_from, bottom_backbone_to, _backbone_color, _backbone_width_px)
-				draw_circle(bottom_backbone_from, _backbone_width_px * 0.5, _backbone_color)
-				draw_circle(bottom_backbone_to, _backbone_width_px * 0.5, _backbone_color)
+				draw_line(bottom_backbone_from, bottom_backbone_to, _backbone_color, _backbone_width_px, true)
+				draw_circle(bottom_backbone_from, _backbone_width_px * 0.5, _backbone_color, true, -1.0, true)
+				draw_circle(bottom_backbone_to, _backbone_width_px * 0.5, _backbone_color, true, -1.0, true)
