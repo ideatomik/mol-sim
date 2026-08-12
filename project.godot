@@ -24,6 +24,7 @@ gdscript/warnings/enable=false
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
+window/size/mode=2
 window/subwindows/embed_subwindows=false
 window/stretch/aspect="expand"
 

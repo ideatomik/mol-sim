@@ -23,6 +23,17 @@ extends RefCounted
 #
 # round_corners() was the one truly identical across all five files
 # (including polymerase_clamp.gd) — the actual target of this extraction.
+#
+# capsule_outline() (molecule_structure_renderer.gd's provisional intra-
+# residue directional-highlight mockup) is a different kind of extraction —
+# not deduplication of five near-identical call sites like the two above,
+# just the natural home for a generic "line segment + radius -> outline"
+# shape once one existed, rather than leaving arc/line math local to a
+# single caller. round_corners() rounds a PRE-BUILT polygon's sharp
+# vertices via a sampled bezier pullback; it doesn't synthesize a true
+# semicircular cap from two bare endpoints + a radius, so it isn't a fit
+# for a capsule despite the superficial "rounding" similarity — this is
+# genuinely new geometry, not a reuse of that function under the hood.
 # ==========================================
 
 ## Symmetric octagon — flat vertical sides, chamfered top/bottom caps. Same
@@ -97,3 +108,44 @@ static func inset_segment(from: Vector2, to: Vector2, from_r: float, to_r: float
 	var a: Vector2 = from + dir * from_r
 	var b: Vector2 = a + dir * usable
 	return PackedVector2Array([a, b])
+
+## Border-only padded capsule around a line segment: two straight sides
+## offset ±radius perpendicular to `from`->`to`, closed off by a true
+## semicircular arc at each end (radius `radius`, centered at `from` and
+## `to` respectively) — NOT a filled shape; the caller draws the returned
+## outline with draw_polyline()/draw_polygon(..., filled=false), never
+## draw_polygon(..., filled=true). Returns a CLOSED loop (the last point
+## coincides with the first) sampled at `segments` points per semicircle,
+## walking: from+perp -> to+perp -> [arc around `to`, exits toward +dir] ->
+## from-perp -> [arc around `from`, exits toward -dir] -> back to
+## from+perp. Degenerate-safe: if `from` == `to`, Vector2.normalized() on
+## the zero-length direction returns Vector2.ZERO (Godot behavior, not an
+## error) — every point collapses to `from`, a zero-area loop rather than a
+## crash.
+static func capsule_outline(from: Vector2, to: Vector2, radius: float, segments: int) -> PackedVector2Array:
+	var dir: Vector2 = (to - from).normalized()
+	var perp: Vector2 = dir.rotated(PI / 2.0)
+	var perp_angle: float = perp.angle()
+	var pts := PackedVector2Array()
+	pts.append(from + perp * radius)
+	pts.append(to + perp * radius)
+	# DECREASING angle for both arcs (not `perp_angle + PI * s/segments`,
+	# which sweeps both caps through the SAME side — verified against
+	# concrete numbers, dir=(1,0)/perp_angle=90deg: increasing from
+	# perp_angle would pass through 180deg = -dir for BOTH caps, i.e. both
+	# bulging back toward the segment's own interior instead of away from
+	# it, self-intersecting into a bowtie/pointed-petal shape rather than a
+	# smooth capsule). Decreasing from perp_angle correctly sweeps this
+	# `to`-cap through +dir (away from `from`).
+	for s in range(1, segments + 1):
+		var a: float = perp_angle - PI * float(s) / float(segments)
+		pts.append(to + Vector2(cos(a), sin(a)) * radius)
+	pts.append(from - perp * radius)
+	# Decreasing from perp_angle+PI correctly sweeps the `from`-cap through
+	# -dir (away from `to`) — same rotational sense as the `to`-cap above,
+	# which is what keeps the whole boundary a single non-self-intersecting
+	# loop rather than two arcs bulging the same way.
+	for s in range(1, segments + 1):
+		var a: float = perp_angle + PI - PI * float(s) / float(segments)
+		pts.append(from + Vector2(cos(a), sin(a)) * radius)
+	return pts

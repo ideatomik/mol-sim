@@ -52,10 +52,15 @@ func _ready():
 	if DEBUG_AUTO_SHOW:
 		show_dialog()
 
-func show_dialog():
-	"""Show the dialog and focus the input field."""
+func show_dialog(is_startup: bool = false) -> void:
+	"""Show the dialog and focus the input field. is_startup hides Cancel —
+	at first boot there's no already-loaded sequence to cancel back to, and
+	closing the dialog with nothing loaded just leaves the game in a blank
+	state. Mid-session reopens (PlayerUI's Eject button) always have a prior
+	sequence, so they keep the default false and Cancel stays visible."""
 	visible = true
-	
+	cancel_button.visible = not is_startup
+
 	# Generate a random sequence using the resource. "Aleatória" no longer
 	# exists as a preset — PRESET_MEDIA (57 bases) is the replacement default
 	# for the dialog's initial fill.
@@ -64,6 +69,12 @@ func show_dialog():
 	sequence_input.select_all()
 	sequence_input.grab_focus()
 	_update_char_count()
+
+	# The dropdown doesn't actually reflect PRESET_MEDIA (the fill above is
+	# a fresh random draw, not that preset's fixed string) — select() alone
+	# doesn't emit item_selected, so this is silent, matching what's
+	# actually in the text field.
+	option_button.select(0)
 
 func hide_dialog():
 	visible = false
@@ -75,9 +86,16 @@ func _populate_presets():
 	is the translated display string; the stable lookup key is stored as
 	metadata — same split EnzymeLabelsDesign.md established for enzyme
 	labels, and the same pattern player_ui.gd already uses for the enzyme
-	dropdown, since OptionButton items don't auto-translate on their own."""
+	dropdown, since OptionButton items don't auto-translate on their own.
+
+	Item 0 is a blank placeholder (metadata null) representing "no preset
+	selected" — show_dialog() selects it under the random fill-text, so
+	picking the preset that already happens to be item 0 (e.g. Short) still
+	changes the selection and fires item_selected, instead of silently
+	no-opping because it was already the selected index."""
 	var previous_key = option_button.get_item_metadata(option_button.selected) if option_button.item_count > 0 else null
 	option_button.clear()
+	option_button.add_item("")
 	var preset_keys = dna_sequence.get_preset_names()
 	for key in preset_keys:
 		option_button.add_item(tr(key))
@@ -87,7 +105,7 @@ func _populate_presets():
 	if previous_key != null:
 		for i in range(preset_keys.size()):
 			if preset_keys[i] == previous_key:
-				restore_index = i
+				restore_index = i + 1
 				break
 	option_button.selected = restore_index
 

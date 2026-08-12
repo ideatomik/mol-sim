@@ -205,6 +205,40 @@ func _swap_in_vertical_player_ui(zoom_mgr) -> void:
 	ui_root.add_child(vertical)
 	print("[VERTICAL] PlayerUI -> VerticalPlayerUI")
 
+## F2/F3 global UI toggles. Deliberately _unhandled_input, not _process —
+## _process() early-returns until helicase_mgr != null (first sequence
+## load), but these should work regardless of load state.
+func _unhandled_input(event: InputEvent) -> void:
+	if not (event is InputEventKey and event.pressed and not event.is_echo()):
+		return
+	match event.keycode:
+		KEY_F2:
+			var player_ui := get_node_or_null("UI/PlayerUI")
+			if player_ui != null:
+				player_ui.visible = not player_ui.visible
+		KEY_F3:
+			var tm := get_node_or_null("%ThemeManager")
+			if tm != null:
+				tm.enzyme_labels_enabled = not tm.enzyme_labels_enabled
+				if helicase_ring != null:
+					helicase_ring.set_label_enabled(tm.enzyme_labels_enabled)
+				# ligase/pol1/primase_blip/polymerase_clamp only refresh
+				# _label.visible when their own set_pulse()/set_pump() tween
+				# fires — pushed explicitly here so idle/hidden instances
+				# don't show a stale label the next time they're kicked
+				# into view.
+				if replication_mgr != null:
+					if replication_mgr.ligase != null:
+						replication_mgr.ligase.refresh_label_visibility()
+					if replication_mgr.pol1 != null:
+						replication_mgr.pol1.refresh_label_visibility()
+					if replication_mgr.primase_blip != null:
+						replication_mgr.primase_blip.refresh_label_visibility()
+					if replication_mgr.leading_clamp != null:
+						replication_mgr.leading_clamp.refresh_label_visibility()
+					if replication_mgr.lagging_clamp != null:
+						replication_mgr.lagging_clamp.refresh_label_visibility()
+
 func _ready():
 	# Register the helicase zoom target once. The frame-providers close over
 	# `self` and look up helicase_node/replication_mgr fresh each call — must
@@ -236,7 +270,7 @@ func _ready():
 	var complexity_popup = get_node_or_null("UI/ComplexitySetupPopup")
 	if complexity_popup != null:
 		complexity_popup.setup_confirmed.connect(_on_startup_complexity_confirmed, CONNECT_ONE_SHOT)
-		complexity_popup.show_dialog()
+		complexity_popup.show_dialog(true)
 	else:
 		push_error("Simulation: ComplexitySetupPopup not found — falling back to default boot")
 		_boot_with_random_sequence()
@@ -248,7 +282,7 @@ func _on_startup_complexity_confirmed() -> void:
 	# opens, it does not add a second listener on that signal.
 	var seq_popup = get_node_or_null("UI/SequenceLoaderPopup")
 	if seq_popup != null:
-		seq_popup.show_dialog()
+		seq_popup.show_dialog(true)
 	else:
 		push_error("Simulation: SequenceLoaderPopup not found — falling back to default boot")
 		_boot_with_random_sequence()
@@ -388,10 +422,13 @@ func _apply_zoom_highlight() -> void:
 	# clobbered back to strand_dim right here every frame. Molecular
 	# suppression always wins over strand_dim (0.0, not multiplied).
 	var strand_dim = zoom_mgr.get_strand_highlight_dim()
-	var template_bottom_active: bool = molecule_renderer != null and molecule_renderer.is_strand_active("template_bottom")
-	var template_top_active: bool = molecule_renderer != null and molecule_renderer.is_strand_active("template_top")
-	if backbone_line != null: backbone_line.modulate.a = 0.0 if template_bottom_active else strand_dim
-	if top_strand_backbone_line != null: top_strand_backbone_line.modulate.a = 0.0 if template_top_active else strand_dim
+	# Continuous replacements (bead<->molecular crossfade, Open Question 10)
+	# for the old is_strand_active() bool — see the matching comment in
+	# replication_manager.gd's _apply_highlight().
+	var template_bottom_fade: float = molecule_renderer.get_strand_fade_amount("template_bottom") if molecule_renderer != null else 0.0
+	var template_top_fade: float = molecule_renderer.get_strand_fade_amount("template_top") if molecule_renderer != null else 0.0
+	if backbone_line != null: backbone_line.modulate.a = strand_dim * (1.0 - template_bottom_fade)
+	if top_strand_backbone_line != null: top_strand_backbone_line.modulate.a = strand_dim * (1.0 - template_top_fade)
 	if hydrogen_bonds_container != null: hydrogen_bonds_container.modulate.a = strand_dim
 	if template_hydrogen_bonds_container != null: template_hydrogen_bonds_container.modulate.a = strand_dim
 	if template_strand_original_track != null: template_strand_original_track.modulate.a = strand_dim
@@ -760,7 +797,9 @@ func _process(delta):
 		# further down, once backbone_points/bond_marks are finalized —
 		# see the reversed decision noted there.
 		if molecule_renderer != null:
-			nucleotide_bases[i].modulate.a = 0.0 if molecule_renderer.is_slot_bead_suppressed("template_bottom", i) else 1.0
+			var bead_fade: float = molecule_renderer.get_bead_fade_amount("template_bottom", i)
+			nucleotide_bases[i].modulate.a = 1.0 - bead_fade
+			nucleotide_bases[i].set_desaturation_amount(molecule_renderer.get_transition_desaturation_amount())
 
 		var mid_y = template_strand_y + (new_bottom_template_y - template_strand_y) * 0.5
 		var on_bonded = slot_y < mid_y
@@ -804,9 +843,12 @@ func _process(delta):
 
 	_update_bond_marks(backbone_points)
 	if molecule_renderer != null:
-		var template_bottom_active: float = 0.0 if molecule_renderer.is_strand_active("template_bottom") else 1.0
+		# Continuous replacement for the old is_strand_active() bool — note
+		# this variable already stored the SURVIVING alpha (1.0 - active), not
+		# the active flag itself; preserve that meaning.
+		var template_bottom_alpha: float = 1.0 - molecule_renderer.get_strand_fade_amount("template_bottom")
 		for mark in bond_marks:
-			if mark != null and is_instance_valid(mark): mark.modulate.a = template_bottom_active
+			if mark != null and is_instance_valid(mark): mark.modulate.a = template_bottom_alpha
 
 	# ---- Top template strand ----
 	var top_strand_points = PackedVector2Array()
@@ -827,7 +869,9 @@ func _process(delta):
 		# template loop above. Backbone line suppression is below, once
 		# top_strand_points/its bond marks are finalized.
 		if molecule_renderer != null:
-			top_strand_bases[i].modulate.a = 0.0 if molecule_renderer.is_slot_bead_suppressed("template_top", i) else 1.0
+			var bead_fade: float = molecule_renderer.get_bead_fade_amount("template_top", i)
+			top_strand_bases[i].modulate.a = 1.0 - bead_fade
+			top_strand_bases[i].set_desaturation_amount(molecule_renderer.get_transition_desaturation_amount())
 
 		var mid_y = new_top_template_y + (template_strand_y - dna_ribbons_gap - new_top_template_y) * 0.5
 		var on_bonded = slot_y > mid_y
@@ -854,7 +898,8 @@ func _process(delta):
 			# it (two writers on the same property would be a real bug;
 			# modulate.a is untouched elsewhere on this node).
 			if molecule_renderer != null:
-				template_hydrogen_bonds[i].modulate.a = 0.0 if (molecule_renderer.is_slot_bead_suppressed("template_bottom", i) or molecule_renderer.is_slot_bead_suppressed("template_top", i)) else 1.0
+				var hbond_fade: float = max(molecule_renderer.get_bead_fade_amount("template_bottom", i), molecule_renderer.get_bead_fade_amount("template_top", i))
+				template_hydrogen_bonds[i].modulate.a = 1.0 - hbond_fade
 	top_strand_backbone_line.points = top_strand_points
 	top_strand_backbone_line.width = %ThemeManager.backbone_line_width
 	_update_bond_marks_top_strand(top_strand_points)
@@ -862,11 +907,19 @@ func _process(delta):
 	# (single-writer fix) — bond_marks suppression stays here since that
 	# function never touches bond_marks (no conflict).
 	if molecule_renderer != null:
-		var template_top_active: float = 0.0 if molecule_renderer.is_strand_active("template_top") else 1.0
+		# Continuous replacement for the old is_strand_active() bool — same
+		# "already stores the surviving alpha" note as template_bottom_alpha
+		# above.
+		var template_top_alpha: float = 1.0 - molecule_renderer.get_strand_fade_amount("template_top")
 		for mark in top_strand_bond_marks:
-			if mark != null and is_instance_valid(mark): mark.modulate.a = template_top_active
+			if mark != null and is_instance_valid(mark): mark.modulate.a = template_top_alpha
 
 	# ---- Marker positions: template strands (owned by simulation.gd) ----
+	# 5'/3' glyphs are strand-schematic decorations, hidden while atom-tier
+	# skeletal rendering is active (molecule_structure_renderer.gd's
+	# is_molecular_mode_active()) — no marker has a user-facing visibility
+	# toggle of its own, so gating .visible directly here is safe.
+	var atom_tier_active: bool = molecule_renderer != null and molecule_renderer.is_molecular_mode_active()
 	if marker_template_5p:
 		var last = num_nucleotide_slots - 1
 		var wobble_last = get_wobble_y(last, wobble_t)
@@ -874,18 +927,21 @@ func _process(delta):
 			template_strand_bottom[last].position.x + %ThemeManager.marker_offset,
 			template_strand_bottom[last].position.y + nucleotide_backbone_delta[last] + wobble_last
 		)
+		marker_template_5p.visible = not atom_tier_active
 	if marker_template_3p:
 		var wobble_first = get_wobble_y(0, wobble_t)
 		marker_template_3p.position = Vector2(
 			template_strand_bottom[0].position.x - %ThemeManager.marker_offset,
 			template_strand_bottom[0].position.y + nucleotide_backbone_delta[0] + wobble_first
 		)
+		marker_template_3p.visible = not atom_tier_active
 	if marker_top_5p:
 		var wobble_first = get_wobble_y(0, wobble_t)
 		marker_top_5p.position = Vector2(
 			top_strand_slots[0].position.x - %ThemeManager.marker_offset,
 			top_strand_slots[0].position.y + top_strand_backbone_delta[0] + wobble_first
 		)
+		marker_top_5p.visible = not atom_tier_active
 	if marker_top_3p:
 		var last = num_nucleotide_slots - 1
 		var wobble_last = get_wobble_y(last, wobble_t)
@@ -893,6 +949,7 @@ func _process(delta):
 			top_strand_slots[last].position.x + %ThemeManager.marker_offset,
 			top_strand_slots[last].position.y + top_strand_backbone_delta[last] + wobble_last
 		)
+		marker_top_3p.visible = not atom_tier_active
 	background_rect.color = %ThemeManager.background_color
 
 	# ---- Ambient nucleotide field: blocked while atom-tier is active ----
@@ -1245,6 +1302,7 @@ func _spawn_nucleotide_slots():
 		)
 		nitrogen_base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 		nitrogen_base.set_label_rotation(_zoom_label_rotation())
+		nitrogen_base.desaturation_gray_target = %ThemeManager.molecular_bead_desaturation_gray_target
 
 		var x = row_start_x + i * nucleotide_slot_spacing
 		nucleotide_original_x.append(x)
@@ -1267,6 +1325,7 @@ func _spawn_top_strand():
 		base.set_colors(_get_base_fill(base_char), %ThemeManager.base_label_color)
 		base.set_font(%ThemeManager.base_label_font_size, %ThemeManager.base_label_font)
 		base.set_label_rotation(_zoom_label_rotation())
+		base.desaturation_gray_target = %ThemeManager.molecular_bead_desaturation_gray_target
 
 		top_strand_slots.append(slot)
 		top_strand_bases.append(base)
@@ -1486,6 +1545,7 @@ func _setup_helicase():
 	# helicase_ring.gd holds no external references by design, so this is
 	# pushed like every other param above rather than looked up there.
 	helicase_ring.label_counter_rotation = _zoom_label_rotation()
+	helicase_ring.label_enabled = %ThemeManager.enzyme_labels_enabled
 	helicase_node.add_child(helicase_ring)
 	helicase_ring.scrub_drag_started.connect(_on_helicase_ring_drag_started)
 	helicase_ring.scrub_drag_delta.connect(_on_helicase_ring_drag_delta)

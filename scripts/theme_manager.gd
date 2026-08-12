@@ -42,6 +42,10 @@ extends Node
 @export var cofactor_label_font: Font = null
 ## Font for strand end markers (5'/3').
 @export var marker_font: Font = null
+## Atom-tier element labels (molecular skeletal renderer) — see
+## molecular_atom_label_font_size for the paired size field. Falls back to
+## base_label_font, then the engine default, when unset.
+@export var molecular_atom_label_font: Font = null
 
 @export_group("Font Sizes")
 ## Point sizes for the font resources declared in "Fonts" above, plus the
@@ -286,6 +290,16 @@ extends Node
 @export var clamp_lagging_back_color: Color = Color(0.80, 0.32, 0.32, 1.0)
 @export var clamp_lagging_front_color: Color = Color(0.95, 0.52, 0.52, 1.0)
 
+@export_subgroup("Atom-Tier Position Swap")
+## Same shape/purpose as ligase_atom_swap_dip_half_width, independently
+## tunable for the polymerase clamps — see that field's own comment for
+## the full rationale ("never let two independently-tuned numbers
+## coincidentally agree").
+@export_range(0.01, 0.5) var polymerase_atom_swap_dip_half_width: float = 0.15
+# NOT YET TUNED.
+@export_range(0.0, 1.0) var polymerase_atom_swap_dip_peak_amount: float = 1.0
+# NOT YET TUNED.
+
 @export_group("Ligase")
 ## Single procedural blob (ligase.gd) — Complex-tier trailing enzyme, see
 ## OkazakiMaturationDesign.md. Position is driven externally (replication_
@@ -335,6 +349,28 @@ extends Node
 ## half so it lands with a beat to spare rather than racing the pulse — do not
 ## let this creep up to 0.15 and coincidentally agree with it.
 @export var ligase_amp_hop_duration: float = 0.10
+
+@export_subgroup("Atom-Tier Position Swap")
+# Ligase's bead<->atom position swap must stay hidden behind a zoom-derived
+# alpha dip, never a visible pop -- see replication_manager.gd's
+# _ligase_apply_atom_tier_position_swap().
+## Half-width, in band_fraction units (0..1 -- the SAME molecular_zoom_enter/
+## exit_threshold band molecule_structure_renderer.gd's get_transition_
+## fraction() ramps across, never a separate zoom-derived tunable, per this
+## project's "never let two independently-tuned numbers coincidentally
+## agree" rule). Deliberately narrow relative to molecular_bead_
+## desaturation_peak_amount's wide parabola -- this dip only needs to
+## bracket the immediate vicinity of is_molecular_mode_active()'s own flip
+## point, not the whole band.
+@export_range(0.01, 0.5) var ligase_atom_swap_dip_half_width: float = 0.15
+# NOT YET TUNED -- widen if aggressive-scrub CQA finds a frame that jumps
+# clean over the dip window, exposing the position pop at visible alpha.
+
+## Peak alpha dip magnitude at the swap instant: 1.0 = fully transparent.
+## Deliberately 1.0 by default (unlike molecular_bead_desaturation_peak_
+## amount's partial 0.6) -- this dip exists solely to hide a position pop,
+## not to stay readable at its peak.
+@export_range(0.0, 1.0) var ligase_atom_swap_dip_peak_amount: float = 1.0
 
 @export_group("Primase")
 ## Now does REAL per-slot placement (RNA primer persistence pass) — no longer
@@ -457,7 +493,6 @@ extends Node
 @export var enzyme_labels_enabled: bool = true
 @export var polymerase_label_margin: float = 16.0
 @export var label_color: Color = Color(1, 1, 1, 1)
-@export var label_panel_color: Color = Color(0, 0, 0, 0.5)
 @export var label_z: int = 10
 
 @export_group("Nucleotide Field & Halo")
@@ -577,75 +612,146 @@ extends Node
 @export_group("Molecular Structure")
 
 @export_subgroup("Zoom Thresholds")
-## Two independent hysteresis bands, nested inside each other, plus a hard
-## ceiling declared elsewhere — this is the part of the file that's easy to
-## get lost in, so here's the full chain at a glance (world zoom scalar,
-## increases zooming IN):
-##
-##   molecular_zoom_exit (5.5) < molecular_zoom_enter (6.5)
-##     < molecular_label_zoom_exit (6.9) < molecular_label_zoom_enter (7.3)
-##     < zoom_free_camera_max_zoom_in (8.0, in "Zoom & Long-Sequence
-##       Display" → "Free Camera Mode" — NOT this group)
-##
-## Band 1 (molecular_zoom_enter/exit) gates bead-glyph vs. skeletal
-## (atom/bond) rendering for the whole nucleotide. Band 2
-## (molecular_label_zoom_enter/exit) is nested INSIDE band 1 — only
-## meaningful once skeletal mode is already active — and gates atom labels
-## between element-only (C/O/P/N) and full chemistry notation (C3', Pα...).
-## Both are hysteresis bands (exit strictly below enter), not single toggle
-## points, so scroll-wheel jitter at one shared value can't flap the render
-## mode every tick. Band 2 must also stay below the free-camera zoom
-## ceiling or it becomes unreachable — see that field's own comment for the
-## bug this caused once already.
-##
-## Zoom scalar (free-camera zoom.x — CONFIRMED against zoom_manager.gd:
-## zooming IN increases this value, zooming OUT decreases it toward a
-## floor) crossed GOING UP that activates skeletal rendering. Must be
-## strictly greater than molecular_zoom_exit_threshold — this is a
-## hysteresis band, not a single toggle point, or scroll-wheel jitter at
-## one shared threshold would flap the render mode every tick reversed.
-## See MolecularStructure_OpenQuestions_RenderClusterResolution.md
-## (question 4). NOT YET TUNED.
-##
-## Raised 3.0 -> 6.5 (Growth Session 2 CQA follow-up, see
-## docs/MolecularStructure_BasePairExpansion.md's culling note): raising
-## zoom_free_camera_max_zoom_in alone only narrowed the per-molecule cull
-## window (viewport_size / zoom.x) once actually zoomed to near that
-## ceiling — for most of the active range, the window was still sized by
-## THIS threshold, which stayed wide enough (~427px at a 1280px viewport,
-## ~8 nucleotides) to keep the same perf problem for anywhere but the
-## extreme max zoom. At 6.5 the window is already ~197px (~3.6
-## nucleotides) at the moment skeletal mode activates.
-@export var molecular_zoom_enter_threshold: float = 6.5
-## Zoom scalar crossed GOING DOWN that deactivates skeletal rendering.
-## Strictly less than molecular_zoom_enter_threshold. Raised 2.2 -> 5.5
-## alongside the enter threshold, keeping a comparable hysteresis gap.
-## NOT YET TUNED.
-@export var molecular_zoom_exit_threshold: float = 5.5
-## Second, INNER zoom threshold (Part 1, docs/atomtier/
-## AtomTier_VisualDesign.md) — nested inside skeletal mode, not an
-## alternative to molecular_zoom_enter_threshold. Zoom scalar crossed
-## GOING UP, while already in skeletal mode, that switches atom labels
-## from element-only (C, O, P, N) to full chemistry-notation geometry
-## labels (C3', Pα, ...). Independent tunable, deliberately not derived
-## from molecular_zoom_enter_threshold even though it must end up larger
-## in practice — see this file's own "never let two independently-tuned
-## numbers coincidentally agree" rule. MUST stay below
-## zoom_free_camera_max_zoom_in (8.0) — that's the hard ceiling
-## free-camera zoom is clamped to (_free_camera_scroll_zoom in
-## zoom_manager.gd), so a threshold at or above it can never be crossed
-## and the full-geometry band becomes unreachable (caught live: the
-## original placeholder here was 9.5, above the 8.0 ceiling, and the
-## band never activated even at max zoom). NOT YET TUNED beyond fitting
-## inside the reachable 6.5-8.0 window.
+# Two independent hysteresis bands, nested inside each other, plus a hard
+# ceiling declared elsewhere (zoom_free_camera_max_zoom_in, in "Zoom &
+# Long-Sequence Display" -> "Free Camera Mode" -- NOT this group). Full
+# chain, low to high (world zoom scalar, increases zooming IN):
+#   molecular_zoom_exit < molecular_zoom_enter
+#     < molecular_label_zoom_exit < molecular_label_zoom_enter
+#     < zoom_free_camera_max_zoom_in
+# Band 1 (molecular_zoom_enter/exit) gates bead-glyph vs. skeletal
+# (atom/bond) rendering for the whole nucleotide. Band 2
+# (molecular_label_zoom_enter/exit) is nested INSIDE band 1 -- only
+# meaningful once skeletal mode is already active -- and gates atom labels
+# between element-only (C/O/P/N) and full chemistry notation (C3', Pα...).
+# Both are hysteresis bands (exit strictly below enter), not single toggle
+# points, so scroll-wheel jitter at one shared value can't flap the render
+# mode every tick.
+## Zoom-in threshold that switches nucleotide rendering from bead-glyph to
+## skeletal (atom/bond) mode. Must stay strictly above
+## molecular_zoom_exit_threshold. Also the crossfade band's far endpoint —
+## see molecule_structure_renderer.gd's get_transition_fraction().
+@export var molecular_zoom_enter_threshold: float = 7.0
+# NOT YET TUNED. Raised 3.0 -> 6.5 (Growth Session 2 CQA follow-up, see
+# docs/MolecularStructure_BasePairExpansion.md's culling note): raising
+# zoom_free_camera_max_zoom_in alone only narrowed the per-molecule cull
+# window (viewport_size / zoom.x) once actually zoomed to near that
+# ceiling -- for most of the active range, the window was still sized by
+# THIS threshold, which stayed wide enough (~427px at a 1280px viewport,
+# ~8 nucleotides) to keep the same perf problem for anywhere but the
+# extreme max zoom. At 6.5 the window is already ~197px (~3.6
+# nucleotides) at the moment skeletal mode activates. See
+# MolecularStructure_OpenQuestions_RenderClusterResolution.md (question 4).
+# Widened 6.5 -> 7.0 (alongside exit's matching widening) once this pair
+# started ALSO driving the bead<->molecular crossfade (Open Question 10's
+# deferred transition treatment): a 1.0-wide gap reads as one continuous
+# fade across several scroll ticks, where the narrower live-tuned gap this
+# project had briefly settled on (a scene-only override, never matched
+# here) was too narrow to perceive as anything but a flicker.
+
+## Zoom-out threshold that switches rendering back to bead-glyph mode. Must
+## stay strictly below molecular_zoom_enter_threshold. Also the crossfade
+## band's near endpoint (0.0 fraction) — see get_transition_fraction().
+@export var molecular_zoom_exit_threshold: float = 4.5
+# NOT YET TUNED. Raised 2.2 -> 5.5 alongside the enter threshold, keeping a
+# comparable hysteresis gap. Widened again 5.5 -> 4.5 for crossfade
+# legibility — see molecular_zoom_enter_threshold's matching note.
+
+## Zoom-in threshold, only meaningful once skeletal mode is already active,
+## that upgrades atom labels from element-only (C, O, P, N) to full
+## chemistry notation (C3', Pα, ...). Must stay strictly above
+## molecular_label_zoom_exit_threshold and below
+## zoom_free_camera_max_zoom_in.
 @export var molecular_label_zoom_enter_threshold: float = 7.3
-## Zoom scalar crossed GOING DOWN that switches labels back to
-## element-only. Strictly less than molecular_label_zoom_enter_threshold,
-## same hysteresis-gap convention as the skeletal on/off pair. Also
-## constrained to the reachable 6.5-8.0 window — see
-## molecular_label_zoom_enter_threshold's comment. NOT YET TUNED beyond
-## that.
+# Second, INNER zoom threshold (Part 1, docs/atomtier/
+# AtomTier_VisualDesign.md) -- nested inside skeletal mode, not an
+# alternative to molecular_zoom_enter_threshold. Deliberately not derived
+# from molecular_zoom_enter_threshold even though it must end up larger in
+# practice -- never let two independently-tuned numbers coincidentally
+# agree. MUST stay below zoom_free_camera_max_zoom_in -- that's the hard
+# ceiling free-camera zoom is clamped to (_free_camera_scroll_zoom in
+# zoom_manager.gd), so a threshold at or above it can never be crossed and
+# the full-geometry band becomes unreachable (caught live: the original
+# placeholder here was 9.5, above the then-8.0 ceiling, and the band never
+# activated even at max zoom). NOT YET TUNED beyond fitting inside the
+# reachable window.
+
+## Zoom-out threshold that reverts labels to element-only. Must stay
+## strictly below molecular_label_zoom_enter_threshold.
 @export var molecular_label_zoom_exit_threshold: float = 6.9
+# Same hysteresis-gap convention as the skeletal on/off pair, constrained
+# to the same reachable window as molecular_label_zoom_enter_threshold.
+# NOT YET TUNED beyond that.
+
+@export_subgroup("DEBUG — Label Filter (provisional, trailer-capture tool)")
+## Provisional/debug override for isolating specific atoms in a capture —
+## NOT a committed feature (a real teacher-facing "highlight this" tool is
+## a separate future design pass). Master toggle: false is a no-op, same
+## render output as before this field existed. Inert below the full-label
+## zoom tier — every tier before that renders identically whether this is
+## true or false. Once ALREADY at the full-label tier (where every atom
+## would otherwise show full chemistry notation), enabling this SUPPRESSES
+## every atom that matches neither molecular_debug_label_filter_atom_names
+## nor molecular_debug_label_filter_bases back down to element-only,
+## leaving only the matches at full detail. Remove this subgroup once the
+## trailer shot is captured, or fold into a real feature at that point.
+@export var molecular_debug_label_filter_enabled: bool = false
+## Full-geometry display-label strings to keep at full detail once at the
+## full-label zoom tier (exact match against ATOM_DISPLAY_LABELS' OWN
+## output — e.g. ["Pα", "O3'", "O5'", "C1'", "C2'", "C3'", "C4'", "C5'",
+## "O4'"] for "phosphodiester + both flanking pentoses"). Case-sensitive,
+## must match the rendered string exactly.
+@export var molecular_debug_label_filter_atom_names: Array[String] = []
+## Base letters ("A"/"T"/"C"/"G") whose residues keep every atom at full
+## label — e.g. ["A", "T"] to highlight only adenine/thymine residues.
+@export var molecular_debug_label_filter_bases: Array[String] = []
+
+@export_subgroup("DEBUG — Directional Highlight Mockup (provisional, intra-residue capsule variant)")
+## Provisional/mockup — NOT a committed feature. First variant of the
+## directional-highlight investigation (MolecularIdentityHierarchy_Design.md)
+## — a discrete, border-only, padded capsule around each residue's OWN
+## intra-residue C5'->C3' segment (one capsule per residue, NOT a
+## continuous inter-residue thread — that construction is superseded here
+## in favor of this narrower per-residue shape, decided in discussion; the
+## inter-residue path stays covered by the existing backbone bond + its own
+## directional arrow, molecular_backbone_arrow_* above). Master toggle:
+## false is a no-op. Inert below the full-label zoom tier, same convention
+## as molecular_debug_label_filter_enabled above — every tier before that
+## renders identically regardless of this flag.
+@export var molecular_debug_capsule_enabled: bool = false
+## Gap (world units) between an ATOM's own edge and the capsule border —
+## NOT the end-cap radius itself. The actual cap radius (see
+## molecule_structure_renderer.gd's _draw_c5_c3_capsule()) is
+## molecular_atom_radius + this value, so the C5'/C3' atoms always sit
+## fully inside their end of the capsule with this much visible gap to the
+## border, regardless of molecular_atom_radius's own tuning. NOT YET TUNED.
+@export var molecular_debug_capsule_padding: float = 3.0
+## Capsule border stroke width (world units). NOT YET TUNED.
+@export var molecular_debug_capsule_border_width: float = 1.5
+## Capsule border color. Border/outline only — the capsule interior is
+## never filled. NOT YET TUNED — chosen distinct from
+## molecular_backbone_bond_color (gold) and molecular_backbone_arrow_color
+## (green) purely so it doesn't visually merge with either while both are
+## on screen at the same zoom tier.
+@export var molecular_debug_capsule_border_color: Color = Color(1.0, 0.4, 0.9)
+
+@export_subgroup("Bead Crossfade / Desaturation")
+# Bead<->molecular crossfade itself reuses molecular_zoom_enter/exit_
+# threshold above rather than a separate tunable pair (Open Question 10:
+# "never let two independently-tuned numbers coincidentally agree"). Only
+# the desaturation dip's own SHAPE needs tuning here.
+## Peak lerp-toward-gray weight for the bead desaturation dip, hit at the
+## midpoint of the molecular_zoom_enter/exit_threshold band. 1.0 would
+## fully erase base-letter color coding at the peak; 0.6 keeps the dip
+## readable without severing it.
+@export_range(0.0, 1.0) var molecular_bead_desaturation_peak_amount: float = 0.6
+# NOT YET TUNED.
+## Neutral gray the bead fill lerps toward at the peak. Matches
+## molecular_bond_color's own cool gray on purpose (the bead dissolves
+## toward the same gray its own skeleton is drawn in). Pushed into each
+## nitrogen_base.gd instance once at spawn time — that node stays
+## ThemeManager-free by convention (see its own header comment).
+@export var molecular_bead_desaturation_gray_target: Color = Color(0.6, 0.6, 0.65, 1.0)
 
 @export_subgroup("Bond Lines")
 ## Line width for RING/SUBSTITUENT skeletal bonds (intra-residue chemistry
@@ -676,6 +782,24 @@ extends Node
 ## NOT YET TUNED — starting point only, chosen distinct from
 ## molecular_bond_color's cool gray on purpose.
 @export var molecular_backbone_bond_color: Color = Color(0.95, 0.75, 0.35)
+## Length (world units) of the small triangular 5'->3' direction arrowhead
+## drawn centered on each backbone bond, full-label zoom tier only (see
+## molecule_structure_renderer.gd's _draw() — gated on
+## _label_full_geometry_active alongside real double-bond rendering, same
+## threshold reused rather than adding a third one). No existing
+## bead-glyph-tier arrowhead convention to match — dna_unwind_intro.gd
+## explicitly has none — so this is a fresh starting point, not a reuse.
+## NOT YET TUNED.
+@export var molecular_backbone_arrow_length: float = 6.0
+## Half-width (world units) of the arrowhead's base — the full base spans
+## 2x this, perpendicular to the bond direction. NOT YET TUNED.
+@export var molecular_backbone_arrow_half_width: float = 3.0
+## Fill color for the backbone direction arrowhead. Defaults to match
+## molecular_backbone_bond_color (the color it was split from) so this
+## field's addition doesn't change existing visuals — an independent knob
+## for retuning arrow contrast without affecting the bond line itself.
+## NOT YET TUNED.
+@export var molecular_backbone_arrow_color: Color = Color(0.95, 0.75, 0.35)
 
 @export_subgroup("Atom Colors (CPK)")
 ## Growth Session 2 (base-pair expansion): CPK color for nitrogen atoms —

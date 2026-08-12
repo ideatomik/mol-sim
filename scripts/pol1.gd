@@ -137,7 +137,14 @@ func _apply() -> void:
 		var label_enabled: bool = tm.enzyme_labels_enabled
 		_label.visible = label_enabled
 		if label_enabled:
-			_label.set_style(null, tm.label_font_size, tm.label_color, tm.label_panel_color)
+			_label.set_style(null, tm.label_font_size, tm.label_color)
 			_label.set_counter_rotation(_zoom_label_rotation())
 			_label.z_index = tm.label_z
 			_label.set_anchor_pos(Vector2(0.0, -(lobe_size * 0.5 + tm.pol1_label_margin)))
+
+## Live label toggle — see ligase.gd's own copy of this method for why a
+## plain F3 press needs this instead of relying on _apply()'s next
+## set_pulse()-triggered run.
+func refresh_label_visibility() -> void:
+	if _label != null and _tm != null:
+		_label.visible = _tm.enzyme_labels_enabled

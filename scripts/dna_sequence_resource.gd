@@ -26,25 +26,16 @@ const MAX_LENGTH: int = 300
 # ---------- PRESETS ----------
 # Stable keys (never shown to the user directly) — display text lives in
 # presets.csv, mirroring the enzyme-label pattern (EnzymeLabelsDesign.md).
-const PRESETS: Dictionary = {
-	"PRESET_RICA_CG": "GCGCCGCCGCCGCCGCCGCCGCCGC",
-	"PRESET_RICA_AT": "ATATATATATATATATATATATATAT",
-	"PRESET_PCR_TEMPLATE": "GCTAGCTACGATATGCGGCATCGATCGGCTAAGCTTCGATCGTAGCTAGCATCGATCGGCATCGTAGCTAGCTTAGCGTTCAGGCATCGA",
-}
-
-# Random content, pinned length — re-rolled fresh every selection.
+# Random content, pinned length, re-rolled fresh every selection.
 const RANDOM_LENGTH_PRESETS: Dictionary = {
 	"PRESET_CURTA": 34,
 	"PRESET_MEDIA": 57,
 	"PRESET_LONGA": 90,
-	"PRESET_GRANDE": 200,
 }
 
-# Explicit dropdown order — PRESETS and RANDOM_LENGTH_PRESETS are two
-# separate dictionaries and can't be relied on to concatenate meaningfully.
+# Explicit dropdown order.
 const PRESET_ORDER: Array[String] = [
-	"PRESET_RICA_CG", "PRESET_RICA_AT", "PRESET_PCR_TEMPLATE",
-	"PRESET_CURTA", "PRESET_MEDIA", "PRESET_LONGA", "PRESET_GRANDE",
+	"PRESET_CURTA", "PRESET_MEDIA", "PRESET_LONGA",
 ]
 
 # ---------- DATA ----------
@@ -101,16 +92,9 @@ func _to_string() -> String:
 
 func load_preset(preset_name: String) -> String:
 	"""Load a preset by name. Returns the preset string (or empty if not found)."""
-	if RANDOM_LENGTH_PRESETS.has(preset_name):
-		randomize_sequence(RANDOM_LENGTH_PRESETS[preset_name])
-		return _to_string()
-
-	var preset_string = PRESETS.get(preset_name, "")
-	if preset_string.is_empty():
+	if not RANDOM_LENGTH_PRESETS.has(preset_name):
 		return ""
-
-	# Load the preset into the sequence
-	set_from_string(preset_string)
+	randomize_sequence(RANDOM_LENGTH_PRESETS[preset_name])
 	return _to_string()
 
 func get_preset_names() -> Array[String]:
@@ -121,13 +105,13 @@ func get_preset_names() -> Array[String]:
 
 func get_preset_string(preset_name: String) -> String:
 	"""Get the raw string for a preset (without loading it into the sequence)."""
-	if RANDOM_LENGTH_PRESETS.has(preset_name):
-		# Generate on a temporary instance so previewing a random-length
-		# preset doesn't disturb this resource's own live state.
-		var temp_seq = DnaSequenceResource.new()
-		temp_seq.randomize_sequence(RANDOM_LENGTH_PRESETS[preset_name])
-		return temp_seq._to_string()
-	return PRESETS.get(preset_name, "")
+	if not RANDOM_LENGTH_PRESETS.has(preset_name):
+		return ""
+	# Generate on a temporary instance so previewing a random-length
+	# preset doesn't disturb this resource's own live state.
+	var temp_seq = DnaSequenceResource.new()
+	temp_seq.randomize_sequence(RANDOM_LENGTH_PRESETS[preset_name])
+	return temp_seq._to_string()
 
 # ---------- VALIDATION ----------
 

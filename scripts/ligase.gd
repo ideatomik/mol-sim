@@ -100,7 +100,15 @@ func _apply() -> void:
 		var label_enabled: bool = tm.enzyme_labels_enabled
 		_label.visible = label_enabled
 		if label_enabled:
-			_label.set_style(null, tm.label_font_size, tm.label_color, tm.label_panel_color)
+			_label.set_style(null, tm.label_font_size, tm.label_color)
 			_label.set_counter_rotation(_zoom_label_rotation())
 			_label.z_index = tm.label_z
 			_label.set_anchor_pos(Vector2(0.0, base_size * 0.5 + tm.ligase_label_margin))
+
+## Live label toggle — this node's own _apply() only re-runs when set_pulse()
+## fires (kick/seal tweens), so a plain F3 press wouldn't reach an idle
+## instance until its next animation. Refreshes just _label.visible from
+## tm.enzyme_labels_enabled without touching pulse/shape state.
+func refresh_label_visibility() -> void:
+	if _label != null and _tm != null:
+		_label.visible = _tm.enzyme_labels_enabled

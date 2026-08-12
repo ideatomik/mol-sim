@@ -85,7 +85,6 @@ extends Node2D
 @export var label_margin: float = 12.0              # gap above the ring's tallest reach
 @export var label_font_size: int = 16
 @export var label_text_color: Color = Color(1, 1, 1, 1)
-@export var label_panel_color: Color = Color(0, 0, 0, 0.5)
 @export var label_z: int = 10                       # above front_z, always readable
 
 const ENZYME_LABEL_SCENE: PackedScene = preload("res://scenes/enzyme_label.tscn")
@@ -209,22 +208,28 @@ func _rebuild_blobs() -> void:
 	_apply()
 
 func _setup_label() -> void:
-	if not label_enabled:
-		return
 	_label = ENZYME_LABEL_SCENE.instantiate()
 	_label.z_as_relative = false
 	_label.z_index = label_z
 	add_child(_label)
 	_label.set_key(label_key)
-	_label.set_style(null, label_font_size, label_text_color, label_panel_color)
+	_label.set_style(null, label_font_size, label_text_color)
 	_label.set_counter_rotation(label_counter_rotation)
 	_update_label()
 
 func _update_label() -> void:
 	if _label == null:
 		return
+	_label.visible = label_enabled
 	var offset_y := ring_radius + max_blob_height * 0.5 + label_margin
 	_label.set_anchor_pos(Vector2(0.0, -offset_y))
+
+## Live toggle for label_enabled — called externally (simulation.gd bridges
+## %ThemeManager.enzyme_labels_enabled here) since this node deliberately
+## stays ThemeManager-agnostic; see the LABEL section header comment.
+func set_label_enabled(v: bool) -> void:
+	label_enabled = v
+	_update_label()
 
 func _apply() -> void:
 	if _blobs.size() != max(1, blob_count):

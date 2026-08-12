@@ -24,11 +24,11 @@ extends ColorRect
 ## clock time but at the natural moment the rightmost bead pair's rotating
 ## Y already coincides with its real resting Y (see _process()), so the
 ## first bead to move needs zero motion to "start" — falls back to freezing
-## at ROTATION_DURATION_SECONDS if that coincidence never occurs. Second,
+## at rotation_duration_seconds if that coincidence never occurs. Second,
 ## the settle phase (see _draw()'s per-slot loop): once rotation has frozen,
 ## each bead individually glides in Y from that frozen pose to its real
 ## resting row, staggered right to left so the strand appears to settle
-## into place as a wave — see SETTLE_STAGGER_SECONDS/SETTLE_LERP_SECONDS
+## into place as a wave — see settle_stagger_seconds/settle_lerp_seconds
 ## below. A small ambient wobble (see _wobble_y()) is layered on top of
 ## both phases throughout, reproducing the real strand's own per-base
 ## jitter.
@@ -90,31 +90,40 @@ extends ColorRect
 signal intro_finished
 
 ## Temporary debug scaffolding for iterating on the geometry in isolation:
-## freezes _elapsed at FREEZE_T * TOTAL_DURATION_SECONDS (still dismissible
+## freezes _elapsed at FREEZE_T * _total_duration_seconds() (still dismissible
 ## via click/keypress) — a specific point within the full rotation+settle
 ## timeline. Set back to false once the geometry looks right — not a
 ## shipped feature, remove when no longer needed.
 const FREEZE_AT_TWISTED_STATE: bool = false
 const FREEZE_T: float = 0.15
 
-const ROTATION_DURATION_SECONDS: float = 4.4
+## Exposed for Inspector tuning (rehearsing timing ahead of a demo without
+## editing script code).
+@export var rotation_duration_seconds: float = 4.4
 ## Span across which per-bead settle START delays are spread, right to
 ## left — the rightmost slot begins settling the instant this phase
-## starts, the leftmost slot begins SETTLE_STAGGER_SECONDS later. Scales
+## starts, the leftmost slot begins settle_stagger_seconds later. Scales
 ## automatically with however many beads are loaded (see _draw()), so the
 ## cascade's total length stays this constant regardless of sequence
-## length. Live-tune by eye.
-const SETTLE_STAGGER_SECONDS: float = 1.0
+## length. Exposed for Inspector tuning.
+@export var settle_stagger_seconds: float = 1.0
 ## How long each individual bead's own glide from its frozen rotating
-## position to its real resting Y takes, once its turn arrives. Live-tune
-## by eye.
-const SETTLE_LERP_SECONDS: float = 0.4
+## position to its real resting Y takes, once its turn arrives. Exposed for
+## Inspector tuning.
+@export var settle_lerp_seconds: float = 0.4
+## How long the overlay's own fade-out takes once dismissed — see
+## _finish(). Exposed for Inspector tuning.
+@export var crossfade_duration_seconds: float = 0.5
+
 ## Derived, not tuned directly: the last bead to start settling (the
-## leftmost slot, at SETTLE_STAGGER_SECONDS in) still needs
-## SETTLE_LERP_SECONDS more to finish, so this is the true full-timeline
+## leftmost slot, at settle_stagger_seconds in) still needs
+## settle_lerp_seconds more to finish, so this is the true full-timeline
 ## length _process()'s finish-trigger and the FREEZE_T debug freeze above
-## both key off.
-const TOTAL_DURATION_SECONDS: float = ROTATION_DURATION_SECONDS + SETTLE_STAGGER_SECONDS + SETTLE_LERP_SECONDS
+## both key off. A function rather than a const since its inputs are now
+## @export vars (live-editable, so can't be folded into a const expression).
+func _total_duration_seconds() -> float:
+	return rotation_duration_seconds + settle_stagger_seconds + settle_lerp_seconds
+
 
 const BP_PER_TURN: float = 10.5
 ## Multiplies the biologically-derived spatial winding (num_slots /
@@ -125,7 +134,7 @@ const BP_PER_TURN: float = 10.5
 ## dense, legible spiral rather than a loose, undersampled one. Kept
 ## modest (not much higher) since too few dots per revolution starts
 ## looking undersampled/jagged rather than smooth.
-## Live-tune by eye alongside TOTAL_SPIN_TURNS below.
+## Live-tune by eye alongside total_spin_turns below.
 const SPATIAL_TWIST_DENSITY: float = 1.5
 ## Rotation radius (each bead's Y-distance from center) as a multiple of
 ## half the real strand gap (_strand_gap_px) — not an extra "wobble" added
@@ -157,8 +166,8 @@ const BOND_INSET_RATIO: float = 0.8
 ## the winding pattern — dots and connecting backbone curve alike — visibly
 ## travels along the strand, which is what reads as "two winding strands"
 ## rather than a static twisted shape. Decorative only — no real quantity
-## to derive this from — live-tune by eye.
-const TOTAL_SPIN_TURNS: float = 3.0
+## to derive this from. Exposed for Inspector tuning.
+@export var total_spin_turns: float = 3.0
 
 var _elapsed: float = 0.0
 var _playing: bool = false
@@ -248,7 +257,7 @@ func play(top_colors: Array[Color], bottom_colors: Array[Color],
 	_backbone_width_px = backbone_width_px
 	_wobble_time = 0.0
 
-	_elapsed = FREEZE_T * TOTAL_DURATION_SECONDS if FREEZE_AT_TWISTED_STATE else 0.0
+	_elapsed = FREEZE_T * _total_duration_seconds() if FREEZE_AT_TWISTED_STATE else 0.0
 	_playing = true
 	_settle_triggered = false
 	_settle_start_elapsed = 0.0
@@ -284,16 +293,16 @@ func play(top_colors: Array[Color], bottom_colors: Array[Color],
 ## rotation phase, only a true deceleration to rest.
 func _rotation_state(rotation_elapsed: float, num_slots: int) -> Dictionary:
 	var turns: float = max(1.0, float(num_slots) / BP_PER_TURN) * SPATIAL_TWIST_DENSITY
-	var clamped_elapsed: float = clamp(rotation_elapsed, 0.0, ROTATION_DURATION_SECONDS)
-	var lap_duration: float = ROTATION_DURATION_SECONDS / TOTAL_SPIN_TURNS
-	var final_lap_start: float = ROTATION_DURATION_SECONDS - lap_duration
+	var clamped_elapsed: float = clamp(rotation_elapsed, 0.0, rotation_duration_seconds)
+	var lap_duration: float = rotation_duration_seconds / total_spin_turns
+	var final_lap_start: float = rotation_duration_seconds - lap_duration
 	var rotation_angle: float
 	if clamped_elapsed <= final_lap_start:
-		rotation_angle = (clamped_elapsed / ROTATION_DURATION_SECONDS) * TOTAL_SPIN_TURNS * TAU
+		rotation_angle = (clamped_elapsed / rotation_duration_seconds) * total_spin_turns * TAU
 	else:
 		var u: float = clamp((clamped_elapsed - final_lap_start) / lap_duration, 0.0, 1.0)
 		var eased_lap_t: float = -pow(u, 3.0) + pow(u, 2.0) + u
-		rotation_angle = (TOTAL_SPIN_TURNS - 1.0) * TAU + eased_lap_t * TAU
+		rotation_angle = (total_spin_turns - 1.0) * TAU + eased_lap_t * TAU
 	var theta: float = turns * TAU
 	var mean_cos: float = (sin(rotation_angle + theta) - sin(rotation_angle)) / theta
 	var rotation_radius: float = _strand_gap_px * 0.5 * ROTATION_RADIUS_RATIO
@@ -322,8 +331,8 @@ func _process(delta: float) -> void:
 	if not _settle_triggered:
 		var num_slots: int = _top_colors.size()
 		if num_slots >= 2:
-			var st: Dictionary = _rotation_state(min(_elapsed, ROTATION_DURATION_SECONDS), num_slots)
-			if st.rotation_angle >= (TOTAL_SPIN_TURNS - 1.0) * TAU:
+			var st: Dictionary = _rotation_state(min(_elapsed, rotation_duration_seconds), num_slots)
+			if st.rotation_angle >= (total_spin_turns - 1.0) * TAU:
 				var phase_rightmost: float = st.theta + st.rotation_angle
 				var diff: float = st.rotation_radius * (cos(phase_rightmost) - st.mean_cos) - _strand_gap_px * 0.5
 				if _prev_rightmost_diff_valid and sign(diff) != sign(_prev_rightmost_diff):
@@ -335,19 +344,19 @@ func _process(delta: float) -> void:
 		# mathematically unreachable this lap): start the settle phase at
 		# the rotation's fixed duration anyway, so the animation is never
 		# stuck spinning forever.
-		if not _settle_triggered and _elapsed >= ROTATION_DURATION_SECONDS:
+		if not _settle_triggered and _elapsed >= rotation_duration_seconds:
 			_settle_triggered = true
 			_settle_start_elapsed = _elapsed
 
-	_elapsed = min(_elapsed + delta, TOTAL_DURATION_SECONDS)
+	_elapsed = min(_elapsed + delta, _total_duration_seconds())
 	_wobble_time += delta
 	queue_redraw()
 
 	# The real total is dynamic now (rotation can end before
-	# ROTATION_DURATION_SECONDS on a natural coincidence) — TOTAL_DURATION_SECONDS
+	# rotation_duration_seconds on a natural coincidence) — _total_duration_seconds()
 	# remains only a worst-case ceiling (used above for the _elapsed cap and
 	# by play()'s debug freeze), not the real finish condition.
-	if _settle_triggered and _elapsed >= _settle_start_elapsed + SETTLE_STAGGER_SECONDS + SETTLE_LERP_SECONDS:
+	if _settle_triggered and _elapsed >= _settle_start_elapsed + settle_stagger_seconds + settle_lerp_seconds:
 		_finish()
 
 
@@ -362,10 +371,22 @@ func _input(event: InputEvent) -> void:
 		_finish()
 
 
+## Unblocks the simulation underneath immediately (setting _playing false is
+## what actually frees input — see _input()'s early-return) while the
+## overlay itself fades out visually on top, rather than an instant hard
+## cut, so both the click/keypress skip path (_input(), above) and natural
+## completion (_process(), above) read as one smooth handoff.
 func _finish() -> void:
 	_playing = false
-	visible = false
 	intro_finished.emit()
+	var tween := create_tween()
+	tween.tween_property(self, "modulate:a", 0.0, crossfade_duration_seconds)
+	tween.finished.connect(_on_crossfade_finished)
+
+
+func _on_crossfade_finished() -> void:
+	visible = false
+	modulate.a = 1.0
 
 
 ## Deterministic pseudo-random [0,1) value from a seed — reproduced verbatim
@@ -411,7 +432,7 @@ func _draw() -> void:
 
 	# Rotation freezes at _settle_start_elapsed once the settle phase has
 	# triggered (either the natural coincidence or the _process() fallback
-	# — see there), instead of always at the fixed ROTATION_DURATION_SECONDS
+	# — see there), instead of always at the fixed rotation_duration_seconds
 	# clock boundary: the whole point of this round's change is that the
 	# freeze point is now dynamic, whatever instant the rightmost bead pair
 	# naturally lined up with its target. Before that, it's still just
@@ -498,8 +519,8 @@ func _draw() -> void:
 		# immediately) and 1 for the leftmost (settles last), and scales
 		# automatically with however many slots are loaded (the division by
 		# num_slots - 1) so the cascade's total span stays
-		# SETTLE_STAGGER_SECONDS regardless of sequence length. slot_t is
-		# then a plain linear ramp from 0 to 1 over SETTLE_LERP_SECONDS once
+		# settle_stagger_seconds regardless of sequence length. slot_t is
+		# then a plain linear ramp from 0 to 1 over settle_lerp_seconds once
 		# a slot's own delay has elapsed, applied to both bead and backbone
 		# so they arrive home the same instant (see design spec's
 		# "Settle-phase target" section). The backbone target mirrors
@@ -508,8 +529,8 @@ func _draw() -> void:
 		# strand's own flat resting row by _backbone_offset_px.
 		var settle_elapsed: float = max(0.0, _elapsed - _settle_start_elapsed) if _settle_triggered else 0.0
 		var stagger_fraction: float = float(num_slots - 1 - slot) / float(num_slots - 1)
-		var settle_delay: float = stagger_fraction * SETTLE_STAGGER_SECONDS
-		var slot_t: float = clamp((settle_elapsed - settle_delay) / SETTLE_LERP_SECONDS, 0.0, 1.0)
+		var settle_delay: float = stagger_fraction * settle_stagger_seconds
+		var slot_t: float = clamp((settle_elapsed - settle_delay) / settle_lerp_seconds, 0.0, 1.0)
 
 		y_top = lerp(y_top, center_y - _strand_gap_px * 0.5, slot_t)
 		y_bottom = lerp(y_bottom, center_y + _strand_gap_px * 0.5, slot_t)

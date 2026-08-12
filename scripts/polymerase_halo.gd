@@ -93,15 +93,36 @@ var _cached_label_rotation: float = 0.0
 var _cached_blur_on: bool = true
 var _cached_extent: float = 1.4
 
+# ---------- ATOM-TIER POSITION SWAP ----------
+# Stored so set_atom_tier_offset_suppressed() can recompute the un-
+# suppressed offset later — setup()'s own center_offset was a local-only
+# value, never revisited after the one-time position.y write below.
+var _mirror: bool = false
+var _center_offset: float = 0.0
+## True while the atom-tier position swap (replication_manager.gd) has
+## repositioned this halo's own PARENT container to an atom-tier anchor —
+## zeroes the duplex-centre local offset set once in setup(), same
+## rationale as polymerase_clamp.gd's own _atom_tier_offset_suppressed.
+var _atom_tier_offset_suppressed: bool = false
+
 func setup(sim: Node, mirror: bool) -> void:
 	_sim = sim
 	_tm = sim.get_node("%ThemeManager")
 	_zoom_mgr = sim.get_node_or_null("%ZoomManager")
 	_field = sim.nucleotide_field
-	var center_offset: float = sim.dna_ribbons_gap / 2.0
-	position.y = -center_offset if mirror else center_offset
+	_mirror = mirror
+	_center_offset = sim.dna_ribbons_gap / 2.0
+	position.y = -_center_offset if mirror else _center_offset
 	_build_texture(_current_blur_softness())
 	_build_particles()
+
+## Zeroes (or restores) the duplex-centre local offset — see
+## _atom_tier_offset_suppressed's own doc comment.
+func set_atom_tier_offset_suppressed(suppressed: bool) -> void:
+	if suppressed == _atom_tier_offset_suppressed:
+		return
+	_atom_tier_offset_suppressed = suppressed
+	position.y = 0.0 if suppressed else (-_center_offset if _mirror else _center_offset)
 	set_process(true)
 
 func _fill_for(bt: String) -> Color:

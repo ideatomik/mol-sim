@@ -31,11 +31,6 @@ const DEBUG_AUTO_SHOW: bool = false
 
 var complexity_mgr: Node = null  # %ComplexityManager, resolved in _ready()
 
-# Startup mode (set via show_dialog()'s is_startup param): there's no prior
-# simulation state to cancel back to, so Cancel quits instead. Mid-session
-# reopens (PlayerUI's Menu button) get the normal revert-and-close behavior.
-var _is_startup_mode: bool = false
-
 # Toggle values as of the moment this dialog was opened — since toggles
 # apply LIVE to ComplexityManager as they're pressed (same immediate-apply
 # pattern as WobbleToggle/NCloudToggle, not a stage-then-commit-on-OK
@@ -88,7 +83,6 @@ func _ready() -> void:
 		show_dialog()
 
 func show_dialog(is_startup: bool = false) -> void:
-	_is_startup_mode = is_startup
 	if complexity_mgr != null:
 		_snapshot_primase = complexity_mgr.is_enabled("primase")
 		_snapshot_ligase = complexity_mgr.is_enabled("ligase")
@@ -110,10 +104,11 @@ func show_dialog(is_startup: bool = false) -> void:
 		cofactor_byproducts_toggle.set_pressed_no_signal(_snapshot_cofactor_byproducts)
 		_update_telomerase_gate(_snapshot_topology_mode)
 		_update_cofactor_byproducts_gate(_snapshot_cofactor)
-	# At startup there's no prior simulation state to cancel back to — Cancel
-	# quits instead of reverting. Reused label per this project's stable-key
-	# translation convention rather than a whole separate button.
-	cancel_button.text = "UI_QUIT_BUTTON" if is_startup else "UI_CANCEL_BUTTON"
+	# At startup there's no prior simulation state to cancel back to, and
+	# nothing loaded yet for Cancel to close down to — same reasoning as
+	# SequenceLoaderPopup's own is_startup param, hide it entirely rather
+	# than repurpose it.
+	cancel_button.visible = not is_startup
 	visible = true
 
 func hide_dialog() -> void:
@@ -178,9 +173,6 @@ func _on_continue_pressed() -> void:
 	hide_dialog()
 
 func _on_cancel_pressed() -> void:
-	if _is_startup_mode:
-		get_tree().quit()
-		return
 	# Revert any live-applied changes from this dialog session back to the
 	# snapshot taken in show_dialog() — order matters: primase/ligase first,
 	# pol1 last, so a snapshot with pol1_enabled == true (which implies both

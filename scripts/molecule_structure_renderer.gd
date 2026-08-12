@@ -53,6 +53,29 @@ var _bond_layout: Array[Dictionary] = []
 ## {anchor_a: Vector2, anchor_b: Vector2, count: int, color: Color} — one
 ## entry per rendered base pair, drawn as `count` parallel dashed lines.
 var _h_bond_layout: Array[Dictionary] = []
+## {c5: Vector2, c3: Vector2} — one entry per rendered residue, the two
+## world-space endpoints of that residue's OWN intra-residue C5'->C3'
+## segment. Provisional/debug (see theme_manager.gd's
+## molecular_debug_capsule_* fields — MolecularIdentityHierarchy_Design.md's
+## "directional highlight" investigation, this specific per-residue capsule
+## shape supersedes that doc's continuous inter-residue ribbon resolution,
+## decided in discussion). Populated unconditionally alongside
+## _bond_layout/_atom_layout every rebuild (same convention as those two —
+## tier-gating happens at _draw() time, not here), drawn only when
+## tm.molecular_debug_capsule_enabled and _label_full_geometry_active.
+var _capsule_layout: Array[Dictionary] = []
+
+## Last rebuild's o3_by_key/alpha_by_key (see _build_backbone_bonds()) —
+## cached across the frame boundary so replication_manager.gd can query the
+## atom-tier position of a specific lagging-strand fragment gap (for the
+## ligase atom-tier position swap) without _build_backbone_bonds() itself
+## needing to know ligase exists. Cleared alongside the other per-frame
+## layout arrays whenever _rebuild_layout() early-returns
+## (_transition_fraction <= 0.0) — stale positions are worse than no
+## positions, so has_lagging_gap_atom_position() must go false then, never
+## keep returning last-bead-mode data.
+var _last_o3_by_key: Dictionary = {}
+var _last_alpha_by_key: Dictionary = {}
 
 ## {world_pos: Vector2, radius: float, key: String} — one entry per
 ## residue currently rendered via RiboseDeriver.reflect_about_backbone_axis()
@@ -75,6 +98,18 @@ var _hovered_mirrored_key: String = ""
 ## unconditionally every frame regardless of this, per the render-mode
 ## transition decision (Open Question 10): no first-crossing hitch.
 var _active: bool = false
+## Continuous 0..1 position within the SAME molecular_zoom_enter/exit_
+## threshold band _compute_active() hystereses over — 0 at or below
+## molecular_zoom_exit_threshold, 1 at or above molecular_zoom_enter_
+## threshold, ramping linearly between. Unlike _active, this is a pure
+## function of the live zoom scalar with no stored prior-state comparison,
+## so it needs no hysteresis of its own — a continuous ramp has nothing to
+## flicker. Drives the bead<->molecular crossfade (Open Question 10's
+## deferred transition treatment): both tiers draw concurrently anywhere
+## inside the band, alpha-blended by this value. _active is left
+## completely alone for its own existing consumers (is_molecular_mode_
+## active()'s external callers) — this is an ADDITION, not a replacement.
+var _transition_fraction: float = 0.0
 ## Second-tier hysteresis nested inside skeletal mode (Part 1,
 ## docs/atomtier/AtomTier_VisualDesign.md): true = closer band, full
 ## geometry labels (C3', Pα, ...); false = wider band, element-only
@@ -94,7 +129,7 @@ var _active_slots: Dictionary = {}
 
 ## Superset of _active_slots — also includes, for every active residue, its
 ## one immediate OUTWARD same-strand neighbor (the slot on the far side from
-## cluster_center_x). Backs is_slot_bead_suppressed(), polled by the same
+## cluster_center_x). Backs get_bead_fade_amount(), polled by the same
 ## callers as is_slot_active() but specifically for bead-GLYPH occlusion.
 ##
 ## Why this exists (screenshot bug, 2026-08-07): _molecular_render_pos()'s
@@ -119,23 +154,6 @@ var _active_slots: Dictionary = {}
 ## incompatible, rather than reworking the invariant-proven push math and
 ## risking the ring-collision behavior it was built to prevent.
 var _bead_suppressed_slots: Dictionary = {}
-
-## TEMPORARY diagnostic (docs/MolecularStructure_BasePairExpansion.md, Bug
-## D follow-up) — press F9 while the scene is running (before or during
-## play) to write a full geometry dump for template/leading/lagging, tied
-## to real sequence position, bypassing culling, to
-## user://geometry_dump.txt. A raw keypress, not a self-resetting @export
-## bool toggled from the Remote/Inspector tab — the first version of this
-## used the latter and crashed the debugger connection (remote_debugger_
-## peer.cpp "Packet too large" / decode errors): the editor's live property
-## sync can re-push a toggled-true value back down before a script's own
-## one-shot reset lands, firing the dump every frame instead of once,
-## flooding the SAME connection print() also uses. A keypress has no such
-## feedback path, and writing to a file instead of print() keeps any output
-## volume off the debugger transport entirely regardless. Remove once its
-## diagnostic purpose is served, same convention as the earlier removed
-## _report_if_bond_too_long().
-var _debug_dump_key_was_down: bool = false
 
 ## Fold results are cacheable per (slot, strand) — this milestone has
 ## exactly one operator per residue, so the cache key is effectively "has
@@ -345,7 +363,17 @@ const ATOM_DISPLAY_LABELS: Dictionary = {
 	# without primes since they never collide with ring-atom suffixes)
 	"n1": "N1", "c2": "C2", "n3": "N3", "c4": "C4", "c5": "C5", "c6": "C6",
 	"n7": "N7", "c8": "C8", "n9": "N9",
-	"n6": "N6", "o6": "O6", "n2": "N2", "o2": "O2", "o4": "O4", "c5_methyl": "C5-Me",
+	# c5_methyl displays as "C7" — 2007 PDB remediation nomenclature for
+	# thymine's methyl carbon (supersedes the older "C5M"/"C5-Me" naming),
+	# and short enough to fit inside the atom circle at the full-label tier
+	# where "C5-Me" overflowed it. Internal role key stays c5_methyl
+	# (nitrogen_base_deriver.gd, molecule_geometry_diagnostics.gd) — display
+	# text only.
+	"n6": "N6", "o6": "O6", "n2": "N2", "o2": "O2", "o4": "O4", "c5_methyl": "C7",
+	# n4 was missing entirely (fell back to bare element "N") — cytosine's
+	# exocyclic amino group, built at nitrogen_base_deriver.gd's
+	# build_cytosine_seed_into() (role_prefix + "n4").
+	"n4": "N4",
 }
 
 func _atom_display_label(role: String, element: String, full_geometry: bool) -> String:
@@ -353,6 +381,21 @@ func _atom_display_label(role: String, element: String, full_geometry: bool) -> 
 		return element
 	var suffix: String = _role_suffix(role)
 	return ATOM_DISPLAY_LABELS.get(suffix, element)
+
+## Provisional/debug — see theme_manager.gd's molecular_debug_label_filter_*
+## fields (trailer-capture tool, not a committed feature). Reports whether
+## THIS atom matches the filter rule — the caller decides what to do with
+## that (currently: gate which atoms keep a full label once already at the
+## full-label zoom tier; see the _atom_layout.append() call site). Pure
+## function of tm's current export state + this atom's own identity, no new
+## frame-to-frame state, so it stays scrub-safe by construction.
+func _debug_label_filter_matches_atom(role: String, element: String, base_type: String) -> bool:
+	if not tm.molecular_debug_label_filter_enabled:
+		return false
+	if base_type in tm.molecular_debug_label_filter_bases:
+		return true
+	var full_label: String = _atom_display_label(role, element, true)
+	return full_label in tm.molecular_debug_label_filter_atom_names
 
 ## Shared by _atom_display_label() above and _bond_is_carbonyl() below —
 ## topology.atoms' role strings are always "incoming.<suffix>" or
@@ -419,24 +462,32 @@ func is_slot_active(strand: String, slot: int) -> bool:
 ## Stays on is_slot_active() instead: the backbone Line2D nodes
 ## (leading_backbone_line, lagging_backbone_line, top/bottom template
 ## backbone lines) — those are suppressed whole-strand via
-## is_strand_active() (Line2D has no per-point alpha), so they were never
-## subject to this per-residue boundary artifact in the first place.
-func is_slot_bead_suppressed(strand: String, slot: int) -> bool:
-	return _active and _bead_suppressed_slots.has("%s:%d" % [strand, slot])
+## get_strand_fade_amount() (Line2D has no per-point alpha), so they were
+## never subject to this per-residue boundary artifact in the first place.
+##
+## Continuous replacement for the old is_slot_bead_suppressed() bool
+## (bead<->molecular crossfade, Open Question 10) — same membership test as
+## before, 0.0 = fully bead-glyph, up to _transition_fraction = fully
+## molecular-occluded. No longer gated on _active (which flips later/
+## earlier than the band's own edges — see _transition_fraction's doc
+## comment); nonzero as soon as the crossfade band is entered in either
+## direction.
+func get_bead_fade_amount(strand: String, slot: int) -> float:
+	return _transition_fraction if _bead_suppressed_slots.has("%s:%d" % [strand, slot]) else 0.0
 
-## Whole-strand version of is_slot_active() — true if ANY slot of this
-## strand is currently skeletal-active. Used for Line2D backbone
-## suppression, which has no per-point alpha, so per-slot granularity
-## isn't available there; at the deep zoom skeletal mode requires, this is
+## Continuous replacement for the old is_strand_active() bool. Whole-strand
+## version of get_bead_fade_amount() — true if ANY slot of this strand is
+## currently skeletal-active, for Line2D backbone suppression (no per-point
+## alpha available there); at the deep zoom skeletal mode requires, this is
 ## visually equivalent to per-slot suppression since the rest of the line
 ## is off-screen regardless.
-func is_strand_active(strand: String) -> bool:
-	if not _active:
-		return false
+func get_strand_fade_amount(strand: String) -> float:
+	if _transition_fraction <= 0.0:
+		return 0.0
 	for key in _active_slots.keys():
 		if key.begins_with(strand + ":"):
-			return true
-	return false
+			return _transition_fraction
+	return 0.0
 
 ## Public accessor for _active — simulation.gd polls this to auto-block
 ## nucleotide_field.gd's ambient dNTP cloud while atom-tier skeletal
@@ -452,14 +503,10 @@ func _process(_delta: float) -> void:
 		return
 	_active = _compute_active()
 	_label_full_geometry_active = _compute_label_full_geometry_active()
+	_transition_fraction = _compute_transition_fraction()
 	_rebuild_layout()
 	_hovered_mirrored_key = _compute_hovered_mirrored_key()
 	queue_redraw()
-
-	var key_down: bool = Input.is_key_pressed(KEY_F9)
-	if key_down and not _debug_dump_key_was_down:
-		MoleculeGeometryDiagnostics.dump(self, replication_mgr, template_sim, _fold_cache, _operators)
-	_debug_dump_key_was_down = key_down
 
 
 ## Hysteresis: enter threshold (higher) crossed going up activates; exit
@@ -474,6 +521,88 @@ func _compute_active() -> bool:
 	if _active:
 		return z >= tm.molecular_zoom_exit_threshold
 	return z >= tm.molecular_zoom_enter_threshold
+
+
+## Pure function of the live zoom scalar, no hysteresis (see _transition_
+## fraction's own doc comment for why none is needed here). Reuses the SAME
+## molecular_zoom_enter/exit_threshold pair _compute_active() hystereses
+## over, per the render-mode transition decision (Open Question 10): never
+## a separate transition-specific tunable.
+func _compute_transition_fraction() -> float:
+	if not zoom_mgr.free_camera_mode():
+		return 0.0
+	var z: float = zoom_mgr.zoom.x
+	var band: float = tm.molecular_zoom_enter_threshold - tm.molecular_zoom_exit_threshold
+	if band <= 0.0:
+		return 1.0 if z >= tm.molecular_zoom_enter_threshold else 0.0
+	return clamp((z - tm.molecular_zoom_exit_threshold) / band, 0.0, 1.0)
+
+
+## Public accessor for _transition_fraction — how far into the bead<->
+## molecular crossfade band the live zoom scalar currently sits. 0.0 =
+## fully bead-glyph, 1.0 = fully molecular. Polled by replication_manager.gd/
+## simulation.gd to alpha-blend both tiers concurrently.
+func get_transition_fraction() -> float:
+	return _transition_fraction
+
+
+## Generic O3'/alpha-phosphate atom position accessors, keyed by strand+slot
+## — single source of truth for "where is this residue's backbone atom
+## right now," backing get_lagging_gap_atom_position() below and the
+## leading/lagging polymerase atom-tier position swap alike, so multiple
+## callers can't silently derive different answers to the same underlying
+## question. _last_o3_by_key/_last_alpha_by_key are strand-generic already
+## (_build_backbone_bonds() populates all four strands into them), so no
+## rebuild-side change was needed to support strands other than "lagging."
+func has_slot_o3_position(strand: String, slot: int) -> bool:
+	return _last_o3_by_key.has("%s:%d" % [strand, slot])
+
+func get_slot_o3_position(strand: String, slot: int) -> Vector2:
+	return _last_o3_by_key.get("%s:%d" % [strand, slot], Vector2.ZERO)
+
+func has_slot_alpha_position(strand: String, slot: int) -> bool:
+	return _last_alpha_by_key.has("%s:%d" % [strand, slot])
+
+func get_slot_alpha_position(strand: String, slot: int) -> Vector2:
+	return _last_alpha_by_key.get("%s:%d" % [strand, slot], Vector2.ZERO)
+
+## Atom-tier equivalent of _ligase_gap_bead_position()'s bead-space gap
+## target: the midpoint between lagging slot `slot`'s O3' (a completed-but-
+## unsealed fragment's last slot) and slot+1's alpha-phosphate (the next
+## fragment's, or lagging_current_fragment's, first slot) — the exact two
+## positions _build_backbone_bonds() omits a bond between while unsealed.
+## Only meaningful when has_lagging_gap_atom_position(slot) is true; callers
+## MUST check that first — this returns Vector2.ZERO otherwise, a
+## documented non-answer, never a real position.
+func get_lagging_gap_atom_position(slot: int) -> Vector2:
+	if has_slot_o3_position("lagging", slot) and has_slot_alpha_position("lagging", slot + 1):
+		return (get_slot_o3_position("lagging", slot) + get_slot_alpha_position("lagging", slot + 1)) / 2.0
+	return Vector2.ZERO
+
+## True if get_lagging_gap_atom_position(slot) has a real answer THIS
+## rebuild — both slot's O3' and slot+1's alpha-phosphate were folded and
+## on-screen (inside cull_rect) this frame. False whenever either residue is
+## off-screen (atom zoom's narrow cull window has scrolled the gap out of
+## view) or the crossfade band isn't even entered
+## (_transition_fraction <= 0.0). Caller (replication_manager.gd) must treat
+## false as "atom-tier position unavailable this frame" and fall back to a
+## freshly recomputed bead-tier position — never trust a stale
+## ligase.position left over from a previous frame's tier. Also correctly
+## false for slot = -1 (the very first Okazaki fragment's own seal, no
+## real predecessor slot) with no special-casing needed — "lagging:-1" is
+## never a real key.
+func has_lagging_gap_atom_position(slot: int) -> bool:
+	return has_slot_o3_position("lagging", slot) and has_slot_alpha_position("lagging", slot + 1)
+
+
+## Desaturation-dip amount for the bead-glyph tier, peaking at the exact
+## midpoint of the transition band (parabola, not a triangle, so the dip
+## fades in/out with a continuous slope rather than a visible kink at the
+## midpoint). Scaled by the ThemeManager-tunable peak magnitude so the
+## bead's base-letter color coding is dipped, never fully erased.
+func get_transition_desaturation_amount() -> float:
+	var shape: float = 4.0 * _transition_fraction * (1.0 - _transition_fraction)
+	return shape * tm.molecular_bead_desaturation_peak_amount
 
 
 ## Nested inside skeletal mode: only meaningful while _active is true.
@@ -516,19 +645,27 @@ func _rebuild_layout() -> void:
 	# smaller z -> bigger world_size), so ordinary bead-glyph play at
 	# normal zoom — nowhere near molecular mode — paid the full cost for
 	# every residue on screen, scaling directly with how much of the
-	# strand was visible. Safe to skip entirely while inactive: _draw()
-	# already independently guards on _active before reading
-	# _atom_layout/_bond_layout/_h_bond_layout, and is_slot_active()/
-	# is_strand_active() already short-circuit on `not _active` before
-	# ever consulting _active_slots — nothing downstream depends on these
-	# being freshly rebuilt while inactive.
+	# strand was visible. Safe to skip entirely below the crossfade band:
+	# _draw() guards on the same _transition_fraction condition before
+	# reading _atom_layout/_bond_layout/_h_bond_layout, and get_bead_fade_
+	# amount()/get_strand_fade_amount() short-circuit before ever
+	# consulting _active_slots — nothing downstream depends on these being
+	# freshly rebuilt while fully bead-glyph. Gate widened from `not
+	# _active` to `_transition_fraction <= 0.0` (bead<->molecular
+	# crossfade, Open Question 10): layout must exist throughout the WHOLE
+	# band in both scroll directions, not just once _active's own,
+	# later-flipping hysteresis has fully committed — otherwise there'd be
+	# nothing to fade in from partway through a zoom-in gesture.
 	_atom_layout.clear()
 	_bond_layout.clear()
 	_h_bond_layout.clear()
+	_capsule_layout.clear()
 	_active_slots.clear()
 	_bead_suppressed_slots.clear()
 	_mirrored_residue_layout.clear()
-	if not _active:
+	_last_o3_by_key.clear()
+	_last_alpha_by_key.clear()
+	if _transition_fraction <= 0.0:
 		return
 
 	var bond_length: float = tm.molecular_ring_bond_length_ratio * _slot_spacing()
@@ -761,12 +898,33 @@ func _rebuild_layout() -> void:
 			var local_offset: Vector2 = local_positions[atom.id] - anchor_offset
 			residue_max_extent = max(residue_max_extent, local_offset.length())
 			var world: Vector2 = world_pos + local_offset
+			# Filter is inert below the full-label tier — it's a SUPPRESS-non-
+			# matches tool, not a promote-early one: below the tier, rendering
+			# must stay byte-identical to pre-filter behavior. Only once
+			# _label_full_geometry_active is already true does an enabled
+			# filter narrow "everyone full" down to "only matches full."
+			var full_for_this_atom: bool = _label_full_geometry_active
+			if _label_full_geometry_active and tm.molecular_debug_label_filter_enabled:
+				full_for_this_atom = _debug_label_filter_matches_atom(atom.role, atom.element, entry.base_type)
 			_atom_layout.append({
 				position = world,
 				element = atom.element,
-				label = _atom_display_label(atom.role, atom.element, _label_full_geometry_active),
+				label = _atom_display_label(atom.role, atom.element, full_for_this_atom),
 				atom_id = atom.id,
 				nucleotide_slot = entry.slot,
+			})
+
+		# Provisional/debug — intra-residue C5'->C3' capsule (see
+		# _capsule_layout's own comment above). Both atoms belong to THIS
+		# residue's own topology (unlike O3'/alpha-phosphate below, which
+		# link neighbor residues) — no cross-residue *_by_key dict needed,
+		# same in-loop pattern as _atom_layout/_bond_layout above.
+		var c5_id: int = topology.find_by_role("incoming.c5_prime")
+		var c3_id: int = topology.find_by_role("incoming.c3_prime")
+		if local_positions.has(c5_id) and local_positions.has(c3_id):
+			_capsule_layout.append({
+				c5 = world_pos + (local_positions[c5_id] - anchor_offset),
+				c3 = world_pos + (local_positions[c3_id] - anchor_offset),
 			})
 
 		# STAGE 1: bypassed alongside the mirror call above -- nothing is
@@ -823,6 +981,8 @@ func _rebuild_layout() -> void:
 		_bead_suppressed_slots["%s:%d" % [strand, outward_slot]] = true
 
 	_build_backbone_bonds(o3_by_key, alpha_by_key)
+	_last_o3_by_key = o3_by_key
+	_last_alpha_by_key = alpha_by_key
 	_build_hydrogen_bonds(base_bond_atoms_by_key, base_type_by_key)
 
 
@@ -871,6 +1031,16 @@ func _build_backbone_bonds(o3_by_key: Dictionary, alpha_by_key: Dictionary) -> v
 			var next_key: String = "%s:%d" % [strand, slot + 1]
 			if sign >= 0.0:
 				if alpha_by_key.has(next_key):
+					# Real, sealable Okazaki-fragment nick (helicase+Pol III+
+					# ligase complexity) — template_top shares this sign>=0.0
+					# branch with lagging (STRAND_DIRECTION_SIGN above), so the
+					# gate is on strand == "lagging" specifically, not on which
+					# branch got taken. replication_mgr.is_lagging_bond_sealed()
+					# reads lagging_fragments live every call, so a mid-session
+					# seal (camera parked at atom zoom) shows up on the very
+					# next rebuild with no zoom change needed.
+					if strand == "lagging" and replication_mgr != null and not replication_mgr.is_lagging_bond_sealed(slot):
+						continue
 					var from_pos: Vector2 = o3_by_key[key]
 					var to_pos: Vector2 = alpha_by_key[next_key]
 					_bond_layout.append({points = _build_bond_points(strand, from_pos, to_pos, mode_switch_threshold), is_backbone = true, order = 1, always_double = false})
@@ -1092,9 +1262,76 @@ func _draw_dotted_line(a: Vector2, b: Vector2, color: Color, radius: float, gap:
 		t += step
 
 
-func _draw() -> void:
-	if not _active:
+## Draws a small filled triangle centered (by arc length) on `points`,
+## pointing from the polyline's start toward its end — the caller is
+## responsible for `points` already being ordered in the direction the
+## arrow should point. Works for both the straight-chord (2-point) and
+## curve-following (Option C, multi-point) backbone polyline shapes, since
+## it walks arc length rather than assuming a fixed point count.
+func _draw_backbone_arrowhead(points: Array, color: Color) -> void:
+	if points.size() < 2:
 		return
+	var seg_lengths: Array = []
+	var total_length: float = 0.0
+	for i in range(points.size() - 1):
+		var seg_len: float = (points[i + 1] - points[i]).length()
+		seg_lengths.append(seg_len)
+		total_length += seg_len
+	if total_length <= 0.0:
+		return
+	var target: float = total_length * 0.5
+	var accumulated: float = 0.0
+	var mid_pos: Vector2 = points[0]
+	var mid_dir: Vector2 = Vector2.RIGHT
+	for i in range(seg_lengths.size()):
+		var seg_len: float = seg_lengths[i]
+		if seg_len <= 0.0:
+			continue
+		if accumulated + seg_len >= target or i == seg_lengths.size() - 1:
+			var local_t: float = clamp((target - accumulated) / seg_len, 0.0, 1.0)
+			mid_pos = points[i].lerp(points[i + 1], local_t)
+			mid_dir = (points[i + 1] - points[i]) / seg_len
+			break
+		accumulated += seg_len
+	var perp: Vector2 = mid_dir.rotated(PI / 2.0)
+	var arrow_len: float = tm.molecular_backbone_arrow_length
+	var arrow_half_w: float = tm.molecular_backbone_arrow_half_width
+	var tip: Vector2 = mid_pos + mid_dir * (arrow_len * 0.5)
+	var base_center: Vector2 = mid_pos - mid_dir * (arrow_len * 0.5)
+	var base_a: Vector2 = base_center + perp * arrow_half_w
+	var base_b: Vector2 = base_center - perp * arrow_half_w
+	draw_polygon(PackedVector2Array([tip, base_a, base_b]), PackedColorArray([color]))
+
+
+## Provisional/debug — see _capsule_layout's own comment. Border-only
+## (never filled) padded capsule around the c5->c3 segment — geometry comes
+## from ProceduralShapeUtils.capsule_outline() (added there specifically
+## for this mockup; NOT round_corners(), which rounds a pre-built polygon's
+## sharp vertices via a sampled bezier pullback rather than synthesizing a
+## true semicircular cap from two bare endpoints + a radius). draw_polyline
+## draws the closed loop as a stroke only — never filled. `padding` is the
+## gap between the ATOM's own edge and the capsule border, not the capsule
+## radius itself — the actual cap radius has to include the atom's own
+## radius on top, or the cap lands inside the atom instead of around it
+## (caught live: an earlier version passed padding alone as the radius).
+func _draw_c5_c3_capsule(c5: Vector2, c3: Vector2, padding: float, width: float, color: Color) -> void:
+	var radius: float = tm.molecular_atom_radius + padding
+	var outline: PackedVector2Array = ProceduralShapeUtils.capsule_outline(c5, c3, radius, 12)
+	# antialiased=false, matching every other line in this renderer
+	# (backbone/ring bonds, the arrowhead) — true here read visibly softer
+	# than the rest of the scene's crisp lines.
+	draw_polyline(outline, color, width, false)
+
+
+func _draw() -> void:
+	if _transition_fraction <= 0.0:
+		return
+	# Bead<->molecular crossfade (Open Question 10): every color drawn below
+	# gets its alpha scaled by this same live fraction, so the whole
+	# skeletal tier fades in/out in lockstep with the bead-glyph tier's own
+	# fade (get_bead_fade_amount()/get_strand_fade_amount()) rather than
+	# either tier popping in first.
+	var t: float = _transition_fraction
 
 	# Bonds: ProceduralShapeUtils.inset_segment() shortens the bond's TRUE
 	# endpoints (the first/last points — real atom centres) to run
@@ -1113,6 +1350,7 @@ func _draw() -> void:
 		if points.size() < 2:
 			continue
 		var bond_color: Color = tm.molecular_backbone_bond_color if b.is_backbone else tm.molecular_bond_color
+		bond_color.a *= t
 		var bond_width: float = tm.molecular_backbone_bond_width if b.is_backbone else tm.molecular_bond_width
 		# Double-bond parallel trace (bond-thickness design pass): only ever
 		# order==2 intra-residue bonds (carbonyl/aromatic/phosphate P=O) —
@@ -1155,6 +1393,29 @@ func _draw() -> void:
 			for p in drawn_points:
 				draw_circle(p, bond_half_width, bond_color, true, -1.0, false)
 
+		# 5'->3' direction arrowhead, full-label zoom tier only (design
+		# decision doc: directional arrows on phosphodiester bonds). `points`
+		# is already ordered O3'-end (more-5' residue) -> alpha-phosphate-end
+		# (more-3' residue) — see _build_backbone_bonds()'s own doc comment
+		# and molecular_backbone_bond_color's "5'->3' thread" comment above
+		# — so pointing toward the LAST point is the correct 5'->3' direction,
+		# not the first (O3') one.
+		if b.is_backbone and _label_full_geometry_active:
+			var arrow_color: Color = tm.molecular_backbone_arrow_color
+			arrow_color.a *= t
+			_draw_backbone_arrowhead(points, arrow_color)
+
+	# Provisional/debug — intra-residue C5'->C3' capsule mockup (see
+	# _capsule_layout's own comment). Same inert-below-full-label-tier
+	# convention as the label filter: both conditions gate the DRAW here,
+	# not the layout build above, matching this file's existing pattern for
+	# _bond_layout/_atom_layout (build unconditionally, gate at draw time).
+	if tm.molecular_debug_capsule_enabled and _label_full_geometry_active:
+		var capsule_color: Color = tm.molecular_debug_capsule_border_color
+		capsule_color.a *= t
+		for c in _capsule_layout:
+			_draw_c5_c3_capsule(c.c5, c.c3, tm.molecular_debug_capsule_padding, tm.molecular_debug_capsule_border_width, capsule_color)
+
 	# Hydrogen bonds: one dotted line per REAL atom pair
 	# (docs/MolecularStructure_BasePairExpansion.md — supersedes the old
 	# parallel-offset-from-one-anchor approximation). Each segment already
@@ -1162,8 +1423,10 @@ func _draw() -> void:
 	# _build_hydrogen_bonds()) — no perp/offset math, no dash spacing of
 	# any kind involved here anymore.
 	for h in _h_bond_layout:
+		var h_color: Color = h.color
+		h_color.a *= t
 		for seg in h.segments:
-			_draw_dotted_line(seg.a, seg.b, h.color, tm.molecular_h_bond_dot_radius, tm.molecular_h_bond_dot_gap)
+			_draw_dotted_line(seg.a, seg.b, h_color, tm.molecular_h_bond_dot_radius, tm.molecular_h_bond_dot_gap)
 
 	# Atoms: element-colored circle + counter-rotated label, mirroring
 	# nucleotide_field.gd's exact per-glyph transform pattern (cache the
@@ -1171,7 +1434,9 @@ func _draw() -> void:
 	# MANDATORY draw_set_transform reset after each label, since the loop
 	# continues and the next atom's draw_circle() uses absolute coords.
 	var label_rotation: float = zoom_mgr.get_label_counter_rotation() if zoom_mgr != null else 0.0
-	var font: Font = tm.base_label_font if tm.base_label_font != null else ThemeDB.fallback_font
+	var font: Font = tm.molecular_atom_label_font
+	if font == null:
+		font = tm.base_label_font if tm.base_label_font != null else ThemeDB.fallback_font
 	# Dedicated fields, NOT tm.base_label_font_size — that value is
 	# proportioned for the bead-glyph mode's base_radius (15 world units);
 	# reused directly against molecular_atom_radius (6.0) it was ~2.5x too
@@ -1180,14 +1445,18 @@ func _draw() -> void:
 	# full-geometry size and the wider band's element-only size (Part 1,
 	# docs/atomtier/AtomTier_VisualDesign.md), per _label_full_geometry_active.
 	var font_size: int = tm.molecular_atom_label_font_size if _label_full_geometry_active else tm.molecular_atom_label_font_size_element_only
+	var atom_label_color: Color = tm.base_label_color
+	atom_label_color.a *= t
 	for a in _atom_layout:
-		draw_circle(a.position, tm.molecular_atom_radius, _element_color(a.element), true, -1.0, false)
+		var atom_color: Color = _element_color(a.element)
+		atom_color.a *= t
+		draw_circle(a.position, tm.molecular_atom_radius, atom_color, true, -1.0, false)
 		if font != null:
 			var ssize: Vector2 = font.get_string_size(a.label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 			var ascent: float = font.get_ascent(font_size)
 			var draw_pos: Vector2 = Vector2(-ssize.x / 2.0, ascent - ssize.y / 2.0)
 			draw_set_transform(a.position, label_rotation, Vector2.ONE)
-			draw_string(font, draw_pos, a.label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, tm.base_label_color)
+			draw_string(font, draw_pos, a.label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, atom_label_color)
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	# Fork-flip hover disclaimer (docs/superpowers/specs/
@@ -1213,7 +1482,7 @@ func _draw() -> void:
 			var box_pos: Vector2 = tooltip_offset - padding
 			var box_size: Vector2 = text_size + padding * 2.0
 			draw_set_transform(hovered_world_pos, label_rotation, Vector2.ONE)
-			draw_rect(Rect2(box_pos, box_size), Color(0.0, 0.0, 0.0, 0.75), true)
+			draw_rect(Rect2(box_pos, box_size), Color(0.0, 0.0, 0.0, 0.75 * t), true)
 			var text_pos: Vector2 = tooltip_offset + Vector2(0.0, tooltip_font.get_ascent(tooltip_font_size))
-			draw_string(tooltip_font, text_pos, MIRRORED_RESIDUE_TOOLTIP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, tooltip_font_size, tm.base_label_color)
+			draw_string(tooltip_font, text_pos, MIRRORED_RESIDUE_TOOLTIP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, tooltip_font_size, atom_label_color)
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

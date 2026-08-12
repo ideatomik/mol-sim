@@ -9,12 +9,15 @@ class_name EnzymeLabel
 # touching the enzyme scripts that spawn it.
 #
 # TRANSLATION: set_key() takes the raw translation KEY (e.g.
-# "ENZYME_HELICASE"), never a display string. RichTextLabel.text auto-
-# translates through Godot's built-in Control mechanism, and every Control
-# re-applies its translation automatically on TranslationServer.set_locale()
-# — so live language switching costs nothing extra here. refresh_translation()
-# is kept as a manual escape hatch in case empirical testing (once
-# LocaleManager exists) shows a gap in that auto-refresh for this node type.
+# "ENZYME_HELICASE"), never a display string. Display text is always forced
+# BOLD + ALL CAPS ([b]...[/b] wrapping the upper-cased translation), which
+# means the KEY itself can no longer be handed to RichTextLabel.text and left
+# for Godot's implicit Control auto-translation to resolve — a BBCode-wrapped,
+# upper-cased string doesn't match any translation key. So translation is done
+# manually via atr() in _apply_text(), and _ready() connects to
+# LocaleManager.locale_changed (same pattern as player_ui.gd/
+# sequence_loader_popup.gd) to re-run it on locale change, replacing the free
+# auto-refresh the implicit mechanism used to provide.
 #
 # CENTERING: pivot_offset is kept at size * 0.5, and position is derived from
 # set_anchor_pos()'s point minus that pivot — so the label's own CENTER, not
@@ -53,6 +56,9 @@ func _ready() -> void:
 	_rich_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	resized.connect(_on_resized)
 	_recenter()
+	var locale_mgr = get_node_or_null("%LocaleManager")
+	if locale_mgr:
+		locale_mgr.locale_changed.connect(func(_new_locale): refresh_translation())
 
 # get_node() walks the local subtree that instantiate() already built, so this
 # works immediately after instantiation — unlike @onready, which waits for
@@ -68,22 +74,23 @@ func _ensure_rich_text() -> void:
 
 ## Sets the raw translation key. Never pass a display string directly.
 func set_key(key: String) -> void:
-	_ensure_rich_text()
 	_key = key
-	_rich_text.text = key
+	_apply_text()
+
+## Re-translates and re-applies the current key — called on locale change
+## (see _ready()'s LocaleManager.locale_changed connection).
+func refresh_translation() -> void:
+	_apply_text()
+
+## Translates _key, then forces BOLD + ALL CAPS for every enzyme label.
+func _apply_text() -> void:
+	_ensure_rich_text()
+	_rich_text.text = "[b]%s[/b]" % atr(_key).to_upper()
 	# Forces an immediate recompute of this panel's size from RichTextLabel's
 	# (now-updated) minimum size — see the CENTERING doc comment above for
 	# why this can't be left to the resized signal alone when the new text
 	# is SHORTER than the old.
 	reset_size()
-	_recenter()
-
-## Manual re-translate, in case a future locale-change path needs it.
-func refresh_translation() -> void:
-	_ensure_rich_text()
-	_rich_text.text = _key
-	reset_size()  # same shrink case as set_key() — a locale switch can go
-	              # to a shorter word just as easily as a topology switch can.
 	_recenter()
 
 ## anchor_pos is in the PARENT's local space — the point the label's own
@@ -121,19 +128,15 @@ func set_counter_rotation(radians: float) -> void:
 func _apply_rotation() -> void:
 	rotation = -_counter_rotation if _mirror else _counter_rotation
 
-func set_style(font: Font, font_size: int, text_color: Color, panel_bg_color: Color) -> void:
+## Panel background/margins are NOT touched here — the scene's own
+## theme_override_styles/panel on the root PanelContainer is left to win,
+## so editor-authored panel styling always shows up as-is at runtime.
+func set_style(font: Font, font_size: int, text_color: Color) -> void:
 	_ensure_rich_text()
 	if font:
 		_rich_text.add_theme_font_override("normal_font", font)
 	_rich_text.add_theme_font_size_override("normal_font_size", font_size)
 	_rich_text.add_theme_color_override("default_color", text_color)
-	var style := StyleBoxFlat.new()
-	style.bg_color = panel_bg_color
-	style.content_margin_left = 6.0
-	style.content_margin_right = 6.0
-	style.content_margin_top = 2.0
-	style.content_margin_bottom = 2.0
-	add_theme_stylebox_override("panel", style)
 	_recenter()
 
 func _on_resized() -> void:

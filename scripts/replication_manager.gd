@@ -158,6 +158,18 @@ var ligase_cofactor: LigaseCofactor = null
 var _ligase_tween: Tween = null
 enum LigaseState { IDLE, TRAVELING, HOLDING, SEALING }
 var _ligase_state: int = LigaseState.IDLE
+## The lagging slot just BEFORE the fragment ligase is currently
+## traveling to / holding at / sealing — i.e. next_frag.slots[0] - 1, the
+## exact boundary is_lagging_bond_sealed()/get_lagging_gap_atom_position()
+## key off. -2 whenever ligase isn't parked at any specific gap (IDLE,
+## offstage) — a DISTINCT sentinel from the real, valid value -1 (the very
+## first Okazaki fragment's own seal, which has no predecessor slot but is
+## still a real gap _ligase_apply_atom_tier_position_swap() must handle,
+## not skip). Cleared to -2 in _ligase_finish_seal() and
+## _ligase_reset_visual() so a scrub or a completed seal can never leave a
+## stale slot index behind for _ligase_apply_atom_tier_position_swap() to
+## read.
+var _ligase_active_gap_slot: int = -2
 
 # ---------- PRIMASE (Light tier — OkazakiMaturationDesign.md) ----------
 # Transient blip only — no queue, no persisted RNA state, no travel. Fires
@@ -531,6 +543,10 @@ func render(delta: float, ctx: Dictionary) -> void:
 	#           nucleotide_bases, top_strand_slots
 	_leading_render(ctx)
 	_lagging_render(ctx)
+	_leading_apply_atom_tier_position_swap(ctx)
+	_lagging_apply_atom_tier_position_swap()
+	_ligase_apply_atom_tier_position_swap()
+	_debug_dump_polymerase_atom_tier_state(ctx)
 	_apply_highlight()
 
 # ==========================================
@@ -805,16 +821,22 @@ func _apply_highlight() -> void:
 	# skeletally should read as fully hidden in bead mode regardless of
 	# whatever the zoom-highlight dim would otherwise have been.
 	var strand_dim = zoom_mgr.get_strand_highlight_dim()
-	var leading_strand_active: bool = molecule_renderer != null and molecule_renderer.is_strand_active("leading")
-	var lagging_strand_active: bool = molecule_renderer != null and molecule_renderer.is_strand_active("lagging")
+	# Continuous replacements (bead<->molecular crossfade, Open Question 10)
+	# for the old is_strand_active()/is_slot_bead_suppressed() bools — 0.0
+	# at t=0 and 1.0 at t=1 reproduce the exact old binary boundaries,
+	# ramping smoothly between. strand_dim * (1.0 - fade) preserves "atom-
+	# tier suppression always wins over strand_dim" exactly: fade=1.0 drives
+	# alpha to 0.0 regardless of strand_dim's own value.
+	var leading_strand_fade: float = molecule_renderer.get_strand_fade_amount("leading") if molecule_renderer != null else 0.0
+	var lagging_strand_fade: float = molecule_renderer.get_strand_fade_amount("lagging") if molecule_renderer != null else 0.0
 
-	if leading_backbone_line != null: leading_backbone_line.modulate.a = 0.0 if leading_strand_active else strand_dim
+	if leading_backbone_line != null: leading_backbone_line.modulate.a = strand_dim * (1.0 - leading_strand_fade)
 	for mark in leading_strand_bond_marks:
-		if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if leading_strand_active else strand_dim
+		if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim * (1.0 - leading_strand_fade)
 	for i in range(leading_hydrogen_bonds.size()):
 		var bond = leading_hydrogen_bonds[i]
 		if bond == null or not is_instance_valid(bond): continue
-		# ORs the partner template strand too (PARTNER_STRAND["leading"] =
+		# max()s the partner template strand too (PARTNER_STRAND["leading"] =
 		# "template_top", molecule_structure_renderer.gd:175-177) — matching
 		# simulation.gd's already-correct template_hydrogen_bonds pattern.
 		# _active_slots is populated independently per "strand:slot" from two
@@ -823,44 +845,51 @@ func _apply_highlight() -> void:
 		# disagree on atom-tier activity; checking only "leading" left the
 		# bead-level pair line fully opaque whenever the TEMPLATE half of the
 		# pair was the one actually rendered at atom scale — the reported bug.
-		var bond_molecular_active: bool = molecule_renderer != null and (molecule_renderer.is_slot_bead_suppressed("leading", i) or molecule_renderer.is_slot_bead_suppressed("template_top", i))
-		bond.modulate.a = 0.0 if bond_molecular_active else strand_dim
+		# max(), not OR-of-bools anymore: either side alone should be able to
+		# drive the fade fully, same semantics as the old OR.
+		var bond_fade: float = 0.0
+		if molecule_renderer != null:
+			bond_fade = max(molecule_renderer.get_bead_fade_amount("leading", i), molecule_renderer.get_bead_fade_amount("template_top", i))
+		bond.modulate.a = strand_dim * (1.0 - bond_fade)
 
-	if lagging_backbone_line != null: lagging_backbone_line.modulate.a = 0.0 if lagging_strand_active else strand_dim
+	if lagging_backbone_line != null: lagging_backbone_line.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 	for mark in lagging_bond_marks:
-		if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
+		if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 	for i in range(lagging_hydrogen_bonds.size()):
 		var bond = lagging_hydrogen_bonds[i]
 		if bond == null or not is_instance_valid(bond): continue
-		# ORs the partner template strand too — same fix as leading's bond
+		# max()s the partner template strand too — same fix as leading's bond
 		# above (PARTNER_STRAND["lagging"] = "template_bottom"). _is_still_primer()
 		# gating stays leading-side-only (a primer slot has no synthesized
 		# lagging base yet to occlude), but the template partner can still be
 		# atom-tier-active independently, so it's still checked unconditionally.
-		var bond_molecular_active: bool = molecule_renderer != null and ((not _is_still_primer(i) and molecule_renderer.is_slot_bead_suppressed("lagging", i)) or molecule_renderer.is_slot_bead_suppressed("template_bottom", i))
-		bond.modulate.a = 0.0 if bond_molecular_active else strand_dim
+		var bond_fade: float = 0.0
+		if molecule_renderer != null:
+			var lagging_fade: float = 0.0 if _is_still_primer(i) else molecule_renderer.get_bead_fade_amount("lagging", i)
+			bond_fade = max(lagging_fade, molecule_renderer.get_bead_fade_amount("template_bottom", i))
+		bond.modulate.a = strand_dim * (1.0 - bond_fade)
 	for frag in lagging_fragments:
 		if frag.backbone != null and is_instance_valid(frag.backbone):
-			frag.backbone.modulate.a = 0.0 if lagging_strand_active else strand_dim
+			frag.backbone.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 		# primer_backbone (RNA segment) wasn't covered by this function
 		# before the molecular-occlusion fix — adding it here rather than
 		# losing that coverage when the per-fragment writer that used to
 		# handle it (in _lagging_render_fragment_backbone()) is removed.
 		if frag.get("primer_backbone", null) != null and is_instance_valid(frag.primer_backbone):
-			frag.primer_backbone.modulate.a = 0.0 if lagging_strand_active else strand_dim
+			frag.primer_backbone.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 		for mark in frag.bond_marks:
-			if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
+			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 		for mark in frag.get("primer_bond_marks", []):
-			if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
+			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 	if lagging_current_fragment != null:
 		if lagging_current_fragment.backbone != null and is_instance_valid(lagging_current_fragment.backbone):
-			lagging_current_fragment.backbone.modulate.a = 0.0 if lagging_strand_active else strand_dim
+			lagging_current_fragment.backbone.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 		if lagging_current_fragment.get("primer_backbone", null) != null and is_instance_valid(lagging_current_fragment.primer_backbone):
-			lagging_current_fragment.primer_backbone.modulate.a = 0.0 if lagging_strand_active else strand_dim
+			lagging_current_fragment.primer_backbone.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 		for mark in lagging_current_fragment.bond_marks:
-			if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
+			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 		for mark in lagging_current_fragment.get("primer_bond_marks", []):
-			if mark != null and is_instance_valid(mark): mark.modulate.a = 0.0 if lagging_strand_active else strand_dim
+			if mark != null and is_instance_valid(mark): mark.modulate.a = strand_dim * (1.0 - lagging_strand_fade)
 
 # ==========================================
 # QUERY FUNCTIONS
@@ -1175,8 +1204,12 @@ func _leading_render(ctx: Dictionary) -> void:
 			# to also write those same properties here, racing against
 			# _apply_highlight()'s own strand_dim write later in the same
 			# render() call and losing).
-			var bead_suppressed: bool = molecule_renderer != null and molecule_renderer.is_slot_bead_suppressed("leading", i)
-			leading_synthesized_bases[i].modulate.a = 0.0 if bead_suppressed else 1.0
+			if molecule_renderer != null:
+				var bead_fade: float = molecule_renderer.get_bead_fade_amount("leading", i)
+				leading_synthesized_bases[i].modulate.a = 1.0 - bead_fade
+				leading_synthesized_bases[i].set_desaturation_amount(molecule_renderer.get_transition_desaturation_amount())
+			else:
+				leading_synthesized_bases[i].modulate.a = 1.0
 			if leading_hydrogen_bonds[i] != null:
 				var top_template_y = new_top_template_y + wobble_y
 				leading_hydrogen_bonds[i].position = Vector2(world_x, top_template_y)
@@ -1187,6 +1220,9 @@ func _leading_render(ctx: Dictionary) -> void:
 	_update_bond_marks_leading(leading_points)
 
 	# ---- Leading strand markers ----
+	# Hidden while atom-tier skeletal rendering is active — see the matching
+	# comment in simulation.gd's marker block for the full rationale.
+	var atom_tier_active: bool = molecule_renderer != null and molecule_renderer.is_molecular_mode_active()
 	if marker_leading_5p == null and leading_synthesized_bases[0] != null:
 		var wobble_first = sim.get_wobble_y(0, wobble_t)
 		var leading_y = new_top_template_y - dna_ribbons_gap + wobble_first
@@ -1201,6 +1237,7 @@ func _leading_render(ctx: Dictionary) -> void:
 			nucleotide_original_x[0] - tm.marker_offset,
 			leading_y - tm.backbone_offset_distance
 		)
+		marker_leading_5p.visible = not atom_tier_active
 	if marker_leading_3p == null and leading_synthesized_bases[0] != null:
 		var last_synth = -1
 		for i in range(leading_synthesized_bases.size()):
@@ -1223,6 +1260,73 @@ func _leading_render(ctx: Dictionary) -> void:
 				nucleotide_original_x[last_synth] + tm.marker_offset,
 				leading_y - tm.backbone_offset_distance
 			)
+		marker_leading_3p.visible = not atom_tier_active
+
+## Backward scan for the last synthesized leading slot — same shape as the
+## leading-marker code's own last_synth scan above, kept as a separate
+## small helper here (not factored together) so this function's only job
+## is answering the question, not also owning marker positioning.
+func _leading_latest_synthesized_slot() -> int:
+	for i in range(leading_synthesized_bases.size() - 1, -1, -1):
+		if leading_synthesized_bases[i] != null:
+			return i
+	return -1
+
+## Zoom-derived (never time-based) fade + position swap for the leading Pol
+## III clamp container, mirroring _ligase_apply_atom_tier_position_swap()'s
+## pattern. Simpler gating than ligase's: leading_polymerase.position is
+## already rewritten fresh every frame with no tween (see the "if
+## leading_polymerase and phase != DONE" write in update()), so there's no
+## discrete state machine to key off — this just needs synthesis to have
+## actually started (a slot exists to query).
+func _leading_apply_atom_tier_position_swap(ctx: Dictionary) -> void:
+	if leading_polymerase == null or molecule_renderer == null:
+		return
+	# Unlike _lagging_apply_atom_tier_position_swap()'s own gate (which
+	# naturally goes -1 once no fragment is open) and
+	# _ligase_apply_atom_tier_position_swap()'s _ligase_state gate,
+	# _leading_latest_synthesized_slot() stays >= 0 forever once synthesis
+	# has started — so this needs its own explicit "run is over" check, or
+	# it fights both _polymerases_move_to_rest()'s slide-to-rest tween
+	# (while ligase/Pol I are still catching up on the lagging tail) and
+	# _lagging_fade_enzyme_scene()'s later fade-out tween, snapping
+	# leading_polymerase back to the last synthesized slot's position each
+	# frame. _polymerases_at_rest goes true first (at _polymerases_move_to_
+	# rest()) and stays true through the later fade, so gating on it alone
+	# covers both.
+	if _polymerases_at_rest:
+		return
+	var latest_slot: int = _leading_latest_synthesized_slot()
+	if latest_slot < 0:
+		return
+
+	var t: float = molecule_renderer.get_transition_fraction()
+	var active: bool = molecule_renderer.is_molecular_mode_active()
+	var edge: float = 0.0 if active else 1.0
+	var half_width: float = max(tm.polymerase_atom_swap_dip_half_width, 0.001)
+	var dip_shape: float = clamp(1.0 - abs(t - edge) / half_width, 0.0, 1.0)
+	leading_polymerase.modulate.a = 1.0 - dip_shape * tm.polymerase_atom_swap_dip_peak_amount
+
+	# leading_clamp/leading_halo self-offset by a bead-scale
+	# ±dna_ribbons_gap/2 local Y every frame (duplex-centre registration) —
+	# that offset must be suppressed while this container sits at an
+	# atom-tier anchor, or the child silently re-introduces a bead-scale
+	# displacement on top of the swap above.
+	var atom_positioned: bool = active and molecule_renderer.has_slot_o3_position("leading", latest_slot)
+	if leading_clamp != null:
+		leading_clamp.set_atom_tier_offset_suppressed(atom_positioned)
+	if leading_halo != null:
+		leading_halo.set_atom_tier_offset_suppressed(atom_positioned)
+
+	if atom_positioned:
+		leading_polymerase.position = molecule_renderer.get_slot_o3_position("leading", latest_slot)
+	else:
+		# Bead-tier fallback: render()'s own ctx has no polymerase_x key
+		# (that's only in update()'s separate ctx dict) — ctx_polymerase_x
+		# is the instance field update() already caches from it each frame,
+		# and update() runs before render() every _process() tick, so it's
+		# always fresh here.
+		leading_polymerase.position = Vector2(ctx_polymerase_x, ctx.new_top_template_y)
 
 func _spawn_leading_base(index: int, base_type: String, start_pos = null) -> Node2D:
 	var base = sim.NewNitrogenBaseScene.instantiate()
@@ -1236,6 +1340,7 @@ func _spawn_leading_base(index: int, base_type: String, start_pos = null) -> Nod
 	base.set_colors(sim._get_base_fill(base_type), tm.base_label_color)
 	base.set_font(tm.base_label_font_size, tm.base_label_font)
 	base.set_label_rotation(_zoom_label_rotation())
+	base.desaturation_gray_target = tm.molecular_bead_desaturation_gray_target
 	return base
 
 func _spawn_leading_hydrogen_bonds(index: int) -> Node2D:
@@ -1428,6 +1533,108 @@ func _lagging_fire_step(duration: float) -> void:
 
 	if lagging_current_fragment.slots.size() >= sim.okazaki_fragment_size or lagging_total_consumed >= sim.num_nucleotide_slots:
 		_lagging_close_fragment()
+
+## Zoom-derived (never time-based) fade + position swap for the lagging Pol
+## III clamp container. Structurally different from the leading version:
+## lagging_polymerase.position is driven by a per-fire-step Tween
+## (_lagging_fire_step() above), with no tween-free discrete state to key
+## off the way ligase has HOLDING/SEALING — so this gates on the tween
+## itself being inactive, never touching position while it's mid-travel
+## (the same "never race a tween" discipline the ligase swap's own
+## HOLDING/SEALING gate exists for).
+##
+## Known, accepted limitation: because lagging fires frequently (once per
+## synthesized base) and each fire-step re-triggers the tween, this swap
+## visibly toggles off (bead position, mid-tween) then on (atom position,
+## once settled) every fire cycle while at atom zoom. Shipped scoped like
+## this first, per CQA to judge whether the flicker is distracting enough
+## to warrant smoothing out.
+func _lagging_apply_atom_tier_position_swap() -> void:
+	if lagging_polymerase == null or molecule_renderer == null:
+		return
+	if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
+		return  # tween owns position mid-travel -- never race it
+	var latest_slot: int = _lagging_latest_fired_slot()
+	if latest_slot < 0:
+		return
+
+	var t: float = molecule_renderer.get_transition_fraction()
+	var active: bool = molecule_renderer.is_molecular_mode_active()
+	var edge: float = 0.0 if active else 1.0
+	var half_width: float = max(tm.polymerase_atom_swap_dip_half_width, 0.001)
+	var dip_shape: float = clamp(1.0 - abs(t - edge) / half_width, 0.0, 1.0)
+	lagging_polymerase.modulate.a = 1.0 - dip_shape * tm.polymerase_atom_swap_dip_peak_amount
+
+	# See the matching comment in _leading_apply_atom_tier_position_swap()
+	# for why lagging_clamp/lagging_halo's own bead-scale duplex-centre
+	# offset must be suppressed while this container sits at an atom-tier
+	# anchor.
+	var atom_positioned: bool = active and molecule_renderer.has_slot_o3_position("lagging", latest_slot)
+	if lagging_clamp != null:
+		lagging_clamp.set_atom_tier_offset_suppressed(atom_positioned)
+	if lagging_halo != null:
+		lagging_halo.set_atom_tier_offset_suppressed(atom_positioned)
+
+	if atom_positioned:
+		lagging_polymerase.position = molecule_renderer.get_slot_o3_position("lagging", latest_slot)
+	else:
+		lagging_polymerase.position = Vector2(lagging_polymerase_x, sim.new_bottom_template_y)
+
+## The most-recently-fired lagging slot: lagging_current_fragment.slots[0]
+## (the front of the ascending array, per push_front's own "firing goes
+## right-to-left" ordering — see _lagging_fire_step()), or -1 if no
+## fragment is currently open (a brief window between a fragment closing
+## and the next one opening).
+func _lagging_latest_fired_slot() -> int:
+	if lagging_current_fragment == null or lagging_current_fragment.slots.size() == 0:
+		return -1
+	return lagging_current_fragment.slots[0]
+
+## This project keeps exactly one active debug-log investigation at a
+## time, always bound to F1 — press F1 while the scene is running to fire
+## it. Currently wired to the "both polymerases render on the top strand
+## row" bug report: prints each strand's atom-tier slot/position data
+## alongside its bead-tier fallback, so the actual runtime numbers can
+## pinpoint the mechanism instead of further static-analysis guessing.
+## Raw-keypress-with-edge-detection, print() only — nothing that stresses
+## the remote debugger connection. When this investigation wraps, the next
+## one repurposes this same block/comment rather than leaving a stale
+## F-key dump behind.
+var _polymerase_debug_key_was_down: bool = false
+
+func _debug_dump_polymerase_atom_tier_state(ctx: Dictionary) -> void:
+	var key_down: bool = Input.is_key_pressed(KEY_F1)
+	if not key_down or _polymerase_debug_key_was_down:
+		_polymerase_debug_key_was_down = key_down
+		return
+	_polymerase_debug_key_was_down = key_down
+	if molecule_renderer == null:
+		print("[POLY DEBUG] molecule_renderer is null")
+		return
+
+	var t: float = molecule_renderer.get_transition_fraction()
+	var active: bool = molecule_renderer.is_molecular_mode_active()
+	print("[POLY DEBUG] transition_fraction=%s active=%s" % [t, active])
+
+	var leading_slot: int = _leading_latest_synthesized_slot()
+	var leading_has: bool = leading_slot >= 0 and molecule_renderer.has_slot_o3_position("leading", leading_slot)
+	print("[POLY DEBUG] leading: slot=%d has_atom=%s atom_pos=%s container_pos=%s bead_fallback=%s" % [
+		leading_slot, leading_has,
+		molecule_renderer.get_slot_o3_position("leading", leading_slot) if leading_has else "n/a",
+		leading_polymerase.position if leading_polymerase != null else "n/a",
+		Vector2(ctx_polymerase_x, ctx.new_top_template_y),
+	])
+
+	var lagging_slot: int = _lagging_latest_fired_slot()
+	var lagging_has: bool = lagging_slot >= 0 and molecule_renderer.has_slot_o3_position("lagging", lagging_slot)
+	var lagging_tween_active: bool = lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid()
+	print("[POLY DEBUG] lagging: slot=%d has_atom=%s atom_pos=%s container_pos=%s bead_fallback=%s tween_active=%s" % [
+		lagging_slot, lagging_has,
+		molecule_renderer.get_slot_o3_position("lagging", lagging_slot) if lagging_has else "n/a",
+		lagging_polymerase.position if lagging_polymerase != null else "n/a",
+		Vector2(lagging_polymerase_x, sim.new_bottom_template_y),
+		lagging_tween_active,
+	])
 
 func _lagging_open_fragment() -> void:
 	lagging_current_fragment = {
@@ -1931,6 +2138,18 @@ func _pol1_reset_visual() -> void:
 		pol1.modulate.a = 0.0
 		pol1.set_pulse(0.0)
 
+## Bead-space gap target for the ligase glyph: half a slot spacing before
+## `frag_first_slot` (the fragment about to be sealed's first slot) — i.e.
+## the boundary between frag_first_slot-1 and frag_first_slot. Extracted out
+## of _ligase_kick() so _ligase_apply_atom_tier_position_swap()'s bead-tier
+## fallback (when the atom-tier gap position isn't available this frame —
+## e.g. off-screen) can share the exact same formula rather than risk the
+## two silently drifting apart.
+func _ligase_gap_bead_position(frag_first_slot: int) -> Vector2:
+	var target_x = sim.nucleotide_original_x[frag_first_slot] - sim.nucleotide_slot_spacing / 2.0
+	var target_y = sim.new_bottom_template_y + sim.dna_ribbons_gap + tm.backbone_offset_distance
+	return Vector2(target_x, target_y)
+
 ## Idempotent: no-ops if ligase is off, already busy, or nothing is pending.
 ## Finds the EARLIEST unsealed-but-complete fragment — since ligase only ever
 ## moves forward and never revisits, this is always correct regardless of
@@ -1963,16 +2182,15 @@ func _ligase_kick() -> void:
 	if next_frag == null:
 		return
 
+	_ligase_active_gap_slot = next_frag.slots[0] - 1
 	_ligase_state = LigaseState.TRAVELING
 	ligase.visible = true
 	_ligase_cofactor_begin()
 	print("[LIGASE] traveling to seal fragment starting at slot %d" % next_frag.slots[0])
-	var target_x = sim.nucleotide_original_x[next_frag.slots[0]] - sim.nucleotide_slot_spacing / 2.0
-	var target_y = sim.new_bottom_template_y + sim.dna_ribbons_gap + tm.backbone_offset_distance
 	if _ligase_tween != null and _ligase_tween.is_valid():
 		_ligase_tween.kill()
 	_ligase_tween = sim.create_tween()
-	_ligase_tween.tween_property(ligase, "position", Vector2(target_x, target_y), tm.ligase_travel_duration)
+	_ligase_tween.tween_property(ligase, "position", _ligase_gap_bead_position(next_frag.slots[0]), tm.ligase_travel_duration)
 	# Spark fires at TRAVELING -> HOLDING, never mid-travel: the cofactor only
 	# activates once the enzyme has actually engaged the nick. Mirrors
 	# helicase's "cleave at arrival." The PPi drift and fade then run inside
@@ -2004,7 +2222,8 @@ func _ligase_finish_seal(frag: Dictionary) -> void:
 		ligase_cofactor.release()
 	print("[LIGASE] seal complete — frag.sealed=true, merging into continuous line")
 	_ligase_state = LigaseState.IDLE
-	_ligase_kick()  # pick up the next pending fragment, if any
+	_ligase_active_gap_slot = -2
+	_ligase_kick()  # pick up the next pending fragment, if any -- overwrites _ligase_active_gap_slot above if so
 	_lagging_try_deferred_fade()
 
 ## Kills any in-flight travel/pulse, hides the node, and drops back to rest.
@@ -2015,6 +2234,7 @@ func _ligase_reset_visual() -> void:
 	if _ligase_tween != null and _ligase_tween.is_valid():
 		_ligase_tween.kill()
 	_ligase_state = LigaseState.IDLE
+	_ligase_active_gap_slot = -2
 	if ligase != null:
 		ligase.visible = false
 		ligase.modulate.a = 1.0  # undoes _lagging_fade_enzyme_scene()'s end-of-run fade — otherwise the NEXT run's first seal sets visible=true while alpha is still 0 from the last one
@@ -2035,6 +2255,65 @@ func _ligase_park_offstage() -> void:
 	if sim.nucleotide_original_x.size() > 0:
 		park_x = sim.nucleotide_original_x[0]
 	ligase.position = Vector2(park_x, park_y)
+
+## Zoom-derived (never tweened/time-based) fade + position swap for the
+## bead-tier ligase glyph, so it relocates to the atom-tier gap position
+## while the camera is in molecular zoom, instead of always sitting at its
+## bead-space position. Gated to HOLDING/SEALING only: those are the two
+## LigaseState values where ligase.position is a static "parked at this
+## gap" value with no tween currently writing it — TRAVELING owns position
+## via its own tween in _ligase_kick(), and this function must never touch
+## it then, or the two writers would race. Pure function of the live zoom
+## scalar (molecule_renderer.get_transition_fraction()/
+## is_molecular_mode_active()) — no clock of its own, same scrub-safety
+## discipline the bead<->molecular crossfade itself follows: scrubbing to
+## any zoom value must show the correct blend instantly, never replay or
+## get stuck mid-fade.
+func _ligase_apply_atom_tier_position_swap() -> void:
+	if ligase == null or molecule_renderer == null:
+		return
+	if _ligase_state != LigaseState.HOLDING and _ligase_state != LigaseState.SEALING:
+		return
+	if _ligase_active_gap_slot < -1:
+		return  # -2 sentinel: genuinely unset, no active gap at all
+
+	var t: float = molecule_renderer.get_transition_fraction()
+	var active: bool = molecule_renderer.is_molecular_mode_active()
+	# The swap point is wherever is_molecular_mode_active() actually flips
+	# for the CURRENT active state -- t=1.0 while inactive (rising toward
+	# atom mode flips it true there), t=0.0 while active (falling toward
+	# bead mode flips it false there), per molecule_structure_renderer.gd's
+	# own _compute_active() Schmitt-trigger logic against the identical two
+	# thresholds get_transition_fraction() ramps between. NOT the band
+	# midpoint, and NOT a fixed point independent of current state.
+	var edge: float = 0.0 if active else 1.0
+	var t_dist: float = abs(t - edge)
+	var half_width: float = max(tm.ligase_atom_swap_dip_half_width, 0.001)
+	var dip_shape: float = clamp(1.0 - t_dist / half_width, 0.0, 1.0)
+	ligase.modulate.a = 1.0 - dip_shape * tm.ligase_atom_swap_dip_peak_amount
+
+	# _ligase_active_gap_slot == -1 is the very first Okazaki fragment's own
+	# seal (next_frag.slots[0] == 0, no real predecessor slot exists) --
+	# fall back to the SINGLE atom position of the fragment's own first slot
+	# (its alpha-phosphate) rather than the usual two-atom gap midpoint,
+	# since there's nothing on the other side to average with.
+	var has_atom_pos: bool
+	var atom_pos: Vector2
+	if _ligase_active_gap_slot < 0:
+		has_atom_pos = molecule_renderer.has_slot_alpha_position("lagging", _ligase_active_gap_slot + 1)
+		atom_pos = molecule_renderer.get_slot_alpha_position("lagging", _ligase_active_gap_slot + 1)
+	else:
+		has_atom_pos = molecule_renderer.has_lagging_gap_atom_position(_ligase_active_gap_slot)
+		atom_pos = molecule_renderer.get_lagging_gap_atom_position(_ligase_active_gap_slot) if has_atom_pos else Vector2.ZERO
+
+	if active and has_atom_pos:
+		ligase.position = atom_pos
+	else:
+		# Bead-tier fallback: ALWAYS freshly recomputed via the shared
+		# helper, never read back from ligase.position (which a prior
+		# frame's atom-tier branch may have overwritten) -- so there's a
+		# defined answer even off-screen, never a crash or a snap-to-zero.
+		ligase.position = _ligase_gap_bead_position(_ligase_active_gap_slot + 1)
 
 ## Eukaryotic mode only — bacterial ligase runs on NAD+, a structurally
 ## different molecule that this glyph would misrepresent. The topology check
@@ -2531,6 +2810,7 @@ func _spawn_lagging_base(index: int, base_type: String, start_pos = null, color_
 	base.set_colors(fill_color, label_color)
 	base.set_font(tm.base_label_font_size, tm.base_label_font)
 	base.set_label_rotation(_zoom_label_rotation())
+	base.desaturation_gray_target = tm.molecular_bead_desaturation_gray_target
 	if shape_override != null:
 		base.set_shape(shape_override)
 	return base
@@ -2567,6 +2847,59 @@ func _spawn_lagging_hydrogen_bonds(index: int) -> Node2D:
 ## the line here" from "mid-flight, wait before merging".
 func _is_telomere_gap_slot(index: int) -> bool:
 	return lagging_telomere_gap != null and index >= lagging_telomere_gap.start and index <= lagging_telomere_gap.end
+
+## Atom-tier equivalent of the bead tier's own "unsealed fragment gets its
+## own separate Line2D" rule (_lagging_render()'s merge-prefix scan) — true
+## if the phosphodiester bond between lagging slot `slot` (the lower/5'-er
+## index) and slot+1 should render as an unbroken backbone bond. False
+## exactly when `slot + 1` is the FIRST slot of a completed-but-unsealed
+## Okazaki fragment (a real, still-open nick); true for every other slot,
+## including ordinary intra-fragment bonds and any slot that isn't a
+## fragment boundary at all (e.g. one still inside lagging_current_fragment,
+## which never appears in lagging_fragments and so falls through to the
+## default). Reads lagging_fragments live every call — no cached seal
+## state, so a mid-session seal (camera parked at atom zoom) is picked up
+## on the very next rebuild. No underscore prefix:
+## molecule_structure_renderer.gd calls this externally, the same "read
+## lagging_fragments directly, don't derive a second answer" discipline the
+## bead tier's own gap logic already follows.
+##
+## Gated on frag.slots[0] (the fragment STARTING at slot+1), NOT
+## frag.slots[-1] (the fragment ENDING at slot) — this was gated backwards
+## in an earlier pass and shipped a real bug: fragment N's own closure
+## seals FAST (nothing else competes for ligase right after it closes),
+## while fragment N+1 takes many more fire-steps to complete, so gating on
+## fragment N's seal let the N/N+1 junction bond render the instant
+## fragment N+1's first slot landed, with no ligase visit at that junction
+## at all. The bead tier's own PROVEN merge-prefix scan
+## (_lagging_render()'s `last_sealed_idx`) requires fragment N+1 ITSELF to
+## be sealed before the merge advances past it — confirming the junction is
+## gated by the fragment ligase actually travels to and pinches AT that
+## exact spot (_ligase_kick()'s own target formula uses next_frag.slots[0],
+## the same slot+1 this function now keys off).
+##
+## Telomere-gap/terminal-fragment removal (Pol I territory) is out of scope
+## at this complexity tier — frag.slots[0] is used directly, unlike the
+## defensive backward-scan _lagging_fragment_last_rendered_slot() needs.
+func is_lagging_bond_sealed(slot: int) -> bool:
+	# Base complexity tier (ligase_enabled == false, per simulation.gd's own
+	# doc comment on that export var): "continuous lagging backbone (no
+	# ligase modeled)" -- fragments still get created/tracked internally
+	# (_lagging_open_fragment() doesn't gate on this flag, by design, since
+	# fragment bookkeeping also drives other tier-independent logic), but
+	# they can never actually seal at this tier -- _ligase_kick() itself
+	# gates on sim.ligase_enabled, so frag.sealed would sit false forever
+	# and every fragment boundary would render as a permanent phantom nick.
+	# Short-circuiting here (rather than gating the renderer's call site)
+	# keeps this function's contract -- "should this bond render intact" --
+	# tier-aware on its own, matching OkazakiMaturationDesign.md's own note
+	# that `sealed` was meant to replace a binary ligase_enabled read.
+	if sim != null and not sim.ligase_enabled:
+		return true
+	for frag in lagging_fragments:
+		if frag.slots.size() > 0 and frag.slots[0] == slot + 1:
+			return frag.sealed
+	return true  # not a fragment boundary -- ordinary bond, always drawn
 
 ## The fragment's own 3' end for MARKER purposes — frag.slots[-1] is the
 ## fragment's highest slot index, which for the terminal fragment after
@@ -2651,8 +2984,12 @@ func _lagging_render(ctx: Dictionary) -> void:
 			# never reports them (molecule renderer models DNA incorporation
 			# only, per that method's own comment), so they can never be
 			# molecular-active and should stay fully opaque in bead mode.
-			var bead_suppressed: bool = molecule_renderer != null and not _is_still_primer(i) and molecule_renderer.is_slot_bead_suppressed("lagging", i)
-			lagging_synthesized_bases[i].modulate.a = 0.0 if bead_suppressed else 1.0
+			if molecule_renderer != null and not _is_still_primer(i):
+				var bead_fade: float = molecule_renderer.get_bead_fade_amount("lagging", i)
+				lagging_synthesized_bases[i].modulate.a = 1.0 - bead_fade
+				lagging_synthesized_bases[i].set_desaturation_amount(molecule_renderer.get_transition_desaturation_amount())
+			else:
+				lagging_synthesized_bases[i].modulate.a = 1.0
 			if lagging_hydrogen_bonds[i] != null:
 				var bottom_template_y = template_y + wobble_y
 				lagging_hydrogen_bonds[i].position = Vector2(world_x, bottom_template_y)
@@ -2850,11 +3187,15 @@ func _lagging_set_fragment_markers(frag: Dictionary, want_5p: bool, want_3p: boo
 	var last_slot = _lagging_fragment_last_rendered_slot(frag)
 	var first_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(first_slot, wobble_t) + tm.backbone_offset_distance
 	var last_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(last_slot, wobble_t) + tm.backbone_offset_distance
+	# Hidden while atom-tier skeletal rendering is active — see the matching
+	# comment in simulation.gd's marker block for the full rationale.
+	var atom_tier_active: bool = molecule_renderer != null and molecule_renderer.is_molecular_mode_active()
 
 	if want_5p and want_3p and frag.slots.size() == 1:
 		if frag.marker_5p == null:
 			frag.marker_5p = _spawn_marker("5'-3'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
 		frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+		frag.marker_5p.visible = not atom_tier_active
 		if frag.marker_3p != null:
 			frag.marker_3p.queue_free()
 			frag.marker_3p = null
@@ -2864,6 +3205,7 @@ func _lagging_set_fragment_markers(frag: Dictionary, want_5p: bool, want_3p: boo
 		if frag.marker_5p == null:
 			frag.marker_5p = _spawn_marker("5'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
 		frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+		frag.marker_5p.visible = not atom_tier_active
 	elif frag.marker_5p != null:
 		frag.marker_5p.queue_free()
 		frag.marker_5p = null
@@ -2872,6 +3214,7 @@ func _lagging_set_fragment_markers(frag: Dictionary, want_5p: bool, want_3p: boo
 		if frag.marker_3p == null:
 			frag.marker_3p = _spawn_marker("3'", Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset))
 		frag.marker_3p.position = Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset)
+		frag.marker_3p.visible = not atom_tier_active
 	elif frag.marker_3p != null:
 		frag.marker_3p.queue_free()
 		frag.marker_3p = null
@@ -3055,18 +3398,24 @@ func _lagging_render_fragment_markers(frag: Dictionary, wobble_t: float, dna_rib
 	var last_slot = _lagging_fragment_last_rendered_slot(frag)
 	var first_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(first_slot, wobble_t) + tm.backbone_offset_distance
 	var last_y = new_bottom_template_y + dna_ribbons_gap + sim.get_wobble_y(last_slot, wobble_t) + tm.backbone_offset_distance
+	# Hidden while atom-tier skeletal rendering is active — see the matching
+	# comment in simulation.gd's marker block for the full rationale.
+	var atom_tier_active: bool = molecule_renderer != null and molecule_renderer.is_molecular_mode_active()
 
 	if frag.slots.size() == 1:
 		if frag.marker_5p == null:
 			frag.marker_5p = _spawn_marker("5'-3'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
 		frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+		frag.marker_5p.visible = not atom_tier_active
 	else:
 		if frag.marker_5p == null:
 			frag.marker_5p = _spawn_marker("5'", Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset))
 		frag.marker_5p.position = Vector2(nucleotide_original_x[first_slot], first_y + tm.marker_offset)
+		frag.marker_5p.visible = not atom_tier_active
 		if frag.marker_3p == null:
 			frag.marker_3p = _spawn_marker("3'", Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset))
 		frag.marker_3p.position = Vector2(nucleotide_original_x[last_slot], last_y + tm.marker_offset)
+		frag.marker_3p.visible = not atom_tier_active
 
 func _update_bond_marks_lagging(points: PackedVector2Array) -> void:
 	var needed = max(0, points.size() - 1)

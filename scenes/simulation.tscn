@@ -14,6 +14,7 @@
 [ext_resource type="FontFile" uid="uid://c74yu01fh6oc0" path="res://fonts/GoogleSans/GoogleSans-Regular.ttf" id="11_khgle"]
 [ext_resource type="Script" uid="uid://6y37sg7poatt" path="res://scripts/molecule_structure_renderer.gd" id="12_molstruct"]
 [ext_resource type="PackedScene" path="res://scenes/DnaUnwindIntro.tscn" id="13_dnaintro"]
+[ext_resource type="FontFile" uid="uid://ba4l0yjamuoiq" path="res://fonts/Raleway/static/Raleway-Bold.ttf" id="15_i46hp"]
 
 [sub_resource type="Curve2D" id="Curve2D_mwrr7"]
 
@@ -92,6 +93,7 @@ simulation = NodePath("../..")
 
 [node name="DnaUnwindIntro" parent="UI" unique_id=681246 instance=ExtResource("13_dnaintro")]
 unique_name_in_owner = true
+rotation_duration_seconds = 5.0
 
 [node name="NucleotideField" type="Node2D" parent="." unique_id=2115278003]
 script = ExtResource("8_160l5")
@@ -116,8 +118,9 @@ background_color = Color(0.04674457, 0.085360445, 0.19028893, 1)
 base_label_font = ExtResource("4_ehfb2")
 cofactor_label_font = ExtResource("11_khgle")
 marker_font = ExtResource("5_160l5")
+molecular_atom_label_font = ExtResource("15_i46hp")
 base_label_font_size = 20
-molecular_atom_label_font_size = 2
+molecular_atom_label_font_size = 3
 molecular_atom_label_font_size_element_only = 5
 base_color_a = Color(1, 0.20392157, 0.5137255, 1)
 base_color_t = Color(0.5686275, 0, 0.5529412, 1)
@@ -174,12 +177,23 @@ zoom_helicase_level3_fit = 0.25
 zoom_leading_level2_fit = 0.25
 zoom_lagging_level2_fit = 0.25
 zoom_free_camera_max_zoom_in = 13.0
-molecular_bond_color = Color(0.8221194, 0.65150005, 0.8532224, 0.892)
-molecular_backbone_bond_color = Color(0, 1, 0.77603394, 1)
+molecular_label_zoom_enter_threshold = 9.0
+molecular_label_zoom_exit_threshold = 8.9
+molecular_debug_label_filter_enabled = true
+molecular_debug_label_filter_atom_names = Array[String](["C1'", "C2'", "C3'", "C4'", "C5'"])
+molecular_debug_capsule_enabled = true
+molecular_debug_capsule_padding = 1.5
+molecular_debug_capsule_border_width = 0.5
+molecular_debug_capsule_border_color = Color(0.9567099, 0.88082534, 0, 1)
+molecular_bond_color = Color(0.8235294, 0.6509804, 0.85490197, 1)
+molecular_backbone_bond_color = Color(0.6782754, 0.95020145, 0.6433765, 1)
+molecular_backbone_arrow_length = 8.0
+molecular_backbone_arrow_half_width = 4.0
+molecular_backbone_arrow_color = Color(1, 0.71112853, 0, 1)
 molecular_nitrogen_color = Color(0.2509804, 0.6392157, 1, 1)
 molecular_carbon_color = Color(0.48945445, 0.20126465, 0.9999959, 1)
-molecular_phosphorus_color = Color(1, 0.6986019, 0, 1)
+molecular_phosphorus_color = Color(1, 0.63529414, 0, 1)
 molecular_ring_bond_length_ratio = 0.2
 molecular_atom_radius = 4.2
 molecular_h_bond_dot_gap = 2.0
-molecular_extra_ribbons_gap = 100.0
+molecular_extra_ribbons_gap = 85.0

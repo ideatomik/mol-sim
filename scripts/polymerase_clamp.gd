@@ -78,6 +78,12 @@ var _lowerjaw: Polygon2D = null
 var _label: EnzymeLabel = null
 var _pump_t: float = 0.0
 var _anchor_local_y: float = 0.0
+## True while the atom-tier position swap (replication_manager.gd) has
+## repositioned this clamp's own PARENT container to an atom-tier anchor —
+## zeroes the duplex-centre local offset _apply() would otherwise
+## unconditionally re-apply on top of that every frame, silently undoing
+## the swap. See set_atom_tier_offset_suppressed().
+var _atom_tier_offset_suppressed: bool = false
 
 # ---------- DRAG-TO-SCRUB ----------
 # LongSequenceDesign.md follow-up: click-and-drag anywhere on the clamp
@@ -209,6 +215,16 @@ func set_pump(t: float) -> void:
 	_pump_t = clampf(t, 0.0, 1.0)
 	_apply()
 
+## Zeroes (or restores) the duplex-centre local offset — see
+## _atom_tier_offset_suppressed's own doc comment. Forces an immediate
+## _apply() so the change takes effect the same frame, not next time
+## set_pump() happens to fire.
+func set_atom_tier_offset_suppressed(suppressed: bool) -> void:
+	if suppressed == _atom_tier_offset_suppressed:
+		return
+	_atom_tier_offset_suppressed = suppressed
+	_apply()
+
 func _apply() -> void:
 	if _back == null or _tm == null or _sim == null:
 		return
@@ -237,7 +253,7 @@ func _apply() -> void:
 	var gap: float = _sim.dna_ribbons_gap
 	var span: float = gap + 2.0 * (float(_tm.backbone_offset_distance) + float(_tm.backbone_line_width) / 2.0)
 	var center_offset: float = gap / 2.0
-	position.y = -center_offset if _is_leading else center_offset
+	position.y = 0.0 if _atom_tier_offset_suppressed else (-center_offset if _is_leading else center_offset)
 	scale = Vector2(1.0, -1.0) if _is_leading else Vector2(1.0, 1.0)
 
 	var t: float = _pump_t
@@ -313,8 +329,8 @@ func _apply() -> void:
 	# LABEL: static offset outward from the duplex (+y, pre-mirror), independent
 	# of pump t so it doesn't breathe with the clamp. tm.enzyme_labels_enabled /
 	# tm.polymerase_label_margin / tm.label_font_size / tm.label_color /
-	# tm.label_panel_color / tm.label_z are new fields — see chat for the exact
-	# ThemeManager export block to add.
+	# tm.label_z are new fields — see chat for the exact ThemeManager export
+	# block to add.
 	if _label:
 		var label_enabled: bool = tm.enzyme_labels_enabled
 		_label.visible = label_enabled
@@ -323,9 +339,8 @@ func _apply() -> void:
 			var label_margin_out: float = tm.polymerase_label_margin
 			var label_font_size: int = tm.label_font_size
 			var label_text_color: Color = tm.label_color
-			var label_panel_color: Color = tm.label_panel_color
 			var label_z: int = tm.label_z
-			_label.set_style(null, label_font_size, label_text_color, label_panel_color)
+			_label.set_style(null, label_font_size, label_text_color)
 			# Read live, like every other label param in this block. EnzymeLabel
 			# negates this internally for the mirrored (leading) clamp — see
 			# _apply_rotation() there; nothing here needs to know the sign.
@@ -338,6 +353,14 @@ func _apply() -> void:
 	# frames) so it stays correct as the clamp animates/tunes live.
 	_click_half_width = max(back_width, jaw_width) * 0.5
 	_click_half_height = half_down
+
+## Live label toggle — this clamp's own _apply() already re-runs every
+## frame via set_pump(), so this is redundant for it specifically, but kept
+## for API parity with ligase.gd/pol1.gd/primase_blip.gd, whose _apply()
+## doesn't run every frame.
+func refresh_label_visibility() -> void:
+	if _label != null and _tm != null:
+		_label.visible = _tm.enzyme_labels_enabled
 
 ## Live world-space position of the jaw's outer edge, right now. Walks the real
 ## transform chain (local point -> this clamp's scale/mirror/position -> the

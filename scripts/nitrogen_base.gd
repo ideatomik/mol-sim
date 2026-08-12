@@ -32,14 +32,37 @@ extends RigidBody2D
 ## colors/sizes do.
 const ROUNDED_SQUARE_CORNER_RATIO: float = 0.35
 const ROUNDED_SQUARE_CORNER_SEGMENTS: int = 4
+## Neutral gray the fill lerps toward at full desaturation (see
+## set_desaturation_amount()). Overwritten by the spawner from
+## tm.molecular_bead_desaturation_gray_target — this node stays
+## ThemeManager-free by convention, so it's injected once, the same way
+## set_colors()/set_font()/set_radius() already are.
+@export var desaturation_gray_target: Color = Color(0.6, 0.6, 0.65, 1.0)
 
 @export_group("Physics")
 ## If true (default), this RigidBody2D stays kinematically frozen.
 @export var stay_frozen: bool = true
 
 var label: Label
+## Derived value, actually painted by _draw() — never write this directly;
+## go through set_colors()/set_body_color() (the "true" color) or
+## set_desaturation_amount() (the blend weight), both of which funnel
+## through _recompute_fill(). See that function's own doc comment.
 var body_fill_color: Color = Color.WHITE
 var _label_rotation: float = 0.0
+
+## The un-desaturated fill color — the stable source _recompute_fill()
+## reads from every time either it or the desaturation weight changes. Set
+## by set_colors()/set_body_color(), the same two writers that used to set
+## body_fill_color directly.
+var _true_body_fill_color: Color = Color.WHITE
+## Current lerp-toward-gray weight, driven every frame by
+## molecule_structure_renderer.gd's get_transition_desaturation_amount()
+## via set_desaturation_amount() — a single global value, same for every
+## bead every frame (the dip is a property of the live zoom scalar, not of
+## any one residue's own occlusion state). 0.0 = untouched true color, 1.0
+## = fully desaturation_gray_target.
+var _desaturation_amount: float = 0.0
 
 func _ready():
 	freeze = stay_frozen
@@ -122,8 +145,8 @@ func set_shape(new_shape: String) -> void:
 ## Apply fill and label colors. Called by simulation.gd after instantiation
 ## using values from %ThemeManager, keeping this node ThemeManager-free.
 func set_colors(fill_color: Color, label_color: Color) -> void:
-	body_fill_color = fill_color
-	queue_redraw()
+	_true_body_fill_color = fill_color
+	_recompute_fill()
 	if label:
 		label.add_theme_color_override("font_color", label_color)
 
@@ -160,10 +183,33 @@ func set_label_rotation(radians: float) -> void:
 	_center_label.call_deferred()
 
 ## Override the fill color only (used for synthesis debug highlighting).
-## Does not affect base_type or label color.
+## Does not affect base_type or label color. The highlight color becomes
+## the new "true" source (via _recompute_fill()), so a debug-highlighted
+## bead still correctly dips toward gray during the crossfade rather than
+## being exempt from it.
 func set_body_color(new_color: Color) -> void:
-	body_fill_color = new_color
+	_true_body_fill_color = new_color
+	_recompute_fill()
+
+## Recomputes the actually-drawn body_fill_color from the true source color
+## and the current desaturation weight. Single place both
+## _true_body_fill_color's writers (set_colors/set_body_color) and the
+## desaturation writer (set_desaturation_amount) funnel through, so neither
+## can silently stomp the other's half of the composite.
+func _recompute_fill() -> void:
+	body_fill_color = _true_body_fill_color.lerp(desaturation_gray_target, _desaturation_amount)
 	queue_redraw()
+
+## Called once per frame by the spawner (replication_manager.gd/
+## simulation.gd) with molecule_structure_renderer.gd's
+## get_transition_desaturation_amount() — bead<->molecular crossfade dip
+## (Open Question 10's deferred transition treatment). Real RGB-lerp
+## toward gray, not modulate: CanvasItem.modulate is a straight per-channel
+## multiply and can't desaturate a saturated color (it preserves hue/
+## saturation ratios), so this writes the actual drawn color instead.
+func set_desaturation_amount(amount: float) -> void:
+	_desaturation_amount = clamp(amount, 0.0, 1.0)
+	_recompute_fill()
 
 ## Kept for compatibility -- set_base_type() is preferred.
 func set_label_text(new_text: String) -> void:
