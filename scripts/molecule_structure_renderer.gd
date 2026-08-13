@@ -76,6 +76,16 @@ var _capsule_layout: Array[Dictionary] = []
 ## keep returning last-bead-mode data.
 var _last_o3_by_key: Dictionary = {}
 var _last_alpha_by_key: Dictionary = {}
+## {c5: Vector2, c3: Vector2} per "strand:slot" key — the SAME per-residue
+## capsule positions _capsule_layout holds (see that array's own comment),
+## just also indexed by residue identity for external lookup. Cached across
+## the frame boundary exactly like _last_o3_by_key/_last_alpha_by_key above
+## (same reasoning: stale positions are worse than no positions), backing
+## get_residue_capsule_positions() below — the shared dependency
+## CapsuleArrowOverlay's c5_position/c3_position fields and the upcoming
+## camera-choreography target both need, so neither has to re-derive
+## topology/layout math of its own or invent a second indexing scheme.
+var _last_capsule_by_key: Dictionary = {}
 
 ## {world_pos: Vector2, radius: float, key: String} — one entry per
 ## residue currently rendered via RiboseDeriver.reflect_about_backbone_axis()
@@ -566,6 +576,31 @@ func has_slot_alpha_position(strand: String, slot: int) -> bool:
 func get_slot_alpha_position(strand: String, slot: int) -> Vector2:
 	return _last_alpha_by_key.get("%s:%d" % [strand, slot], Vector2.ZERO)
 
+## Residue-position lookup — the shared dependency behind CapsuleArrowOverlay's
+## c5_position/c3_position fields (currently set manually) and the upcoming
+## camera-choreography target's per-frame midpoint. Same has_/get_ pair shape
+## as has_slot_o3_position()/get_slot_o3_position() above, keyed the same way
+## ("strand:slot") — matches this file's own established convention rather
+## than inventing a new residue-indexing scheme. Strand-generic for free: the
+## per-residue loop in _rebuild_layout() that populates _last_capsule_by_key
+## runs identically for leading/lagging/template_top/template_bottom (see
+## has_slot_o3_position()'s own comment on why the O3'/alpha accessors are
+## already strand-generic — same mechanism, same reason, here too). The
+## PRIMARY case this needs to be correct for is the self-paired template
+## state (both template strands, no fork/enzymes active) — that's just the
+## template_top/template_bottom rows of the same generic loop, no special
+## casing required. For any strand/slot not currently rendered (off-screen,
+## below the full-label... actually below the atom tier entirely, wrong
+## strand name, or the crossfade band not yet entered), has_ returns false —
+## callers MUST check that first; get_ returns {} (empty Dictionary, a
+## documented non-answer) rather than a zero-filled Vector2 pair that could
+## be mistaken for a real position at world origin.
+func has_residue_capsule_positions(strand: String, slot: int) -> bool:
+	return _last_capsule_by_key.has("%s:%d" % [strand, slot])
+
+func get_residue_capsule_positions(strand: String, slot: int) -> Dictionary:
+	return _last_capsule_by_key.get("%s:%d" % [strand, slot], {})
+
 ## Atom-tier equivalent of _ligase_gap_bead_position()'s bead-space gap
 ## target: the midpoint between lagging slot `slot`'s O3' (a completed-but-
 ## unsealed fragment's last slot) and slot+1's alpha-phosphate (the next
@@ -665,6 +700,7 @@ func _rebuild_layout() -> void:
 	_mirrored_residue_layout.clear()
 	_last_o3_by_key.clear()
 	_last_alpha_by_key.clear()
+	_last_capsule_by_key.clear()
 	if _transition_fraction <= 0.0:
 		return
 
@@ -695,6 +731,12 @@ func _rebuild_layout() -> void:
 	# cross-residue passes (bug-B backbone bond, hydrogen bonds) below.
 	var o3_by_key: Dictionary = {}
 	var alpha_by_key: Dictionary = {}
+	# {c5: Vector2, c3: Vector2} per "strand:slot" — local build, assigned to
+	# _last_capsule_by_key only once complete (same two-step "build local,
+	# commit at the end" shape as o3_by_key/alpha_by_key below, so a caller
+	# querying mid-rebuild never sees a partially-populated frame's worth of
+	# residues).
+	var capsule_by_key: Dictionary = {}
 	# Real per-atom world positions for every role Watson-Crick H-bonding
 	# can involve (base-letter-dependent — see HBOND_OWN_TO_PARTNER_ROLES),
 	# not just one named anchor atom. Supersedes the old single-anchor
@@ -917,15 +959,20 @@ func _rebuild_layout() -> void:
 		# Provisional/debug — intra-residue C5'->C3' capsule (see
 		# _capsule_layout's own comment above). Both atoms belong to THIS
 		# residue's own topology (unlike O3'/alpha-phosphate below, which
-		# link neighbor residues) — no cross-residue *_by_key dict needed,
-		# same in-loop pattern as _atom_layout/_bond_layout above.
+		# link neighbor residues), so BUILDING these two positions never
+		# needed a cross-residue pass of its own — same in-loop pattern as
+		# _atom_layout/_bond_layout above. capsule_by_key below is a
+		# different thing: not needed to construct c5/c3 (already have both
+		# from local_positions right here), but populated anyway so external
+		# callers can LOOK UP a specific residue's positions by strand+slot
+		# after the fact — see _last_capsule_by_key's own comment.
 		var c5_id: int = topology.find_by_role("incoming.c5_prime")
 		var c3_id: int = topology.find_by_role("incoming.c3_prime")
 		if local_positions.has(c5_id) and local_positions.has(c3_id):
-			_capsule_layout.append({
-				c5 = world_pos + (local_positions[c5_id] - anchor_offset),
-				c3 = world_pos + (local_positions[c3_id] - anchor_offset),
-			})
+			var capsule_c5: Vector2 = world_pos + (local_positions[c5_id] - anchor_offset)
+			var capsule_c3: Vector2 = world_pos + (local_positions[c3_id] - anchor_offset)
+			_capsule_layout.append({c5 = capsule_c5, c3 = capsule_c3})
+			capsule_by_key["%s:%d" % [entry.strand, entry.slot]] = {c5 = capsule_c5, c3 = capsule_c3}
 
 		# STAGE 1: bypassed alongside the mirror call above -- nothing is
 		# actually mirrored this stage, so nothing should be hoverable
@@ -983,6 +1030,7 @@ func _rebuild_layout() -> void:
 	_build_backbone_bonds(o3_by_key, alpha_by_key)
 	_last_o3_by_key = o3_by_key
 	_last_alpha_by_key = alpha_by_key
+	_last_capsule_by_key = capsule_by_key
 	_build_hydrogen_bonds(base_bond_atoms_by_key, base_type_by_key)
 
 

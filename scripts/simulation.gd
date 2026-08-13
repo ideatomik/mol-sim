@@ -207,37 +207,67 @@ func _swap_in_vertical_player_ui(zoom_mgr) -> void:
 
 ## F2/F3 global UI toggles. Deliberately _unhandled_input, not _process —
 ## _process() early-returns until helicase_mgr != null (first sequence
-## load), but these should work regardless of load state.
+## load), but these should work regardless of load state. Both branches
+## just flip current state through the setters below — kept that way
+## (rather than the setters taking no return value) so camera_regent.gd
+## can capture prior state and restore it later without duplicating either
+## the "UI/PlayerUI" node path or the enzyme-label push/refresh sequence.
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.is_echo()):
 		return
 	match event.keycode:
 		KEY_F2:
-			var player_ui := get_node_or_null("UI/PlayerUI")
-			if player_ui != null:
-				player_ui.visible = not player_ui.visible
+			set_player_ui_visible(not is_player_ui_visible())
 		KEY_F3:
 			var tm := get_node_or_null("%ThemeManager")
-			if tm != null:
-				tm.enzyme_labels_enabled = not tm.enzyme_labels_enabled
-				if helicase_ring != null:
-					helicase_ring.set_label_enabled(tm.enzyme_labels_enabled)
-				# ligase/pol1/primase_blip/polymerase_clamp only refresh
-				# _label.visible when their own set_pulse()/set_pump() tween
-				# fires — pushed explicitly here so idle/hidden instances
-				# don't show a stale label the next time they're kicked
-				# into view.
-				if replication_mgr != null:
-					if replication_mgr.ligase != null:
-						replication_mgr.ligase.refresh_label_visibility()
-					if replication_mgr.pol1 != null:
-						replication_mgr.pol1.refresh_label_visibility()
-					if replication_mgr.primase_blip != null:
-						replication_mgr.primase_blip.refresh_label_visibility()
-					if replication_mgr.leading_clamp != null:
-						replication_mgr.leading_clamp.refresh_label_visibility()
-					if replication_mgr.lagging_clamp != null:
-						replication_mgr.lagging_clamp.refresh_label_visibility()
+			set_enzyme_labels_enabled(tm == null or not tm.enzyme_labels_enabled)
+
+## Player UI panel visibility — single source of truth for both the F2
+## keybinding above and camera_regent.gd's shot setup/teardown. Returns the
+## PREVIOUS visibility (before this call), so a caller that needs to
+## restore state later doesn't need its own separate read of
+## "UI/PlayerUI".visible.
+func set_player_ui_visible(player_ui_visible: bool) -> bool:
+	var player_ui := get_node_or_null("UI/PlayerUI")
+	if player_ui == null:
+		return true
+	var previous: bool = player_ui.visible
+	player_ui.visible = player_ui_visible
+	return previous
+
+func is_player_ui_visible() -> bool:
+	var player_ui := get_node_or_null("UI/PlayerUI")
+	return player_ui == null or player_ui.visible
+
+## Global enzyme-label visibility — single source of truth for both the F3
+## keybinding above and camera_regent.gd. Returns the PREVIOUS enabled
+## state, same "caller doesn't need its own separate read" reasoning as
+## set_player_ui_visible() above.
+func set_enzyme_labels_enabled(enabled: bool) -> bool:
+	var tm := get_node_or_null("%ThemeManager")
+	if tm == null:
+		return true
+	var previous: bool = tm.enzyme_labels_enabled
+	tm.enzyme_labels_enabled = enabled
+	if helicase_ring != null:
+		helicase_ring.set_label_enabled(enabled)
+	# ligase/pol1/primase_blip/polymerase_clamp only refresh
+	# _label.visible when their own set_pulse()/set_pump() tween
+	# fires — pushed explicitly here so idle/hidden instances
+	# don't show a stale label the next time they're kicked
+	# into view.
+	if replication_mgr != null:
+		if replication_mgr.ligase != null:
+			replication_mgr.ligase.refresh_label_visibility()
+		if replication_mgr.pol1 != null:
+			replication_mgr.pol1.refresh_label_visibility()
+		if replication_mgr.primase_blip != null:
+			replication_mgr.primase_blip.refresh_label_visibility()
+		if replication_mgr.leading_clamp != null:
+			replication_mgr.leading_clamp.refresh_label_visibility()
+		if replication_mgr.lagging_clamp != null:
+			replication_mgr.lagging_clamp.refresh_label_visibility()
+	return previous
 
 func _ready():
 	# Register the helicase zoom target once. The frame-providers close over

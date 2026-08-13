@@ -15,6 +15,7 @@
 [ext_resource type="Script" uid="uid://6y37sg7poatt" path="res://scripts/molecule_structure_renderer.gd" id="12_molstruct"]
 [ext_resource type="PackedScene" path="res://scenes/DnaUnwindIntro.tscn" id="13_dnaintro"]
 [ext_resource type="FontFile" uid="uid://ba4l0yjamuoiq" path="res://fonts/Raleway/static/Raleway-Bold.ttf" id="15_i46hp"]
+[ext_resource type="Script" uid="uid://bx0u4xq8xew0o" path="res://scripts/camera_regent.gd" id="16_camregent"]
 
 [sub_resource type="Curve2D" id="Curve2D_mwrr7"]
 
@@ -31,6 +32,10 @@ wobble_phase_offset = 1.0
 unique_name_in_owner = true
 position = Vector2(640, 360)
 script = ExtResource("2_1hwtu")
+
+[node name="CameraRegent" type="Node" parent="." unique_id=527255606]
+script = ExtResource("16_camregent")
+capsule_shot_target_zoom = 12.0
 
 [node name="CanvasLayer" type="CanvasLayer" parent="." unique_id=114831926]
 layer = -10

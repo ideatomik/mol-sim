@@ -475,7 +475,9 @@ func _target_entry_level(id: String) -> int:
 ## targets — see register_target()). Refuses if the target isn't currently
 ## visible on screen (e.g. hasn't faded in yet before play starts) — see
 ## is_target_visible().
-func select_target(id: String) -> void:
+## `duration`/`trans_type`/`ease_type`: see _transition_to_level()'s own
+## comment — optional, defaults reproduce prior behavior exactly.
+func select_target(id: String, duration: float = -1.0, trans_type: Tween.TransitionType = Tween.TRANS_CUBIC, ease_type: Tween.EaseType = Tween.EASE_OUT) -> void:
 	if not _targets.has(id):
 		push_warning("ZoomManager: unknown target id '%s'" % id)
 		return
@@ -485,7 +487,7 @@ func select_target(id: String) -> void:
 	_free_camera_mode = false  # exits free camera — picking a target is one of its two explicit exits
 	exit_follow_mode()  # a different input method (dropdown, cycle) picking a target should override follow too
 	current_target_id = id
-	_transition_to_level(_target_entry_level(id))
+	_transition_to_level(_target_entry_level(id), duration, trans_type, ease_type)
 	target_changed.emit(id)
 
 ## Sets current_target_id WITHOUT transitioning levels. Used to sync a
@@ -585,6 +587,65 @@ func _set_free_camera_position(p: Vector2) -> void:
 	_free_camera_position = p
 	global_position = p
 
+## Scripted equivalent of a player's own free-camera scroll/drag — for
+## camera_regent.gd's recorded shots. Puts the camera into REAL free-camera
+## mode (not a level/target framing), so anything gated on
+## free_camera_mode() — molecule_structure_renderer.gd's atom-tier skeletal
+## rendering is gated exactly this way, deliberately never activated by the
+## level/target system (see that file's _compute_active() comment) —
+## activates precisely as it would for a real player's own scroll-zoom,
+## just driven by an explicit duration/easing instead of the fixed
+## player-facing scroll-zoom ease. Reuses _free_camera_recenter_tween
+## (already the "tween the free camera to a new position" tween — this is
+## the same operation, now also animating zoom and driven by caller-
+## supplied params) rather than adding a second tracked tween var. Keeps
+## _free_camera_zoom/_free_camera_target_zoom/_free_camera_position in sync
+## throughout via tween_method + setter (same pattern _recenter_free_
+## camera()/_set_free_camera_position() already use for position alone) —
+## so a player scrolling/dragging right after this shot ends resumes from
+## consistent, non-stale free-camera state instead of jumping.
+func enter_scripted_free_camera(target_zoom: float, target_position: Vector2, duration: float, trans_type: Tween.TransitionType, ease_type: Tween.EaseType) -> void:
+	exit_follow_mode()
+	set_pending_target("")
+	# Seed from the camera's ACTUAL current zoom/position (same as
+	# _enter_free_camera_mode() does) — NOT from whatever _free_camera_zoom/
+	# _free_camera_position already happen to hold. Those private vars are
+	# only kept live while ALREADY in free-camera mode; arriving here from
+	# level-based mode (the normal case — this shot starts cold) leaves
+	# them at stale/default values (zoom=1.0, position=(0,0), i.e. world
+	# origin) that have nothing to do with where the camera is actually
+	# showing right now. Tweening from THAT instead of the real current
+	# state is what caused the reported "camera swings over to the first
+	# residue, then back to the target" — the tween's own start point was
+	# wrong, not the target.
+	if not _free_camera_mode:
+		_free_camera_zoom = zoom.x
+		_free_camera_position = global_position
+	_free_camera_mode = true
+	if _transition_tween != null and _transition_tween.is_valid():
+		_transition_tween.kill()
+	if _pan_release_tween != null and _pan_release_tween.is_valid():
+		_pan_release_tween.kill()
+	if _free_camera_recenter_tween != null and _free_camera_recenter_tween.is_valid():
+		_free_camera_recenter_tween.kill()
+	_free_camera_recenter_tween = create_tween()
+	_free_camera_recenter_tween.set_parallel(true)
+	_free_camera_recenter_tween.tween_method(_set_free_camera_zoom, _free_camera_zoom, target_zoom, duration)\
+		.set_trans(trans_type).set_ease(ease_type)
+	_free_camera_recenter_tween.tween_method(_set_free_camera_position, _free_camera_position, target_position, duration)\
+		.set_trans(trans_type).set_ease(ease_type)
+
+## tween_method callback, same reasoning as _set_free_camera_position()
+## above — keeps _free_camera_zoom AND _free_camera_target_zoom equal to
+## the tween's current value every step, which is what makes
+## _ease_free_camera_zoom()'s is_equal_approx() early-return every frame
+## while this tween is running (no competing per-frame ease fighting this
+## scripted one).
+func _set_free_camera_zoom(z: float) -> void:
+	_free_camera_zoom = z
+	_free_camera_target_zoom = z
+	zoom = Vector2(z, z)
+
 func _tween_pan_to_zero() -> void:
 	if _pan_release_tween != null and _pan_release_tween.is_valid():
 		_pan_release_tween.kill()
@@ -629,7 +690,16 @@ func reset_zoom_instant() -> void:
 # level/target CHANGE itself is. See ZoomDesign.md's scrub-safety split.
 # ==========================================
 
-func _transition_to_level(level: int) -> void:
+## `duration`/`trans_type`/`ease_type` are optional per-call overrides —
+## default (-1.0 sentinel, TRANS_CUBIC, EASE_OUT) reproduces the ORIGINAL
+## hardcoded behavior exactly for every existing caller (reset_zoom(),
+## set_zoom_level(), select_target()'s own default), so this is purely
+## additive: nothing about normal level/target navigation changes unless a
+## caller explicitly asks for something different. Added for
+## camera_regent.gd's scripted shots, which need Inspector-tunable
+## duration/easing per shot rather than sharing the one global
+## tm.zoom_level_transition_duration every other transition uses.
+func _transition_to_level(level: int, duration: float = -1.0, trans_type: Tween.TransitionType = Tween.TRANS_CUBIC, ease_type: Tween.EaseType = Tween.EASE_OUT) -> void:
 	if _transition_tween != null and _transition_tween.is_valid():
 		_transition_tween.kill()
 	if _pan_release_tween != null and _pan_release_tween.is_valid():
@@ -645,13 +715,14 @@ func _transition_to_level(level: int) -> void:
 	else:
 		frame = _compute_strand_fit()  # generic overworld fit — used below any target's entry level
 
+	var actual_duration: float = duration if duration >= 0.0 else tm.zoom_level_transition_duration
 	zoom_level = level
 	_transition_tween = create_tween()
 	_transition_tween.set_parallel(true)
-	_transition_tween.tween_property(self, "zoom", Vector2(frame.zoom, frame.zoom), tm.zoom_level_transition_duration)\
-		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_transition_tween.tween_property(self, "global_position", frame.position, tm.zoom_level_transition_duration)\
-		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_transition_tween.tween_property(self, "zoom", Vector2(frame.zoom, frame.zoom), actual_duration)\
+		.set_trans(trans_type).set_ease(ease_type)
+	_transition_tween.tween_property(self, "global_position", frame.position, actual_duration)\
+		.set_trans(trans_type).set_ease(ease_type)
 	zoom_level_changed.emit(level)
 
 ## Called by simulation.gd's scrub functions so an in-flight level/target
