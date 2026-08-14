@@ -1,4 +1,4 @@
-# Zymosim (ex-MolSim) — Plano de Projeto e Financiamento
+# Zymulador (ex-MolSim; avaliado neste documento sob o candidato "Zymosim") — Plano de Projeto e Financiamento
 
 *Documento de trabalho — Embaúba*
 *Última atualização: 22 de julho de 2026*

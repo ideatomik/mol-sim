@@ -1,4 +1,4 @@
-# MolSim — Implementation Status
+# Zymulador — Implementation Status
 _Current architecture state, roadmap, pinned issues, and scene structure —
 the volatile counterpart to DESIGN.md's stable philosophy and biological
 model. Split out of DESIGN.md in this pass, after its Roadmap section had

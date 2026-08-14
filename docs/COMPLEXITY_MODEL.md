@@ -1,13 +1,13 @@
-# MolSim — Complexity Model & The Chimera Decision
+# Zymulador — Complexity Model & The Chimera Decision
 _Design document. Companion to DESIGN.md. Maps the full palette of DNA
-replication components MolSim could model, the organizing principle for
+replication components Zymulador could model, the organizing principle for
 choosing among them, and how the complexity toggles relate to one another._
 
 ---
 
 ## The Core Decision: A Labeled Chimera
 
-MolSim originally adopted the **E. coli** model for its clean, well-characterized
+Zymulador originally adopted the **E. coli** model for its clean, well-characterized
 replisome body. For a didactic tool, though, the most useful model is not any
 single organism but a deliberate **chimera** — one that pulls the clearest
 illustration of each concept from whichever domain of life shows it best.
@@ -51,7 +51,7 @@ The single most important structural constraint: **chromosome topology is not
 free to mix.** A molecule cannot be simultaneously circular (forks meet, no
 ends) and linear (has ends requiring telomere maintenance).
 
-This matters because MolSim's *current* roadmap is already chimeric in a way
+This matters because Zymulador's *current* roadmap is already chimeric in a way
 that quietly conflicts:
 
 - The **telomere gap / telomerase tier** (`lagging_gap_enabled`) is a
@@ -92,7 +92,7 @@ This retroactively resolves two earlier open questions:
 
 ## The Full Component Palette
 
-Everything MolSim could model, by replication stage. `[✓]` already in DESIGN.md,
+Everything Zymulador could model, by replication stage. `[✓]` already in DESIGN.md,
 `[~]` planned/mentioned, `[NEW]` surfaced during this mapping and not previously
 scoped.
 
@@ -169,13 +169,13 @@ DESIGN.md currently starts mid-elongation with the fork already open.
 
 ## The Polymerase Zoo & Translesion Synthesis
 
-E. coli alone has **five** DNA polymerases. MolSim currently models Pol III
+E. coli alone has **five** DNA polymerases. Zymulador currently models Pol III
 (as leading/lagging polymerase) and Pol I (primer removal, as a real
 Complex-tier node — see OkazakiMaturationDesign.md). The other three are not
 backup replicases — they are a **DNA-damage rescue crew** and constitute a
-complexity branch MolSim has no representation of at all.
+complexity branch Zymulador has no representation of at all.
 
-| Polymerase | Role | Fidelity | In MolSim |
+| Polymerase | Role | Fidelity | In Zymulador |
 | --- | --- | --- | --- |
 | Pol I | Primer removal, gap fill (nick translation) | High | `[✓]` built — see OkazakiMaturationDesign.md |
 | Pol II | SOS-induced fork rescue | — | `[NEW]` |
@@ -189,7 +189,7 @@ trading fidelity for continuity. Pol V is notably regulated: it cannot bind DNA
 until it forms a "mutasome" with a RecA filament and ATP.
 
 **Why this is a distinct branch, not more polymerase toggles.** It introduces a
-prerequisite chain MolSim does not yet have:
+prerequisite chain Zymulador does not yet have:
 
 ```
 DNA Damage / Lesion  [NEW mechanic — a base Pol III literally cannot read past]
@@ -410,7 +410,7 @@ sparse relationships; a full N×N matrix would be mostly empty.
 | translesion_pol45 | Damage tolerance | lesion_sos | — | NEW |
 | wobble_enabled | Cross-cutting lens | — | — | ✓ |
 | atp_activation_enabled | Cross-cutting lens | — | — | NEW |
-| temperature | Cross-cutting dial | — | — | NEW (existed in old MolSim) |
+| temperature | Cross-cutting dial | — | — | NEW (existed in old Zymulador) |
 
 ---
 

@@ -1,4 +1,4 @@
-MolSim — Molecular Structure Design: Open Questions
+Zymulador — Molecular Structure Design: Open Questions
 Resolution pass — render-mode / zoom / culling cluster (Q4, Q7, Q8, Q9)
 =====================================================================
 This resolves the render-mode cluster only. Q1 (aconitase), Q3 (stereo),

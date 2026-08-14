@@ -487,7 +487,7 @@ update belongs in COMPLEXITY_MODEL.md itself.
   Trails behind Pol I.
 
 Real cells often use RNase H to remove most of the RNA primer first, with Pol I
-mopping up the last ribonucleotide. MolSim doesn't model RNase H as a separate
+mopping up the last ribonucleotide. Zymulador doesn't model RNase H as a separate
 step — Pol I alone is capable of the whole removal, and RNase H would add a fourth
 enzyme for a distinction beyond this project's didactic scope. Worth a one-line
 mention in `_FULL` label text later, not a modeled mechanic.

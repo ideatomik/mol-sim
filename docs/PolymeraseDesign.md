@@ -68,7 +68,7 @@ Biologically, DNA Pol III is a clamp-shaped enzyme encircling the DNA via
 the sliding clamp (β-clamp) — structurally and functionally distinct from
 the helicase (which unwinds; the polymerase clamps and synthesizes). The
 same enzyme (Pol III) performs both leading and lagging synthesis in the
-E. coli model MolSim follows.
+E. coli model Zymulador follows.
 
 ---
 

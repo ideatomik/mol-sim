@@ -1,7 +1,7 @@
-# MolSim — The Shared Base Layer Seam
+# Zymulador — The Shared Base Layer Seam
 
 _Design contract. Companion to DESIGN.md and COMPLEXITY_MODEL.md. Articulates
-the boundary between what is **shared** across all MolSim simulations and what
+the boundary between what is **shared** across all Zymulador simulations and what
 is **specific** to DNA replication, so that any future extraction of a common
 base layer has a target to honor. This is a contract, not a refactor plan — the
 refactor itself is deferred until transcription/translation design begins._
@@ -10,7 +10,7 @@ refactor itself is deferred until transcription/translation design begins._
 
 ## Why this exists
 
-MolSim is not one simulation. It is a family of processes that share a
+Zymulador is not one simulation. It is a family of processes that share a
 substrate but differ in mechanism:
 
 - **Replication** (built)

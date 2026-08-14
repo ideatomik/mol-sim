@@ -1,8 +1,8 @@
 ---
-name: molsim-gdscript
+name: zymulador-gdscript
 description: >
   Read this skill before writing, editing, or reviewing any GDScript code OR
-  .tscn scene files for the MolSim project (Godot 4.x,
+  .tscn scene files for the Zymulador project (Godot 4.x,
   E:/Godot Projects/MolSim/mol-sim/). Covers the Crystal Building session
   method, GDScript hard rules, silent Godot engine traps (.tscn attribute
   placement, Camera2D.ignore_rotation, stale editor state), edit protocol,
@@ -11,11 +11,11 @@ description: >
 version: "81.0"
 ---
 
-# MolSim GDScript Skill
+# Zymulador GDScript Skill
 
 ## When to use this skill
 Read this file before writing, editing, or reviewing any GDScript code for the
-MolSim project (Godot 4.x, located at `E:/Godot Projects/MolSim/mol-sim/`).
+Zymulador project (Godot 4.x, located at `E:/Godot Projects/MolSim/mol-sim/`).
 Main scene: `res://scenes/simulation.tscn`.
 Main script: `res://scripts/simulation.gd`.
 Helicase sub-manager: `res://scripts/helicase.gd`.
@@ -198,7 +198,7 @@ wrong mechanism breaks every one.
 This is *why* the trap above is silent rather than an error. Never infer from
 "the scene loaded" that an attribute you added was understood.
 
-### `unique_id=` in MolSim's `.tscn` files is an unrecognized dialect — leave it alone
+### `unique_id=` in Zymulador's `.tscn` files is an unrecognized dialect — leave it alone
 Every `[node]` header carries `unique_id=<int>`. It is **not**
 `unique_name_in_owner` despite the resemblance, and its purpose is not documented
 here. Don't touch it. When deriving a NEW scene from an existing one, strip it
@@ -270,7 +270,7 @@ current authoritative source (a recent review, textbook, or primary paper) —
 don't rely on trained-in recall. As zoom depth and mechanism count grow, the
 risk of quietly conflating adjacent facts (wrong rate-limiting step, wrong
 enzyme assignment, a detail that's true for one organism but not the one
-MolSim models) grows with it, and errors like that are far more expensive to
+Zymulador models) grows with it, and errors like that are far more expensive to
 catch after they're embedded in animation logic than before.
 
 Cite what was checked: name the source and pull the specific supporting detail
@@ -360,7 +360,7 @@ version when behavior changes, not when comments move.
 
 ## Target Architecture
 
-MolSim is a molecular biology education platform covering the central dogma:
+Zymulador is a molecular biology education platform covering the central dogma:
 replication → transcription → translation. The script structure follows biological
 boundaries, not technical convenience.
 
@@ -754,7 +754,7 @@ primase's dead field above; both fixed fields safe to remove if still present)
 
 ## Biological Model Reference
 
-MolSim follows the E. coli replication model. Didactic accuracy over exhaustive
+Zymulador follows the E. coli replication model. Didactic accuracy over exhaustive
 precision — short sequences, simplified geometry.
 
 - DNA Pol III synthesizes only 5'→3'

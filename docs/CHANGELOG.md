@@ -1,6 +1,6 @@
-# MolSim — Changelog
+# Zymulador — Changelog
 
-Version history for the MolSim project. This file is the **single owner of
+Version history for the Zymulador project. This file is the **single owner of
 version history**. Nothing else in the project keeps a running version log.
 
 **Ownership boundary** (see SKILL.md's "Version comments" section):

@@ -1,4 +1,4 @@
-MolSim — Molecular Structure Design: Open Questions
+Zymulador — Molecular Structure Design: Open Questions
 Resolution pass — Q3 (narrow slice) and Q5
 =====================================================================
 This resolves the milestone-blocking half of Q3 and the whole of Q5.

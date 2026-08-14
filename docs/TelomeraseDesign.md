@@ -51,7 +51,7 @@ lengthened region.
    its own internal RNA against the existing DNA end.
 3. Using that RNA as template, it reverse-transcribes new DNA repeats onto
    the template strand's 3' end. This is synthesis in the **template**
-   direction — the strand MolSim currently treats as fixed and read-only.
+   direction — the strand Zymulador currently treats as fixed and read-only.
 4. It **translocates**: releases, repositions further out along its own
    just-synthesized repeat, and repeats the cycle. Real telomerase does this
    several times per telomere-maintenance event, not once.

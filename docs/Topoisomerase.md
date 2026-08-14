@@ -8,7 +8,7 @@ this reuses._
 
 ## Context
 
-Real DNA is a double helix. MolSim's established didactic convention is to
+Real DNA is a double helix. Zymulador's established didactic convention is to
 render it as flat, parallel ribbons instead — deliberately, so viewers can
 track base-pairing and synthesis without the visual noise of a twisting
 strand. This convention applies to both the replicated region (behind the

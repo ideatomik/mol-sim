@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/name="MolSim"
+config/name="Zymulador"
 run/main_scene="uid://c6lmtknskx8xm"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 boot_splash/show_image=false

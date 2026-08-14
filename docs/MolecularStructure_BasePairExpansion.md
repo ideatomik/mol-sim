@@ -1,4 +1,4 @@
-# MolSim — Molecular Structure: Base-Pair Expansion (Growth Session 2)
+# Zymulador — Molecular Structure: Base-Pair Expansion (Growth Session 2)
 
 _Resolution/expansion doc, following the `MolecularStructure_OpenQuestions_*.md`
 naming convention. Companion to `MolecularStructureDesign.md` (the Lattice-

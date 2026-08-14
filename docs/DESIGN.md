@@ -1,5 +1,5 @@
-# MolSim — Design Document
-_Stable design philosophy and biological model — what MolSim is, why
+# Zymulador — Design Document
+_Stable design philosophy and biological model — what Zymulador is, why
 modular complexity, and the biology it's teaching. This content doesn't
 change when a feature ships, and isn't expected to. For current
 implementation status, active roadmap, pinned issues, and scene structure,
@@ -10,9 +10,9 @@ header for the fuller account of what prompted it._
 
 ---
 
-## What MolSim Is
+## What Zymulador Is
 
-MolSim is a molecular biology education platform built in Godot 4.x (GDScript).
+Zymulador is a molecular biology education platform built in Godot 4.x (GDScript).
 It is not just a DNA replication simulator — replication is Phase 1 of a broader
 simulation covering the central dogma: **DNA replication → Transcription → Translation**.
 
@@ -120,7 +120,7 @@ against front-loading sibling-process detail.
 
 ## Biological Model
 
-MolSim follows the **E. coli replication model** for accuracy and visual clarity.
+Zymulador follows the **E. coli replication model** for accuracy and visual clarity.
 
 ### Key biological facts encoded in the simulation
 - DNA Pol III can only synthesize 5'→3'
