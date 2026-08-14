@@ -55,14 +55,12 @@ var _bond_layout: Array[Dictionary] = []
 var _h_bond_layout: Array[Dictionary] = []
 ## {c5: Vector2, c3: Vector2} — one entry per rendered residue, the two
 ## world-space endpoints of that residue's OWN intra-residue C5'->C3'
-## segment. Provisional/debug (see theme_manager.gd's
-## molecular_debug_capsule_* fields — MolecularIdentityHierarchy_Design.md's
-## "directional highlight" investigation, this specific per-residue capsule
-## shape supersedes that doc's continuous inter-residue ribbon resolution,
-## decided in discussion). Populated unconditionally alongside
-## _bond_layout/_atom_layout every rebuild (same convention as those two —
-## tier-gating happens at _draw() time, not here), drawn only when
-## tm.molecular_debug_capsule_enabled and _label_full_geometry_active.
+## segment (MolecularIdentityHierarchy_Design.md's "directional highlight"
+## investigation). No longer drawn directly — camera_regent.gd's scripted
+## capsule shot is the sole consumer now, via get_residue_capsule_positions()
+## / get_residue_capsule_positions_when_centered() below, which read from
+## _last_capsule_by_key (built from this array). Populated unconditionally
+## alongside _bond_layout/_atom_layout every rebuild.
 var _capsule_layout: Array[Dictionary] = []
 
 ## Last rebuild's o3_by_key/alpha_by_key (see _build_backbone_bonds()) —
@@ -391,21 +389,6 @@ func _atom_display_label(role: String, element: String, full_geometry: bool) -> 
 		return element
 	var suffix: String = _role_suffix(role)
 	return ATOM_DISPLAY_LABELS.get(suffix, element)
-
-## Provisional/debug — see theme_manager.gd's molecular_debug_label_filter_*
-## fields (trailer-capture tool, not a committed feature). Reports whether
-## THIS atom matches the filter rule — the caller decides what to do with
-## that (currently: gate which atoms keep a full label once already at the
-## full-label zoom tier; see the _atom_layout.append() call site). Pure
-## function of tm's current export state + this atom's own identity, no new
-## frame-to-frame state, so it stays scrub-safe by construction.
-func _debug_label_filter_matches_atom(role: String, element: String, base_type: String) -> bool:
-	if not tm.molecular_debug_label_filter_enabled:
-		return false
-	if base_type in tm.molecular_debug_label_filter_bases:
-		return true
-	var full_label: String = _atom_display_label(role, element, true)
-	return full_label in tm.molecular_debug_label_filter_atom_names
 
 ## Shared by _atom_display_label() above and _bond_is_carbonyl() below —
 ## topology.atoms' role strings are always "incoming.<suffix>" or
@@ -868,14 +851,7 @@ func _rebuild_layout() -> void:
 			var local_offset: Vector2 = local_positions[atom.id] - anchor_offset
 			residue_max_extent = max(residue_max_extent, local_offset.length())
 			var world: Vector2 = world_pos + local_offset
-			# Filter is inert below the full-label tier — it's a SUPPRESS-non-
-			# matches tool, not a promote-early one: below the tier, rendering
-			# must stay byte-identical to pre-filter behavior. Only once
-			# _label_full_geometry_active is already true does an enabled
-			# filter narrow "everyone full" down to "only matches full."
 			var full_for_this_atom: bool = _label_full_geometry_active
-			if _label_full_geometry_active and tm.molecular_debug_label_filter_enabled:
-				full_for_this_atom = _debug_label_filter_matches_atom(atom.role, atom.element, entry.base_type)
 			_atom_layout.append({
 				position = world,
 				element = atom.element,
@@ -1475,26 +1451,6 @@ func _draw_backbone_arrowhead(points: Array, color: Color) -> void:
 	draw_polygon(PackedVector2Array([tip, base_a, base_b]), PackedColorArray([color]))
 
 
-## Provisional/debug — see _capsule_layout's own comment. Border-only
-## (never filled) padded capsule around the c5->c3 segment — geometry comes
-## from ProceduralShapeUtils.capsule_outline() (added there specifically
-## for this mockup; NOT round_corners(), which rounds a pre-built polygon's
-## sharp vertices via a sampled bezier pullback rather than synthesizing a
-## true semicircular cap from two bare endpoints + a radius). draw_polyline
-## draws the closed loop as a stroke only — never filled. `padding` is the
-## gap between the ATOM's own edge and the capsule border, not the capsule
-## radius itself — the actual cap radius has to include the atom's own
-## radius on top, or the cap lands inside the atom instead of around it
-## (caught live: an earlier version passed padding alone as the radius).
-func _draw_c5_c3_capsule(c5: Vector2, c3: Vector2, padding: float, width: float, color: Color) -> void:
-	var radius: float = tm.molecular_atom_radius + padding
-	var outline: PackedVector2Array = ProceduralShapeUtils.capsule_outline(c5, c3, radius, 12)
-	# antialiased=false, matching every other line in this renderer
-	# (backbone/ring bonds, the arrowhead) — true here read visibly softer
-	# than the rest of the scene's crisp lines.
-	draw_polyline(outline, color, width, false)
-
-
 func _draw() -> void:
 	if _transition_fraction <= 0.0:
 		return
@@ -1576,17 +1532,6 @@ func _draw() -> void:
 			var arrow_color: Color = tm.molecular_backbone_arrow_color
 			arrow_color.a *= t
 			_draw_backbone_arrowhead(points, arrow_color)
-
-	# Provisional/debug — intra-residue C5'->C3' capsule mockup (see
-	# _capsule_layout's own comment). Same inert-below-full-label-tier
-	# convention as the label filter: both conditions gate the DRAW here,
-	# not the layout build above, matching this file's existing pattern for
-	# _bond_layout/_atom_layout (build unconditionally, gate at draw time).
-	if tm.molecular_debug_capsule_enabled and _label_full_geometry_active:
-		var capsule_color: Color = tm.molecular_debug_capsule_border_color
-		capsule_color.a *= t
-		for c in _capsule_layout:
-			_draw_c5_c3_capsule(c.c5, c.c3, tm.molecular_debug_capsule_padding, tm.molecular_debug_capsule_border_width, capsule_color)
 
 	# Hydrogen bonds: one dotted line per REAL atom pair
 	# (docs/MolecularStructure_BasePairExpansion.md — supersedes the old

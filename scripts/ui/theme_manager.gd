@@ -719,57 +719,15 @@ extends Node
 # to the same reachable window as molecular_label_zoom_enter_threshold.
 # NOT YET TUNED beyond that.
 
-@export_subgroup("DEBUG — Label Filter (provisional, trailer-capture tool)")
-## Provisional/debug override for isolating specific atoms in a capture —
-## NOT a committed feature (a real teacher-facing "highlight this" tool is
-## a separate future design pass). Master toggle: false is a no-op, same
-## render output as before this field existed. Inert below the full-label
-## zoom tier — every tier before that renders identically whether this is
-## true or false. Once ALREADY at the full-label tier (where every atom
-## would otherwise show full chemistry notation), enabling this SUPPRESSES
-## every atom that matches neither molecular_debug_label_filter_atom_names
-## nor molecular_debug_label_filter_bases back down to element-only,
-## leaving only the matches at full detail. Remove this subgroup once the
-## trailer shot is captured, or fold into a real feature at that point.
-@export var molecular_debug_label_filter_enabled: bool = false
-## Full-geometry display-label strings to keep at full detail once at the
-## full-label zoom tier (exact match against ATOM_DISPLAY_LABELS' OWN
-## output — e.g. ["Pα", "O3'", "O5'", "C1'", "C2'", "C3'", "C4'", "C5'",
-## "O4'"] for "phosphodiester + both flanking pentoses"). Case-sensitive,
-## must match the rendered string exactly.
-@export var molecular_debug_label_filter_atom_names: Array[String] = []
-## Base letters ("A"/"T"/"C"/"G") whose residues keep every atom at full
-## label — e.g. ["A", "T"] to highlight only adenine/thymine residues.
-@export var molecular_debug_label_filter_bases: Array[String] = []
-
-@export_subgroup("DEBUG — Directional Highlight Mockup (provisional, intra-residue capsule variant)")
-## Provisional/mockup — NOT a committed feature. First variant of the
-## directional-highlight investigation (MolecularIdentityHierarchy_Design.md)
-## — a discrete, border-only, padded capsule around each residue's OWN
-## intra-residue C5'->C3' segment (one capsule per residue, NOT a
-## continuous inter-residue thread — that construction is superseded here
-## in favor of this narrower per-residue shape, decided in discussion; the
-## inter-residue path stays covered by the existing backbone bond + its own
-## directional arrow, molecular_backbone_arrow_* above). Master toggle:
-## false is a no-op. Inert below the full-label zoom tier, same convention
-## as molecular_debug_label_filter_enabled above — every tier before that
-## renders identically regardless of this flag.
-@export var molecular_debug_capsule_enabled: bool = false
-## Gap (world units) between an ATOM's own edge and the capsule border —
-## NOT the end-cap radius itself. The actual cap radius (see
-## molecule_structure_renderer.gd's _draw_c5_c3_capsule()) is
-## molecular_atom_radius + this value, so the C5'/C3' atoms always sit
-## fully inside their end of the capsule with this much visible gap to the
-## border, regardless of molecular_atom_radius's own tuning. NOT YET TUNED.
+@export_subgroup("Capsule Shot (camera_regent.gd recording driver)")
+## Gap (world units) between an intra-residue C5'/C3' capsule position's own
+## atom edge and its notional capsule border. No debug capsule outline is
+## drawn anymore, but camera_regent.gd's scripted "capsule shot" still uses
+## the underlying c5/c3 positions (molecule_structure_renderer.gd's
+## get_residue_capsule_positions()), and capsule_arrow_overlay.gd's
+## CapsuleArrowOverlay reads this padding directly to size/position its
+## sweep arrow relative to that notional capsule.
 @export var molecular_debug_capsule_padding: float = 3.0
-## Capsule border stroke width (world units). NOT YET TUNED.
-@export var molecular_debug_capsule_border_width: float = 1.5
-## Capsule border color. Border/outline only — the capsule interior is
-## never filled. NOT YET TUNED — chosen distinct from
-## molecular_backbone_bond_color (gold) and molecular_backbone_arrow_color
-## (green) purely so it doesn't visually merge with either while both are
-## on screen at the same zoom tier.
-@export var molecular_debug_capsule_border_color: Color = Color(1.0, 0.4, 0.9)
 
 @export_subgroup("Bead Crossfade / Desaturation")
 # Bead<->molecular crossfade itself reuses molecular_zoom_enter/exit_
