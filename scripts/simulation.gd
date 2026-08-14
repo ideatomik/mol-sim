@@ -549,7 +549,7 @@ func initialize_simulation(sequence: String):
 	# 4b. Create or re-initialize helicase manager
 	if helicase_mgr != null:
 		helicase_mgr.queue_free()
-	var HelicastScript = load("res://scripts/helicase.gd")
+	var HelicastScript = load("res://scripts/replication/helicase.gd")
 	helicase_mgr = HelicastScript.new()
 	add_child(helicase_mgr)
 	helicase_mgr.initialize(num_nucleotide_slots, settling_duration)
@@ -558,7 +558,7 @@ func initialize_simulation(sequence: String):
 
 	# 4c. Create replication manager once; reset it for each new sequence
 	if replication_mgr == null:
-		var RepScript = load("res://scripts/replication_manager.gd")
+		var RepScript = load("res://scripts/replication/replication_manager.gd")
 		replication_mgr = RepScript.new()
 		add_child(replication_mgr)
 		replication_mgr.initialize(self)
