@@ -23,6 +23,7 @@
 script = ExtResource("1_5eski")
 num_nucleotide_slots = 34
 dna_ribbons_gap = 60.0
+okazaki_fragment_size = 6
 fade_duration = 1.0
 wobble_amplitude = 0.9
 wobble_speed = 1.0
@@ -36,6 +37,8 @@ script = ExtResource("2_1hwtu")
 [node name="CameraRegent" type="Node" parent="." unique_id=527255606]
 script = ExtResource("16_camregent")
 capsule_shot_target_zoom = 12.0
+capsule_shot_transition_seconds = 4.0
+capsule_shot_transition_type = 3
 
 [node name="CanvasLayer" type="CanvasLayer" parent="." unique_id=114831926]
 layer = -10
@@ -98,7 +101,8 @@ simulation = NodePath("../..")
 
 [node name="DnaUnwindIntro" parent="UI" unique_id=681246 instance=ExtResource("13_dnaintro")]
 unique_name_in_owner = true
-rotation_duration_seconds = 5.0
+rotation_duration_seconds = 1.5
+total_spin_turns = 2.0
 
 [node name="NucleotideField" type="Node2D" parent="." unique_id=2115278003]
 script = ExtResource("8_160l5")
@@ -131,6 +135,12 @@ base_color_a = Color(1, 0.20392157, 0.5137255, 1)
 base_color_t = Color(0.5686275, 0, 0.5529412, 1)
 base_color_c = Color(0.12941177, 0.6117647, 0.5647059, 1)
 base_color_g = Color(1, 0.61055017, 0, 1)
+pair_highlight_padding = 10.0
+pair_highlight_border_width = 8.0
+pair_highlight_border_color = Color(0.95686275, 0, 1, 1)
+primer_highlight_padding = 10.0
+primer_highlight_border_width = 8.0
+primer_highlight_border_color = Color(0.95686275, 0, 1, 1)
 backbone_color = Color(0.52734846, 0.92303544, 0.51589483, 1)
 template_backbone_color = Color(0.68235296, 0.8392157, 1, 1)
 bond_mark_color = Color(0.16853547, 5.2943824e-06, 0.7380671, 1)
@@ -178,8 +188,9 @@ rna_bond_mark_line_width = 4.0
 rna_bond_mark_color = Color(1, 1, 1, 1)
 rna_base_label_color = Color(0, 0, 0, 1)
 sequence_text_synthesized_color = Color(0.28530824, 0.97445637, 0.57307744, 1)
+zoom_helicase_level2_fit = 0.5
 zoom_helicase_level3_fit = 0.25
-zoom_leading_level2_fit = 0.25
+zoom_leading_level2_fit = 0.75
 zoom_lagging_level2_fit = 0.25
 zoom_free_camera_max_zoom_in = 13.0
 molecular_label_zoom_enter_threshold = 9.0

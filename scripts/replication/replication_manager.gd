@@ -1590,6 +1590,34 @@ func _lagging_latest_fired_slot() -> int:
 		return -1
 	return lagging_current_fragment.slots[0]
 
+## Camera-tool helper (camera_regent.gd, shot C) — world start/end
+## positions of the CURRENT tile's primer span. Reuses the exact tiling
+## math primase/Pol I already use (_primase_tile_end()/
+## _primase_primer_length()) and the most-recently-fired slot
+## (_lagging_latest_fired_slot()) to find which tile is relevant right
+## now — no new math, no new fragment tracking. Returns {} if no fragment
+## is open yet or the primer's bead nodes haven't been spawned yet —
+## caller must check is_empty().
+func get_current_primer_capsule_positions() -> Dictionary:
+	var latest_slot: int = _lagging_latest_fired_slot()
+	if latest_slot == -1:
+		return {}
+	var tile_end: int = _primase_tile_end(latest_slot)
+	var span: int = _primase_primer_length()
+	var end_slot: int = tile_end - 1
+	var start_slot: int = tile_end - span
+	if start_slot < 0 or end_slot >= lagging_synthesized_bases.size():
+		return {}
+	var start_base = lagging_synthesized_bases[start_slot]
+	var end_base = lagging_synthesized_bases[end_slot]
+	if start_base == null or not is_instance_valid(start_base) or end_base == null or not is_instance_valid(end_base):
+		return {}
+	return {
+		tile_end = tile_end,  # identifies which tile this primer belongs to — lets a caller polling every frame dedupe "already highlighted this one" from "a new tile's primer just became available"
+		start_position = start_base.global_position,
+		end_position = end_base.global_position,
+	}
+
 ## This project keeps exactly one active debug-log investigation at a
 ## time, always bound to F1 — press F1 while the scene is running to fire
 ## it. Currently wired to the "both polymerases render on the top strand

@@ -606,6 +606,23 @@ func _on_sequence_loaded(new_sequence: String):
 	else:
 		_on_sequence_loaded_intro_done()
 
+## Public entry point for a SCRIPTED intro playback (camera_regent.gd's
+## recorded shots) — resolves %DnaUnwindIntro itself and delegates to
+## _play_dna_intro() below, so the recording tool never re-derives the
+## real-geometry math that function already owns. Safe to call on an
+## already-running simulation with no fresh initialize_simulation(): see
+## _play_dna_intro()'s own comment — every value it gathers is read fresh
+## from the CURRENT simulation state each call, nothing load-time-only.
+## dismissible defaults true (matches _play_dna_intro()'s own default, so
+## a caller who doesn't care behaves like normal playback); pass false for
+## a shot that must run to its full natural duration regardless of
+## incidental key/mouse input.
+func trigger_dna_intro(dismissible: bool = true) -> bool:
+	var dna_intro = get_node_or_null("%DnaUnwindIntro")
+	if dna_intro == null:
+		return false
+	return _play_dna_intro(dna_intro, dismissible)
+
 ## Gathers the real sequence colors and on-screen metrics the live rail view
 ## uses, and starts the intro with them. Every pixel value handed to
 ## dna_intro.play() reproduces zoom_manager.gd's own _compute_track_fit_zoom()
@@ -614,7 +631,7 @@ func _on_sequence_loaded(new_sequence: String):
 ## geometry rather than approximating it. Returns false (and plays nothing)
 ## if ThemeManager or the loaded sequence aren't available, so the caller
 ## can fall back to the normal post-load flow immediately.
-func _play_dna_intro(dna_intro) -> bool:
+func _play_dna_intro(dna_intro, dismissible: bool = true) -> bool:
 	var tm = get_node_or_null("%ThemeManager")
 	var seq = simulation.dna_sequence if simulation else null
 	if tm == null or seq == null or seq.is_empty():
@@ -665,7 +682,8 @@ func _play_dna_intro(dna_intro) -> bool:
 		tm.wobble_enabled,
 		tm.backbone_offset_distance * zoom_x,
 		tm.template_backbone_color,
-		tm.backbone_line_width * zoom_x
+		tm.backbone_line_width * zoom_x,
+		dismissible
 	)
 	return true
 

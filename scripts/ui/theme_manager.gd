@@ -98,6 +98,42 @@ extends Node
 @export var base_label_color: Color = Color(1.0, 1.0, 1.0, 1.0)
 @export var base_radius: float = 15.0
 
+@export_subgroup("DEBUG — Base-Pair Highlight (provisional, bead-tier capsule variant)")
+## Provisional/investigation — NOT wired into any real shot/choreography
+## yet (pair_capsule_overlay.gd). A DIFFERENT semantic use of the same
+## ProceduralShapeUtils.capsule_outline() shape tool the shipped atom-tier
+## capsule uses (molecule_structure_renderer.gd's molecular_debug_capsule_*
+## fields, "Molecular Structure" group below) — this one highlights
+## base-pair identity/connection at the BEAD tier (a capsule spanning two
+## bead positions across strands, same slot), not 5'->3' backbone
+## direction at the atom tier. Deliberately its own tunables, not shared
+## with molecular_debug_capsule_* — different visual signal, may need its
+## own values once tuned live. Lives here (not a new top-level group):
+## this group is already the bead-tier home (base_color_a/t/c/g,
+## base_radius above), matching the shipped capsule's own
+## group-nesting convention (a DEBUG subgroup under its own tier's home
+## group) rather than the atom-tier "Molecular Structure" group this
+## isn't part of.
+##
+## Gap (world units) between a BEAD's own edge (base_radius above) and the
+## capsule border. NOT YET TUNED.
+@export var pair_highlight_padding: float = 4.0
+## Capsule border stroke width (world units). NOT YET TUNED.
+@export var pair_highlight_border_width: float = 1.5
+## Capsule border color. Border/outline only — interior never filled, same
+## convention as the shipped atom-tier capsule. NOT YET TUNED.
+@export var pair_highlight_border_color: Color = Color(0.3, 1.0, 0.6)
+
+@export_subgroup("DEBUG — Primer Highlight (provisional, primer capsule variant)")
+## Own tunables, NOT shared with pair_highlight_* — new caller (shot C,
+## camera_regent.gd), own semantics (RNA primer span, not a base pair).
+@export var primer_highlight_padding: float = 4.0
+## Capsule border stroke width (world units). NOT YET TUNED.
+@export var primer_highlight_border_width: float = 1.5
+## Capsule border color. Border/outline only — interior never filled, same
+## convention as the other capsule variants. NOT YET TUNED.
+@export var primer_highlight_border_color: Color = Color(1.0, 0.6, 0.15)
+
 @export_group("Backbone")
 @export var backbone_color: Color = Color(0.43137255, 0.72156864, 1.0, 1.0)
 @export var backbone_line_width: float = 16.0

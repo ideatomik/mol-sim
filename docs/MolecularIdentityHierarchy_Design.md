@@ -224,6 +224,39 @@ doesn't straightforwardly generalize to that doc's broader phosphate/
 ribose/base grouping question the way a continuous derived-outline tool
 might have. That question remains open and un-informed by this work.
 
+### Correction — the capsule is a general highlight-shape tool, not a 5'-3'-exclusive feature
+
+**This document's own prior wording was misleading and is corrected here.**
+Earlier passes described `capsule_outline()`/the capsule construction
+entirely in terms of the strand-directionality problem — tied to C5'/C3'
+positions specifically, gated to "full-label atom tier" as if that were
+inherent to the shape itself, and with its tunables framed as belonging
+to "the capsule feature" as a single, singular thing. That framing was
+never a deliberate scope decision — it was just the first thing this
+shape got built for, and the document kept talking about it as if the
+first use case defined the tool's boundaries. It doesn't.
+
+`capsule_outline()`'s actual signature (`from`, `to`, `radius`,
+`segments`) has no knowledge of C5', C3', backbone direction, or the atom
+tier at all — it takes two arbitrary points and returns a border-only
+padded outline between them. The 5'-3' direction capsule is **one
+caller** of a general-purpose highlight-shape primitive, not the shape's
+definition. A second caller is already in progress as of this entry: a
+bead-tier pair-capsule spanning two cross-strand bead positions (one on
+`template_top`, one on `template_bottom`, same slot) for a base-pairing
+identity highlight — semantically about pairing/identity, not direction,
+and at a completely different zoom tier, using the same
+`capsule_outline()` call.
+
+**Practical consequence:** don't assume future capsule-shaped highlights
+inherit the shipped 5'-3' capsule's specific tunables (its ThemeManager
+padding/border-color/thickness values), gating (full-label atom tier),
+or semantics (direction). Each new caller should make its own explicit
+decisions about tier, tunable ownership, and meaning — matching
+convention where it genuinely applies (e.g. border-only/unfilled
+rendering, scrub-safety, degenerate-safety) without assuming the first
+implementation's specific choices carry over by default.
+
 ## Generalization beyond DNA (why this matters now, not just for DNA)
 
 Krebs cycle metabolites will hit the same three-tier shape:
@@ -280,6 +313,13 @@ distinguishing near-identical carbon skeletons at a glance.
     broader grouping question directly? Worth a look next time that doc's
     question is picked up, now that this shape-generation tool exists in
     the codebase either way.
+11. **New, from the general-tool correction above:** now that a second
+    `capsule_outline()` caller exists (bead-tier pairing highlight), is it
+    worth a short, separate note somewhere central (this doc? a new one?)
+    listing all known callers of `capsule_outline()` and each one's tier/
+    tunable-ownership/semantics, so a third future caller doesn't have to
+    reconstruct this history from scattered per-feature sections the way
+    this document previously conflated them into one?
 
 ---
 

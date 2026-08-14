@@ -601,6 +601,90 @@ func has_residue_capsule_positions(strand: String, slot: int) -> bool:
 func get_residue_capsule_positions(strand: String, slot: int) -> Dictionary:
 	return _last_capsule_by_key.get("%s:%d" % [strand, slot], {})
 
+## On-demand sibling of get_residue_capsule_positions() above: computes a
+## residue's capsule endpoints from scratch, for ANY residue, at ANY zoom —
+## including while the atom tier isn't rendering at all. Reads none of the
+## per-frame layout state, so it answers before the camera has moved, which
+## is the whole point: a Tween needs its end value up front, and the
+## rendered position only exists once the camera is already there.
+##
+## "WHEN CENTERED" is load-bearing, not decoration. A residue has no single
+## capsule position — _molecular_render_pos() spreads x outward by
+## molecular_extra_slot_spacing * clamp((x - cluster_center_x) /
+## slot_spacing, -5, 5), and cluster_center_x is the LIVE camera centre, so
+## the answer moves with the camera (up to ~150 world units). What a camera
+## shot actually wants is the fixed point: where the capsule sits once the
+## camera is centred on it. That's what this returns. Only x is affected —
+## the y push (MOLECULAR_ROW_PUSH) has no cluster_center_x term.
+##
+## Returns {} for a residue not present in the current entry lists (the same
+## documented non-answer convention get_residue_capsule_positions() uses) —
+## which, for a template strand, doubles as the "is the self-paired template
+## state still active" check, since get_template_nucleotides() drops a slot
+## once its bead is gone.
+func get_residue_capsule_positions_when_centered(strand: String, slot: int) -> Dictionary:
+	if replication_mgr == null or tm == null:
+		return {}
+	var all_entries: Array[Dictionary] = []
+	all_entries.append_array(replication_mgr.get_synthesized_nucleotides())
+	if template_sim != null:
+		all_entries.append_array(template_sim.get_template_nucleotides())
+
+	var target_entry: Dictionary = {}
+	for entry in all_entries:
+		if entry.strand == strand and entry.slot == slot:
+			target_entry = entry
+			break
+	if target_entry.is_empty():
+		return {}
+
+	var bond_length: float = tm.molecular_ring_bond_length_ratio * _slot_spacing()
+	# Seeded at the residue's own raw x — already ~the centred configuration,
+	# so its neighbours land well inside _molecular_render_pos()'s unclamped
+	# +/-5-slot band, which is what makes the single derivation below valid.
+	var cluster_center_x: float = target_entry.world_position.x
+	var position_by_key: Dictionary = {}
+	var base_type_by_key: Dictionary = {}
+	for entry in all_entries:
+		var key: String = "%s:%d" % [entry.strand, entry.slot]
+		position_by_key[key] = _molecular_render_pos(entry.strand, entry.world_position, cluster_center_x)
+		base_type_by_key[key] = entry.base_type
+
+	# Derived ONCE, not per fixed-point iteration: the c5/c3 offsets relative
+	# to world_pos are camera-independent. _derive_residue_geometry() consumes
+	# position_by_key only as DIFFERENCES (pairing_direction, toward_next/
+	# toward_previous), and _molecular_render_pos()'s x-spread term cancels in
+	# a subtraction — see that function's own extra_x(x2) - extra_x(x1) note.
+	# So the expensive part (fold, ring, substituents, derive_base_layout()'s
+	# rotation search) stays a one-time cost here.
+	var seed_world_pos: Vector2 = _molecular_render_pos(strand, target_entry.world_position, cluster_center_x)
+	var geo: Dictionary = _derive_residue_geometry(target_entry, seed_world_pos, bond_length, position_by_key, base_type_by_key)
+	var topology: MoleculeTopology = geo.topology
+	var local_positions: Dictionary = geo.local_positions
+	var c5_id: int = topology.find_by_role("incoming.c5_prime")
+	var c3_id: int = topology.find_by_role("incoming.c3_prime")
+	if not local_positions.has(c5_id) or not local_positions.has(c3_id):
+		return {}
+	var c5_offset: Vector2 = local_positions[c5_id] - geo.anchor_offset
+	var c3_offset: Vector2 = local_positions[c3_id] - geo.anchor_offset
+	var midpoint_offset: Vector2 = (c5_offset + c3_offset) / 2.0
+
+	# Fixed point: the camera centre we're solving for is itself an input to
+	# where the capsule lands. Iterating the REAL _molecular_render_pos()
+	# (rather than inverting its formula) keeps the +/-5-slot clamp handled
+	# exactly. Converges fast — the shift's slope is only
+	# molecular_extra_slot_spacing / slot_spacing (~0.56), so error shrinks
+	# ~44% per pass; the cap is a guard, not the expected exit.
+	for _i in range(16):
+		var next_cx: float = _molecular_render_pos(strand, target_entry.world_position, cluster_center_x).x + midpoint_offset.x
+		var moved: float = absf(next_cx - cluster_center_x)
+		cluster_center_x = next_cx
+		if moved < 0.01:
+			break
+
+	var world_pos: Vector2 = _molecular_render_pos(strand, target_entry.world_position, cluster_center_x)
+	return {c5 = world_pos + c5_offset, c3 = world_pos + c3_offset}
+
 ## Atom-tier equivalent of _ligase_gap_bead_position()'s bead-space gap
 ## target: the midpoint between lagging slot `slot`'s O3' (a completed-but-
 ## unsealed fragment's last slot) and slot+1's alpha-phosphate (the next
@@ -767,171 +851,15 @@ func _rebuild_layout() -> void:
 		var key: String = "%s:%d" % [entry.strand, entry.slot]
 		_active_slots[key] = true
 
-		var cache_key: String = key
-		var topology: MoleculeTopology = _fold_cache.get(cache_key)
-		if topology == null:
-			var seed: MoleculeTopology = RiboseDeriver.build_incoming_nucleotide_seed("incoming.", entry.base_type)
-			# Every residue is already-incorporated, mature DNA — template
-			# strand included (see this file's header correction) — so
-			# always fold, never the raw triphosphate seed.
-			topology = MoleculeFoldEngine.fold(seed, _operators, 0)
-			_fold_cache[cache_key] = topology
-
-		var ring_positions: Dictionary = RiboseDeriver.derive_ring(topology, "incoming.", bond_length)
-		var c1_id: int = topology.find_by_role("incoming.c1_prime")
-		var c1_local: Vector2 = ring_positions.get(c1_id, Vector2.ZERO)
-
-		# Computed here, ahead of the ring-direction decision below (moved up
-		# from its old post-rotation position — the self-paired template
-		# case, below, needs the real partner direction BEFORE choosing
-		# which way to rotate the ring, not after). Also still feeds
-		# derive_substituents()/derive_base_layout() exactly as before.
-		var partner_key: String = _pair_for_slot(entry.strand, entry.slot, base_type_by_key)
-		var pairing_direction: Vector2 = Vector2.ZERO
-		if partner_key != "" and position_by_key.has(partner_key):
-			pairing_direction = position_by_key[partner_key] - world_pos
-
-		# Real same-strand-neighbor direction (supersedes Bug J/L — see
-		# docs/MolecularStructureDesign.md's Layout rule + Open Question 10,
-		# docs/MolecularStructure_BasePairExpansion.md). C5' bonds toward
-		# the more-5' same-strand neighbor, O3' toward the more-3' one —
-		# neither has anything to do with pairing_direction (the cross-
-		# strand H-bond vector Bug J/L used, confirmed chemically wrong for
-		# this purpose). Which physical slot (slot+1 vs slot-1) is more-3'
-		# vs more-5' depends on STRAND_DIRECTION_SIGN, same rule
-		# _build_backbone_bonds() already implements below — reused here,
-		# not re-derived, so the two can't silently disagree. Computed here,
-		# ahead of the ring-rotation decision below (Bug W needs these real
-		# vectors to run its own clearance search) — this file's own
-		# geometry is not affected by rotation state, only by real
-		# same-strand neighbor positions, so the reordering changes nothing
-		# about what these vectors mean.
-		var neighbor_sign: float = _strand_direction_sign(entry.strand)
-		var next_slot_key: String = "%s:%d" % [entry.strand, entry.slot + 1]
-		var prev_slot_key: String = "%s:%d" % [entry.strand, entry.slot - 1]
-		var more_3prime_key: String = next_slot_key if neighbor_sign >= 0.0 else prev_slot_key
-		var more_5prime_key: String = prev_slot_key if neighbor_sign >= 0.0 else next_slot_key
-		var toward_next: Vector2 = Vector2.ZERO
-		if position_by_key.has(more_3prime_key):
-			toward_next = position_by_key[more_3prime_key] - world_pos
-		var toward_previous: Vector2 = Vector2.ZERO
-		if position_by_key.has(more_5prime_key):
-			toward_previous = position_by_key[more_5prime_key] - world_pos
-
-		# Antiparallel-strand orientation fix
-		# (docs/Handout_AntiparallelStrandOrientation.md): the ring was
-		# being derived with the SAME fixed local orientation regardless of
-		# which way that strand's 5'->3' actually runs on screen — so
-		# antiparallel-paired strands (leading/template_top,
-		# lagging/template_bottom, and the two templates against each other
-		# pre-fork) rendered with identical pucker direction instead of
-		# nesting into each other's gaps. Fixed with a 180-degree ROTATION
-		# around the C1' anchor (never a mirror — a mirror would silently
-		# flip the ring's chirality while visually looking like a fix).
-		# Applied here, immediately after deriving the ring and BEFORE
-		# substituents are derived from it, so substituents inherit the
-		# corrected orientation automatically (they're placed relative to
-		# whatever ring shape they're given) rather than needing their own
-		# separate rotation. C1' is the pivot, so it stays fixed under the
-		# rotation.
-		#
-		# Self-paired-template correction (docs/MolecularStructure_
-		# BasePairExpansion.md, Bug V/Bug W): the fixed STRAND_DIRECTION_SIGN
-		# convention above was verified only against "do the rings stop
-		# overlapping" (Handout_AntiparallelStrandOrientation.md's own
-		# criterion) — never against the ring's bulge direction relative to
-		# the real partner. Bug V fixed the bulge direction with a binary
-		# identity/180-degree choice; Bug W found that binary choice left no
-		# freedom to also avoid the substituent chain colliding with the
-		# ring's own atoms, and replaced it with
-		# RiboseDeriver.resolve_self_paired_ring_rotation() — a bounded
-		# search over the ring's rotation angle that satisfies the same
-		# bulge-away-from-partner requirement (any negative dot product, not
-		# specifically -1.0 — see that function's own doc comment) while
-		# maximizing clearance against the real chain (toward_next/
-		# toward_previous, computed above, never modified). This branch
-		# ONLY changes that specific case — leading, lagging, and any
-		# template residue with a real synthesized partner (post-
-		# _pair_for_slot()-fix, already confirmed clean this session) keep
-		# the exact original fixed sign, byte-identical to before.
-		var is_self_paired_template: bool = (entry.strand == "template_top" or entry.strand == "template_bottom") and partner_key.begins_with("template_")
-		var substituent_positions: Dictionary = {}
-		# STAGE 1 (docs/superpowers/plans -- reconstruction of the self-
-		# paired pentose/phosphate geometry, staged deliberately after the
-		# fork-flip mirror and the bake were both found to have real
-		# geometry bugs -- see the F9 dump: mirror path produced an exact
-		# O3'=C4'/C5'=C3' overlap, bake path produced a C1'-farther-than-
-		# C4'-from-base "cross-twist"). Both bake_self_paired_geometry()
-		# and reflect_about_backbone_axis() are DELIBERATELY bypassed here,
-		# not deleted -- self-paired residues now fall through to the exact
-		# same plain formula leading/lagging already use below, matching
-		# the fake leading/lagging residues in the test chamber, to
-		# establish a known-clean ring/chain baseline before layering
-		# orientation-correctness back on top in a later stage. Expected to
-		# look orientation-wrong (no antiparallel/self-paired correction)
-		# -- that is intentional for this stage, not a regression.
-		ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
-		substituent_positions = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
-
-		# STAGE 2, bottom strand only: reflect C1'/C2'/O4' across the
-		# C3'-C4' line (C3'/C4' sit ON that axis so they -- and the
-		# substituent chain derived from them above -- are unaffected).
-		# Unlike the old, buggy mirror branch, axis_y is read from THIS
-		# ring's own post-apply_strand_direction C4' (not the pre-rotation
-		# natural ring's), which is what caused the old O3'=C4'/C5'=C3'
-		# overlap. Reassigning c1_local to the reflected C1' (rather than
-		# leaving it at the natural pivot used above) is deliberate: both
-		# anchor_offset and the derive_base_layout() call below read this
-		# same variable, so the base re-derives correctly bonded to
-		# wherever C1' now sits, with no separate parameter to thread.
-		# c1_local's EARLIER use above (apply_strand_direction()'s pivot)
-		# already happened, so it's unaffected by this reassignment.
-		if is_self_paired_template and neighbor_sign < 0.0:
-			var c4_id: int = topology.find_by_role("incoming.c4_prime")
-			var axis_y: float = ring_positions[c4_id].y
-			ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
-			c1_local = ring_positions[c1_id]
-
-		# STAGE 3, top strand: same transform as Stage 2 immediately above,
-		# same reasoning (see that block's comment), the complementary
-		# sign. For template_top, apply_strand_direction() above was
-		# identity (sign >= 0), so axis_y here is the natural,
-		# never-rotated ring's own C4' -- reflect_about_backbone_axis()
-		# doesn't care either way, it just mirrors whatever ring it's
-		# given about that ring's own current C3'-C4' line.
-		if is_self_paired_template and neighbor_sign >= 0.0:
-			var c4_id: int = topology.find_by_role("incoming.c4_prime")
-			var axis_y: float = ring_positions[c4_id].y
-			ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
-			c1_local = ring_positions[c1_id]
-
-		var local_positions: Dictionary = {}
-		for id in ring_positions:
-			local_positions[id] = ring_positions[id]
-		for id in substituent_positions:
-			local_positions[id] = substituent_positions[id]
-
-		# Bug-C fix: anchor at C1', not the ring's centroid. A point-like
-		# bead circle centred at world_pos looked fine; a ring with real
-		# spatial extent centred there oversails past wherever the
-		# existing hydrogen-bond line geometry actually terminates.
-		var anchor_offset: Vector2 = c1_local
-
-		# NOTE: base placement is NOT subject to the ring rotation above —
-		# pairing_direction is already derived from real world positions
-		# (always points at the actual partner, whichever strand this is),
-		# so it's correct regardless of strand identity on its own. Rotating
-		# it again here would point the base AWAY from its real partner for
-		# direction_sign < 0 strands — a double-transform bug, not a fix.
-		#
-		# avoid_points (docs/MolecularStructure_BasePairExpansion.md, Bug D
-		# "ribose sits on its own base" follow-up): the ribose's own
-		# substituent chain, already computed above (substituent_positions)
-		# — passed through so derive_base_layout() can pick a rotation that
-		# clears it, without this file duplicating any of that search logic.
-		var base_positions: Dictionary = NitrogenBaseDeriver.derive_base_layout(topology, "incoming.", entry.base_type, c1_local, pairing_direction, bond_length, ring_positions.values() + substituent_positions.values())
-		for id in base_positions:
-			local_positions[id] = base_positions[id]
+		# Geometry derivation lives in _derive_residue_geometry() (see its own
+		# comment) -- everything below consumes what it returns. _active_slots
+		# is set above, NOT in there, on purpose.
+		var geo: Dictionary = _derive_residue_geometry(entry, world_pos, bond_length, position_by_key, base_type_by_key)
+		var topology: MoleculeTopology = geo.topology
+		var local_positions: Dictionary = geo.local_positions
+		var anchor_offset: Vector2 = geo.anchor_offset
+		var is_self_paired_template: bool = geo.is_self_paired_template
+		var neighbor_sign: float = geo.neighbor_sign
 
 		var residue_max_extent: float = 0.0
 		for atom in topology.atoms:
@@ -1032,6 +960,202 @@ func _rebuild_layout() -> void:
 	_last_alpha_by_key = alpha_by_key
 	_last_capsule_by_key = capsule_by_key
 	_build_hydrogen_bonds(base_bond_atoms_by_key, base_type_by_key)
+
+
+## Per-residue geometry derivation, lifted verbatim out of
+## _rebuild_layout()'s own loop (Step 1 of the on-demand-position
+## refactor -- a pure extraction, no behavior change). This is the
+## expensive half of that loop: everything its later consumers need
+## (_atom_layout, _bond_layout, the C5'/C3' capsule, o3_by_key/
+## alpha_by_key, base_bond_atoms_by_key) derives from the returned
+## topology/local_positions/anchor_offset triple, so it runs ONCE per
+## residue and is deliberately not re-run per consumer -- see
+## _rebuild_layout()'s own perf-fix comment for why that matters here.
+##
+## Reads/writes _fold_cache (persistent for a whole simulation run,
+## cleared only by clear_fold_cache()), so a repeat call for the same
+## residue skips the fold entirely.
+##
+## Deliberately does NOT touch _active_slots -- marking a slot active is
+## a rendering side effect belonging to the caller, and a future
+## on-demand caller must not trigger it for a residue it is merely
+## querying. is_self_paired_template/neighbor_sign are returned only
+## because the caller's currently-dead _mirrored_residue_layout branch
+## still references them.
+func _derive_residue_geometry(entry: Dictionary, world_pos: Vector2, bond_length: float, position_by_key: Dictionary, base_type_by_key: Dictionary) -> Dictionary:
+	var cache_key: String = "%s:%d" % [entry.strand, entry.slot]
+	var topology: MoleculeTopology = _fold_cache.get(cache_key)
+	if topology == null:
+		var seed: MoleculeTopology = RiboseDeriver.build_incoming_nucleotide_seed("incoming.", entry.base_type)
+		# Every residue is already-incorporated, mature DNA — template
+		# strand included (see this file's header correction) — so
+		# always fold, never the raw triphosphate seed.
+		topology = MoleculeFoldEngine.fold(seed, _operators, 0)
+		_fold_cache[cache_key] = topology
+
+	var ring_positions: Dictionary = RiboseDeriver.derive_ring(topology, "incoming.", bond_length)
+	var c1_id: int = topology.find_by_role("incoming.c1_prime")
+	var c1_local: Vector2 = ring_positions.get(c1_id, Vector2.ZERO)
+
+	# Computed here, ahead of the ring-direction decision below (moved up
+	# from its old post-rotation position — the self-paired template
+	# case, below, needs the real partner direction BEFORE choosing
+	# which way to rotate the ring, not after). Also still feeds
+	# derive_substituents()/derive_base_layout() exactly as before.
+	var partner_key: String = _pair_for_slot(entry.strand, entry.slot, base_type_by_key)
+	var pairing_direction: Vector2 = Vector2.ZERO
+	if partner_key != "" and position_by_key.has(partner_key):
+		pairing_direction = position_by_key[partner_key] - world_pos
+
+	# Real same-strand-neighbor direction (supersedes Bug J/L — see
+	# docs/MolecularStructureDesign.md's Layout rule + Open Question 10,
+	# docs/MolecularStructure_BasePairExpansion.md). C5' bonds toward
+	# the more-5' same-strand neighbor, O3' toward the more-3' one —
+	# neither has anything to do with pairing_direction (the cross-
+	# strand H-bond vector Bug J/L used, confirmed chemically wrong for
+	# this purpose). Which physical slot (slot+1 vs slot-1) is more-3'
+	# vs more-5' depends on STRAND_DIRECTION_SIGN, same rule
+	# _build_backbone_bonds() already implements below — reused here,
+	# not re-derived, so the two can't silently disagree. Computed here,
+	# ahead of the ring-rotation decision below (Bug W needs these real
+	# vectors to run its own clearance search) — this file's own
+	# geometry is not affected by rotation state, only by real
+	# same-strand neighbor positions, so the reordering changes nothing
+	# about what these vectors mean.
+	var neighbor_sign: float = _strand_direction_sign(entry.strand)
+	var next_slot_key: String = "%s:%d" % [entry.strand, entry.slot + 1]
+	var prev_slot_key: String = "%s:%d" % [entry.strand, entry.slot - 1]
+	var more_3prime_key: String = next_slot_key if neighbor_sign >= 0.0 else prev_slot_key
+	var more_5prime_key: String = prev_slot_key if neighbor_sign >= 0.0 else next_slot_key
+	var toward_next: Vector2 = Vector2.ZERO
+	if position_by_key.has(more_3prime_key):
+		toward_next = position_by_key[more_3prime_key] - world_pos
+	var toward_previous: Vector2 = Vector2.ZERO
+	if position_by_key.has(more_5prime_key):
+		toward_previous = position_by_key[more_5prime_key] - world_pos
+
+	# Antiparallel-strand orientation fix
+	# (docs/Handout_AntiparallelStrandOrientation.md): the ring was
+	# being derived with the SAME fixed local orientation regardless of
+	# which way that strand's 5'->3' actually runs on screen — so
+	# antiparallel-paired strands (leading/template_top,
+	# lagging/template_bottom, and the two templates against each other
+	# pre-fork) rendered with identical pucker direction instead of
+	# nesting into each other's gaps. Fixed with a 180-degree ROTATION
+	# around the C1' anchor (never a mirror — a mirror would silently
+	# flip the ring's chirality while visually looking like a fix).
+	# Applied here, immediately after deriving the ring and BEFORE
+	# substituents are derived from it, so substituents inherit the
+	# corrected orientation automatically (they're placed relative to
+	# whatever ring shape they're given) rather than needing their own
+	# separate rotation. C1' is the pivot, so it stays fixed under the
+	# rotation.
+	#
+	# Self-paired-template correction (docs/MolecularStructure_
+	# BasePairExpansion.md, Bug V/Bug W): the fixed STRAND_DIRECTION_SIGN
+	# convention above was verified only against "do the rings stop
+	# overlapping" (Handout_AntiparallelStrandOrientation.md's own
+	# criterion) — never against the ring's bulge direction relative to
+	# the real partner. Bug V fixed the bulge direction with a binary
+	# identity/180-degree choice; Bug W found that binary choice left no
+	# freedom to also avoid the substituent chain colliding with the
+	# ring's own atoms, and replaced it with
+	# RiboseDeriver.resolve_self_paired_ring_rotation() — a bounded
+	# search over the ring's rotation angle that satisfies the same
+	# bulge-away-from-partner requirement (any negative dot product, not
+	# specifically -1.0 — see that function's own doc comment) while
+	# maximizing clearance against the real chain (toward_next/
+	# toward_previous, computed above, never modified). This branch
+	# ONLY changes that specific case — leading, lagging, and any
+	# template residue with a real synthesized partner (post-
+	# _pair_for_slot()-fix, already confirmed clean this session) keep
+	# the exact original fixed sign, byte-identical to before.
+	var is_self_paired_template: bool = (entry.strand == "template_top" or entry.strand == "template_bottom") and partner_key.begins_with("template_")
+	var substituent_positions: Dictionary = {}
+	# STAGE 1 (docs/superpowers/plans -- reconstruction of the self-
+	# paired pentose/phosphate geometry, staged deliberately after the
+	# fork-flip mirror and the bake were both found to have real
+	# geometry bugs -- see the F9 dump: mirror path produced an exact
+	# O3'=C4'/C5'=C3' overlap, bake path produced a C1'-farther-than-
+	# C4'-from-base "cross-twist"). Both bake_self_paired_geometry()
+	# and reflect_about_backbone_axis() are DELIBERATELY bypassed here,
+	# not deleted -- self-paired residues now fall through to the exact
+	# same plain formula leading/lagging already use below, matching
+	# the fake leading/lagging residues in the test chamber, to
+	# establish a known-clean ring/chain baseline before layering
+	# orientation-correctness back on top in a later stage. Expected to
+	# look orientation-wrong (no antiparallel/self-paired correction)
+	# -- that is intentional for this stage, not a regression.
+	ring_positions = RiboseDeriver.apply_strand_direction(ring_positions, c1_local, _strand_direction_sign(entry.strand))
+	substituent_positions = RiboseDeriver.derive_substituents(topology, "incoming.", ring_positions, bond_length, toward_next, toward_previous)
+
+	# STAGE 2, bottom strand only: reflect C1'/C2'/O4' across the
+	# C3'-C4' line (C3'/C4' sit ON that axis so they -- and the
+	# substituent chain derived from them above -- are unaffected).
+	# Unlike the old, buggy mirror branch, axis_y is read from THIS
+	# ring's own post-apply_strand_direction C4' (not the pre-rotation
+	# natural ring's), which is what caused the old O3'=C4'/C5'=C3'
+	# overlap. Reassigning c1_local to the reflected C1' (rather than
+	# leaving it at the natural pivot used above) is deliberate: both
+	# anchor_offset and the derive_base_layout() call below read this
+	# same variable, so the base re-derives correctly bonded to
+	# wherever C1' now sits, with no separate parameter to thread.
+	# c1_local's EARLIER use above (apply_strand_direction()'s pivot)
+	# already happened, so it's unaffected by this reassignment.
+	if is_self_paired_template and neighbor_sign < 0.0:
+		var c4_id: int = topology.find_by_role("incoming.c4_prime")
+		var axis_y: float = ring_positions[c4_id].y
+		ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+		c1_local = ring_positions[c1_id]
+
+	# STAGE 3, top strand: same transform as Stage 2 immediately above,
+	# same reasoning (see that block's comment), the complementary
+	# sign. For template_top, apply_strand_direction() above was
+	# identity (sign >= 0), so axis_y here is the natural,
+	# never-rotated ring's own C4' -- reflect_about_backbone_axis()
+	# doesn't care either way, it just mirrors whatever ring it's
+	# given about that ring's own current C3'-C4' line.
+	if is_self_paired_template and neighbor_sign >= 0.0:
+		var c4_id: int = topology.find_by_role("incoming.c4_prime")
+		var axis_y: float = ring_positions[c4_id].y
+		ring_positions = RiboseDeriver.reflect_about_backbone_axis(ring_positions, axis_y)
+		c1_local = ring_positions[c1_id]
+
+	var local_positions: Dictionary = {}
+	for id in ring_positions:
+		local_positions[id] = ring_positions[id]
+	for id in substituent_positions:
+		local_positions[id] = substituent_positions[id]
+
+	# Bug-C fix: anchor at C1', not the ring's centroid. A point-like
+	# bead circle centred at world_pos looked fine; a ring with real
+	# spatial extent centred there oversails past wherever the
+	# existing hydrogen-bond line geometry actually terminates.
+	var anchor_offset: Vector2 = c1_local
+
+	# NOTE: base placement is NOT subject to the ring rotation above —
+	# pairing_direction is already derived from real world positions
+	# (always points at the actual partner, whichever strand this is),
+	# so it's correct regardless of strand identity on its own. Rotating
+	# it again here would point the base AWAY from its real partner for
+	# direction_sign < 0 strands — a double-transform bug, not a fix.
+	#
+	# avoid_points (docs/MolecularStructure_BasePairExpansion.md, Bug D
+	# "ribose sits on its own base" follow-up): the ribose's own
+	# substituent chain, already computed above (substituent_positions)
+	# — passed through so derive_base_layout() can pick a rotation that
+	# clears it, without this file duplicating any of that search logic.
+	var base_positions: Dictionary = NitrogenBaseDeriver.derive_base_layout(topology, "incoming.", entry.base_type, c1_local, pairing_direction, bond_length, ring_positions.values() + substituent_positions.values())
+	for id in base_positions:
+		local_positions[id] = base_positions[id]
+
+	return {
+		topology = topology,
+		local_positions = local_positions,
+		anchor_offset = anchor_offset,
+		is_self_paired_template = is_self_paired_template,
+		neighbor_sign = neighbor_sign,
+	}
 
 
 ## Bug-B fix: connects residue N's own already-positioned O3' to residue

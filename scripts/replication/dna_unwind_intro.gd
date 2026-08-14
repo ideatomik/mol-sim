@@ -171,6 +171,16 @@ const BOND_INSET_RATIO: float = 0.8
 
 var _elapsed: float = 0.0
 var _playing: bool = false
+## Gates the click/keypress dismiss path in _input() only — never a
+## script's own explicit request (see skip()). Set via play()'s own
+## trailing optional param; defaults true, so ordinary player-facing
+## playback (player_ui.gd's existing call) is unaffected. False for
+## camera_regent.gd's scripted shots, which need the intro to run to its
+## full natural duration regardless of incidental key/mouse input —
+## including OS key-repeat of whatever key started the shot itself, which
+## _input() below has no other guard against (it doesn't check
+## event.is_echo()).
+var _dismissible: bool = true
 
 ## Settle-phase trigger state: rather than starting the settle cascade at
 ## a fixed clock time, _process() watches the rightmost bead pair during
@@ -239,7 +249,8 @@ func play(top_colors: Array[Color], bottom_colors: Array[Color],
 		bond_spacing_px: float, wobble_amplitude_px: float,
 		wobble_speed: float, wobble_enabled: bool,
 		backbone_offset_px: float, backbone_color: Color,
-		backbone_width_px: float) -> void:
+		backbone_width_px: float, dismissible: bool = true) -> void:
+	_dismissible = dismissible
 	_top_colors = top_colors
 	_bottom_colors = bottom_colors
 	_bond_colors = bond_colors
@@ -348,26 +359,64 @@ func _process(delta: float) -> void:
 			_settle_triggered = true
 			_settle_start_elapsed = _elapsed
 
-	_elapsed = min(_elapsed + delta, _total_duration_seconds())
+	# Bug fix: _total_duration_seconds() assumes settle starts at EXACTLY
+	# rotation_duration_seconds, but the fallback trigger above checks
+	# `_elapsed >= rotation_duration_seconds` using _elapsed from BEFORE
+	# this frame's own increment — so by the time it catches the
+	# threshold, _elapsed has typically already overshot rotation_
+	# duration_seconds by a fraction of a frame's delta. _settle_start_
+	# elapsed then records that slightly-overshot value, meaning the REAL
+	# finish threshold (_settle_start_elapsed + settle_stagger_seconds +
+	# settle_lerp_seconds) can end up a hair ABOVE the fixed ceiling
+	# _total_duration_seconds() computes in advance. Clamping _elapsed to
+	# that fixed ceiling then makes the real threshold permanently
+	# unreachable — _finish() never fires, the overlay freezes fully
+	# opaque forever. Caught live: with rotation_duration_seconds tuned
+	# down to 1.5 (this scene's override), a ~0.03s overshoot was enough
+	# to stall it solid — proportionally negligible at the original ~4-5s
+	# default, which is why this was never seen before; separately, this
+	# was also the FIRST time the natural (non-skipped) finish path had
+	# ever been exercised to true completion, since normal play always
+	# clicks through the intro. Fix: once settle has actually triggered,
+	# clamp to the REAL threshold for this run instead of the theoretical
+	# one — _total_duration_seconds() remains the pre-trigger ceiling
+	# (also used by play()'s debug freeze, untouched here).
+	var elapsed_cap: float = _total_duration_seconds()
+	if _settle_triggered:
+		elapsed_cap = _settle_start_elapsed + settle_stagger_seconds + settle_lerp_seconds
+	_elapsed = min(_elapsed + delta, elapsed_cap)
 	_wobble_time += delta
 	queue_redraw()
 
-	# The real total is dynamic now (rotation can end before
-	# rotation_duration_seconds on a natural coincidence) — _total_duration_seconds()
-	# remains only a worst-case ceiling (used above for the _elapsed cap and
-	# by play()'s debug freeze), not the real finish condition.
+	# TEMP diagnostic — remove once the natural-finish stall is understood.
+	if Engine.get_process_frames() % 60 == 0:
+		print("[INTRO_DEBUG] playing=%s elapsed=%.2f settle_triggered=%s settle_start=%.2f finish_at=%.2f" % [
+			_playing, _elapsed, _settle_triggered, _settle_start_elapsed,
+			_settle_start_elapsed + settle_stagger_seconds + settle_lerp_seconds,
+		])
 	if _settle_triggered and _elapsed >= _settle_start_elapsed + settle_stagger_seconds + settle_lerp_seconds:
 		_finish()
 
 
 func _input(event: InputEvent) -> void:
-	if not _playing:
+	if not _playing or not _dismissible:
 		return
 
 	var is_press: bool = (event is InputEventMouseButton and event.pressed) \
 		or (event is InputEventKey and event.pressed)
 	if is_press:
 		get_viewport().set_input_as_handled()
+		_finish()
+
+
+## Programmatic force-finish, independent of _dismissible — that flag only
+## gates player INPUT in _input() above, never a script's own explicit
+## request. Needed so a non-dismissible scripted playback (camera_regent.gd)
+## can still be cancelled cleanly: without this, cancelling mid-play would
+## leave the overlay stuck on screen with no way for anything — player or
+## script — to end it. No-op if not currently playing.
+func skip() -> void:
+	if _playing:
 		_finish()
 
 
