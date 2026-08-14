@@ -18,7 +18,7 @@ Read this file before writing, editing, or reviewing any GDScript code for the
 Zymulador project (Godot 4.x, located at `E:/Godot Projects/MolSim/mol-sim/`).
 Main scene: `res://scenes/simulation.tscn`.
 Main script: `res://scripts/simulation.gd`.
-Helicase sub-manager: `res://scripts/helicase.gd`.
+Helicase sub-manager: `res://scripts/replication/helicase.gd`.
 
 ---
 

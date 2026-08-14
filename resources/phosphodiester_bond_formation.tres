@@ -1,6 +1,6 @@
 [gd_resource type="Resource" script_class="ReactionOperator" format=3 uid="uid://5wfhau80e7mk"]
 
-[ext_resource type="Script" uid="uid://d0yydgc3lecqe" path="res://scripts/reaction_operator.gd" id="1"]
+[ext_resource type="Script" uid="uid://d0yydgc3lecqe" path="res://scripts/core/reaction_operator.gd" id="1"]
 
 [resource]
 script = ExtResource("1")

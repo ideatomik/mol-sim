@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://bkcyhxg58gv21"]
 
-[ext_resource type="Script" uid="uid://coqc4e87gupxb" path="res://scripts/sequence_loader_popup.gd" id="1_w87t3"]
+[ext_resource type="Script" uid="uid://coqc4e87gupxb" path="res://scripts/ui/sequence_loader_popup.gd" id="1_w87t3"]
 [ext_resource type="FontFile" uid="uid://q1v5f1fmoxhk" path="res://fonts/Raleway/static/Raleway-SemiBold.ttf" id="2_egfmf"]
 [ext_resource type="FontFile" uid="uid://dkyjnrbvkb6g6" path="res://fonts/GoogleSans/GoogleSans-Medium.ttf" id="3_iinsh"]
 [ext_resource type="FontFile" uid="uid://dxdsv5nrybqcb" path="res://fonts/Raleway/static/Raleway-ExtraBold.ttf" id="4_fr0gj"]

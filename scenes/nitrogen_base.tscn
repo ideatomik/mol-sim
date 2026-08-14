@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://yng5ddx3wt41"]
 
-[ext_resource type="Script" uid="uid://diuttskd3h5gq" path="res://scripts/nitrogen_base.gd" id="1_cj2ew"]
+[ext_resource type="Script" uid="uid://diuttskd3h5gq" path="res://scripts/core/nitrogen_base.gd" id="1_cj2ew"]
 
 [node name="NewNitrogenBase" type="RigidBody2D" unique_id=153262830]
 z_index = 2

@@ -221,6 +221,41 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F3:
 			var tm := get_node_or_null("%ThemeManager")
 			set_enzyme_labels_enabled(tm == null or not tm.enzyme_labels_enabled)
+		KEY_F6:
+			_debug_toggle_pair_capsule()
+
+## TEMP — isolation test for pair_capsule_overlay.gd + has_slot_bead_
+## position()/get_slot_bead_position() (see those functions' own
+## comments). NOT the real integration — that's a separate follow-up once
+## this confirms both pieces work. F6 toggles: finds the first slot where
+## BOTH template_top and template_bottom currently have a live bead (the
+## self-paired template state this is scoped to), spawns the overlay
+## there once, and frees it on the next press. REMOVE once confirmed.
+var _debug_pair_overlay: PairCapsuleOverlay = null
+
+func _debug_toggle_pair_capsule() -> void:
+	if _debug_pair_overlay != null:
+		_debug_pair_overlay.queue_free()
+		_debug_pair_overlay = null
+		return
+	var slot: int = -1
+	for i in range(num_nucleotide_slots):
+		if has_slot_bead_position("template_top", i) and has_slot_bead_position("template_bottom", i):
+			slot = i
+			break
+	if slot == -1:
+		push_error("simulation.gd: [DEBUG F6] no slot currently has both template_top and template_bottom beads — is the self-paired template state active?")
+		return
+	var tm := get_node_or_null("%ThemeManager")
+	if tm == null:
+		push_error("simulation.gd: [DEBUG F6] %ThemeManager not found.")
+		return
+	_debug_pair_overlay = PairCapsuleOverlay.new()
+	_debug_pair_overlay.tm = tm
+	_debug_pair_overlay.bead_a_position = get_slot_bead_position("template_top", slot)
+	_debug_pair_overlay.bead_b_position = get_slot_bead_position("template_bottom", slot)
+	add_child(_debug_pair_overlay)
+	print("[DEBUG F6] pair capsule spawned at slot %d: template_top=%s template_bottom=%s" % [slot, _debug_pair_overlay.bead_a_position, _debug_pair_overlay.bead_b_position])
 
 ## Player UI panel visibility — single source of truth for both the F2
 ## keybinding above and camera_regent.gd's shot setup/teardown. Returns the
@@ -1233,6 +1268,92 @@ func get_template_nucleotides() -> Array[Dictionary]:
 				world_position = base.global_position,
 			})
 	return result
+
+## Bead-tier equivalent of molecule_structure_renderer.gd's has_slot_o3_
+## position()/get_slot_o3_position() pair — same shape, same "read the live
+## node position fresh, no caching that could go stale" convention, just
+## one array lookup instead of a full re-derivation (bead positions are
+## already real spawned-node positions, not something that needs deriving).
+## template_top/template_bottom ONLY — mirrors get_template_nucleotides()'s
+## own two arrays (nucleotide_bases = template_bottom, top_strand_bases =
+## template_top) rather than a new position-computation system.
+## Deliberately does NOT cover leading/lagging: this accessor is for the
+## self-paired template state specifically, where the pairing rule is
+## "same slot index on both template arrays" — no partner-resolution
+## needed here (that's _pair_for_slot()'s job, specific to post-fork
+## leading/lagging matching, out of scope for this accessor).
+func _bead_array_for_strand(strand: String) -> Array:
+	match strand:
+		"template_top": return top_strand_bases
+		"template_bottom": return nucleotide_bases
+	return []
+
+func has_slot_bead_position(strand: String, slot: int) -> bool:
+	var arr: Array = _bead_array_for_strand(strand)
+	if slot < 0 or slot >= arr.size():
+		return false
+	var base = arr[slot]
+	return base != null and is_instance_valid(base)
+
+## Vector2.ZERO on miss — a documented non-answer, never a real position.
+## Callers MUST check has_slot_bead_position() first, same contract as
+## get_slot_o3_position().
+func get_slot_bead_position(strand: String, slot: int) -> Vector2:
+	if not has_slot_bead_position(strand, slot):
+		return Vector2.ZERO
+	return _bead_array_for_strand(strand)[slot].global_position
+
+## Minimum slot distance from the helicase's current slot a matching pair
+## must have to be eligible in find_nearest_matching_pair() — pairs any
+## closer end up rendered right under (or partially covered by) the
+## helicase itself, confirmed visually across repeated test runs.
+const _MIN_PAIR_SLOTS_FROM_HELICASE: int = 2
+
+## Search (not lookup): scans every pre-fork slot — slots the helicase
+## hasn't reached yet, i.e. nucleotide_original_x[i] >= helicase_x, same
+## boundary _process() already uses for template_hydrogen_bonds visibility
+## (see the loop setting template_hydrogen_bonds[i].visible above) — for a
+## base pair matching base_pair_type (e.g. "AT" or "CG", order-insensitive
+## across the two strands), at least _MIN_PAIR_SLOTS_FROM_HELICASE slots
+## ahead of the helicase's current slot (excludes matches that would land
+## right under/partially behind the helicase sprite), and returns the one
+## closest to the helicase's current position among what's left. Returns
+## {} if no pre-fork slot matches (e.g. a short or skewed sequence) —
+## caller must check is_empty(), same convention as the has_/get_
+## accessors above and the _zoom_frame_*() functions: a documented
+## non-answer, never a guessed/wrong slot.
+func find_nearest_matching_pair(base_pair_type: String) -> Dictionary:
+	if dna_sequence == null or helicase_mgr == null:
+		return {}
+	var wanted_a: String = base_pair_type[0]
+	var wanted_b: String = base_pair_type[1]
+	var helicase_slot: int = helicase_mgr.get_slot_index()
+	var best_slot: int = -1
+	var best_dist: float = INF
+	for i in range(num_nucleotide_slots):
+		if i >= nucleotide_original_x.size() or nucleotide_original_x[i] < helicase_x:
+			continue
+		if abs(i - helicase_slot) < _MIN_PAIR_SLOTS_FROM_HELICASE:
+			continue
+		if not has_slot_bead_position("template_top", i) or not has_slot_bead_position("template_bottom", i):
+			continue
+		var top_base: String = dna_sequence.get_base(i)
+		var bottom_base: String = dna_sequence.get_complement(i)
+		var matches: bool = (top_base == wanted_a and bottom_base == wanted_b) \
+			or (top_base == wanted_b and bottom_base == wanted_a)
+		if not matches:
+			continue
+		var dist: float = abs(nucleotide_original_x[i] - helicase_x)
+		if dist < best_dist:
+			best_dist = dist
+			best_slot = i
+	if best_slot == -1:
+		return {}
+	return {
+		slot = best_slot,
+		template_top_position = get_slot_bead_position("template_top", best_slot),
+		template_bottom_position = get_slot_bead_position("template_bottom", best_slot),
+	}
 
 func get_max_scrub_index() -> int:
 	var catchup_needed = 0
