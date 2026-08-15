@@ -416,27 +416,7 @@ func _zoom_frame_helicase_level2() -> Dictionary:
 	if context.is_empty():
 		return _helicase_footprint_frame(%ThemeManager.zoom_helicase_level2_fit)
 
-	return _anchor_centered_frame(helicase_node.global_position, context, %ThemeManager.zoom_helicase_level2_fit)
-
-## Centers the camera ON `anchor` (the highlighted object) — NOT on the
-## bounding-box midpoint of anchor+context, which is what a naive box-fit
-## would do and is exactly the bug this replaced: it pulled the camera
-## toward whatever's between the helicase and its polymerases instead of
-## keeping the helicase itself as the visual center. Sizes the frame
-## symmetrically around the anchor just far enough to include every context
-## point, so the anchor is guaranteed to land dead-center on screen.
-func _anchor_centered_frame(anchor: Vector2, context: Array, fit_pct: float) -> Dictionary:
-	var max_dx: float = 0.0
-	var max_dy: float = 0.0
-	for p in context:
-		max_dx = max(max_dx, abs(p.x - anchor.x))
-		max_dy = max(max_dy, abs(p.y - anchor.y))
-	var size: Vector2 = Vector2(max(max_dx * 2.0, 1.0), max(max_dy * 2.0, 1.0))
-	# size.x is a world-x span, size.y a world-y span. The extent helpers supply
-	# whichever viewport dimension each currently maps to — the rotation is
-	# exactly 90 degrees, so the box stays axis-aligned and needs no transform.
-	var target_zoom: float = minf((_zoom_along_extent() * fit_pct) / size.x, (_zoom_cross_extent() * fit_pct) / size.y)
-	return {zoom = target_zoom, position = anchor}
+	return ZoomFrameUtils.anchor_centered_frame(helicase_node.global_position, context, %ThemeManager.zoom_helicase_level2_fit, _zoom_along_extent(), _zoom_cross_extent())
 
 func _zoom_frame_helicase_level3() -> Dictionary:
 	return _helicase_footprint_frame(%ThemeManager.zoom_helicase_level3_fit)

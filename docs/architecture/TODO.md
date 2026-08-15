@@ -12,10 +12,11 @@ handling note.**_
 _None open._
 
 ### Features
-- [ ] **Localization UI.** Replace the `L` debug locale-cycling keybind with
-      a real user-facing language switcher. (Supersedes the old "remove the
-      `L` keybind" housekeeping item — the debug mechanism was standing in
-      for a UI that was never built.)
+- [ ] **UI rework.**
+  - [ ] **Localization UI.** Replace the `L` debug locale-cycling keybind
+        with a real user-facing language switcher. (Supersedes the old
+        "remove the `L` keybind" housekeeping item — the debug mechanism
+        was standing in for a UI that was never built.)
 
 ---
 
@@ -36,21 +37,6 @@ _None open._
       hardware — none decided yet.
 
 ---
-
-### To verify (may already be done — confirm before acting)
-- [ ] **Translation review batch**: `_FULL` key word-order inconsistency;
-      "Pol épsilon" accent in pt_BR/es; "eucariota" vs "eucariótico" in the
-      es `UI_TOPOLOGY_*` strings. Flagged as possibly already resolved —
-      confirm against the current localization CSVs before treating as open.
-
----
-
-### Deferred (cheap to keep, not urgent)
-- [ ] `_anchor_centered_frame()` byte-identical in `simulation.gd` and
-      `replication_manager.gd` — one duplicate, not yet worth extracting.
-      Extract on the second copy per SKILL.md's "extract by what divergence
-      costs" rule. Parked here rather than deleted since it's a one-line
-      note to lose and a real debugging session to rediscover.
 
 ---
 
@@ -82,3 +68,18 @@ _None open._
   `svg_to_polymerase_gd.py`) — confirmed gone.
 - ~~"PC build, as-is, off the thumb drive" demo note~~ — tied to one past
   demo night, not a standing task.
+- ~~Translation review batch~~ — verified against current localization
+  CSVs, all three items already correct: "Pol épsilon" accent and
+  "eucariota"/"eucariótico" usage are each internally consistent per
+  language; the `_FULL` key word-order "inconsistency" is actually two
+  different naming categories that only look alike on the surface — "DNA
+  Polimerase III" is a fixed borrowed compound term kept in its
+  international order, while "Helicase DnaB" is a generic enzyme noun
+  correctly qualified in Portuguese noun-first order (same pattern as
+  "proteína p53," "gene BRCA1"). No CSV changes needed.
+- ~~`_anchor_centered_frame()` byte-identical in `simulation.gd` and
+  `replication_manager.gd`~~ — extracted to
+  `scripts/ui/zoom_frame_utils.gd`'s `ZoomFrameUtils.anchor_centered_frame()`
+  (static, `class_name`, same convention as `ProceduralShapeUtils`). Pure
+  refactor — the two `_zoom_along_extent()`/`_zoom_cross_extent()` callers
+  stayed local since their implementations genuinely differ.

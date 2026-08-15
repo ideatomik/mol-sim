@@ -655,7 +655,11 @@ func _zoom_frame_leading_level2() -> Dictionary:
 	if sim.helicase_node == null or not is_instance_valid(sim.helicase_node):
 		return _polymerase_footprint_frame(leading_polymerase, tm.zoom_leading_level2_fit)
 	var context: Array = [sim.helicase_node.global_position]
-	return _anchor_centered_frame(leading_polymerase.global_position, context, tm.zoom_leading_level2_fit)
+	# Anchor-centers on the polymerase (not a bounding-box midpoint of
+	# polymerase+helicase) — only safe here because the context point (the
+	# helicase) stays reasonably close to the anchor; lagging deliberately
+	# avoids this framing (see _zoom_frame_lagging_level2() above).
+	return ZoomFrameUtils.anchor_centered_frame(leading_polymerase.global_position, context, tm.zoom_leading_level2_fit, _zoom_along_extent(), _zoom_cross_extent())
 
 func _zoom_frame_leading_level3() -> Dictionary:
 	return _polymerase_footprint_frame(leading_polymerase, tm.zoom_polymerase_level3_fit)
@@ -674,25 +678,6 @@ func _zoom_frame_lagging_level2() -> Dictionary:
 
 func _zoom_frame_lagging_level3() -> Dictionary:
 	return _polymerase_footprint_frame(lagging_polymerase, tm.zoom_polymerase_level3_fit)
-
-## Centers the camera ON `anchor` (the highlighted object) rather than on
-## the bounding-box midpoint of anchor+context — sizes the frame
-## symmetrically around the anchor just far enough to include every context
-## point, so the anchor is guaranteed to land dead-center on screen. Only
-## used where the context point stays reasonably close to the anchor
-## (leading+helicase); lagging deliberately avoids this (see above).
-func _anchor_centered_frame(anchor: Vector2, context: Array, fit_pct: float) -> Dictionary:
-	var max_dx: float = 0.0
-	var max_dy: float = 0.0
-	for p in context:
-		max_dx = max(max_dx, abs(p.x - anchor.x))
-		max_dy = max(max_dy, abs(p.y - anchor.y))
-	var size: Vector2 = Vector2(max(max_dx * 2.0, 1.0), max(max_dy * 2.0, 1.0))
-	# size.x is a world-x span, size.y a world-y span. The extent helpers supply
-	# whichever viewport dimension each currently maps to — the rotation is
-	# exactly 90 degrees, so the box stays axis-aligned and needs no transform.
-	var target_zoom: float = minf((_zoom_along_extent() * fit_pct) / size.x, (_zoom_cross_extent() * fit_pct) / size.y)
-	return {zoom = target_zoom, position = anchor}
 
 func _polymerase_footprint_frame(clamp_node: Node2D, fit_pct: float) -> Dictionary:
 	if clamp_node == null or not is_instance_valid(clamp_node):
