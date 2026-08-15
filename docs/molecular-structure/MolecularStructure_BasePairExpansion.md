@@ -345,7 +345,7 @@ their real template — pre-existing bug, unrelated to A-D above, found via
 the same diagnostic dump.** The dump's leading/template_top and
 lagging/template_bottom sections showed IDENTICAL letters at every tested
 slot (AA, TT, GG — never a real Watson-Crick pair). Root cause confirmed
-against `docs/SKILL.md`'s own polarity table, not guessed: leading's
+against `docs/skills/zymulador-gdscript_SKILL.md`'s own polarity table, not guessed: leading's
 orientation (3' left, 5' right) is antiparallel to template_top's (5'
 left, 3' right), confirming leading's real template is `template_top`
 (matching `PARTNER_STRAND` in `molecule_structure_renderer.gd`, which

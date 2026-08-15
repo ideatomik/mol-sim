@@ -1,8 +1,8 @@
 # Handout — Molecular Structure Subsystem, DNA-first Milestone
 
 _For Claude Code. This is a Growth-phase kickoff on a Lattice-approved design
-— see the Crystal Building Method in `docs/SKILL.md` (the only current copy;
-a stale root-level `SKILL.md` duplicate has since been removed). The design
+— see the Crystal Building Method in `docs/skills/zymulador-gdscript_SKILL.md`
+(the sole current copy; a stale duplicate has since been removed). The design
 has been discussed and the direction + first milestone's shape are approved.
 Nothing below authorizes drifting past the scope fence without stopping to
 check back in._
@@ -18,7 +18,7 @@ documentation-only update; no implementation code has been written yet._
 
 ## Read first, in this order
 
-1. `docs/SKILL.md` — GDScript hard rules, engine traps, edit protocol,
+1. `docs/skills/zymulador-gdscript_SKILL.md` — GDScript hard rules, engine traps, edit protocol,
    ground-truth discipline, the Crystal Building Method itself. Non-
    negotiable baseline for touching this codebase at all.
 2. `MolecularStructureDesign.md` — the full design. **Read it whole, not the
