@@ -23,7 +23,6 @@
 script = ExtResource("1_5eski")
 num_nucleotide_slots = 34
 dna_ribbons_gap = 60.0
-okazaki_fragment_size = 6
 fade_duration = 1.0
 wobble_amplitude = 0.9
 wobble_speed = 1.0

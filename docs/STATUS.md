@@ -89,24 +89,169 @@ behind an SSB toggle that ships first.
   exception to the "helicase is the single source of truth for replisome
   positioning" rule below, justified by the lagging polymerase not being
   shown as replisome-attached until the trombone-loop tier.
-- **Post-helicase catch-up (base complexity only)**: once the helicase reaches
-  `DONE`, a dedicated `Timer` (`lagging_catchup_timer`, paced by
-  `lagging_catchup_step_duration`) takes over firing — finishing whatever
-  fragment was in progress, then opening one final, genuinely short fragment
+- **Post-helicase catch-up (base complexity only)**: a dedicated `Timer`
+  (`lagging_catchup_timer`, paced by `_lagging_catchup_step_duration()` —
+  matches live firing's pace exactly, see "Lagging polymerase animation"
+  above) takes over firing — finishing whatever fragment was in progress,
+  then opening one final, genuinely short fragment
   (`min(okazaki_fragment_size, remaining)`) to close out the strand
-  completely. Only once this finishes does the enzyme fade sequence run —
-  and, as of the Pol I pass, only once ligase and (if `pol1_enabled`) Pol I
-  have ALSO drained their own trailing queues (`_lagging_enzymes_settled()`/
-  `_lagging_try_deferred_fade()` — see OkazakiMaturationDesign.md's Pol I
-  Implementation Status for the bug this fixed: the fade used to hide a
-  trailing seal before it had actually happened).
-- **Enzyme fade sequencing**: `_lagging_fade_enzyme_scene()` (helicase,
-  leading polymerase, lagging polymerase, ligase, Pol I) fires only *after*
-  the lagging strand's own end-state has fully settled, including trailing
-  enzyme work as of the Pol I pass (see above). It is no longer tied
-  directly to `helicase.Phase.DONE`, since that no longer means "everything
-  is finished" once lagging synthesis is decoupled from the helicase's own
-  timeline.
+  completely. Started from `_on_helicase_phase_changed()` on
+  `Phase.FINISHING_LAST_PULSE`, **not** `Phase.DONE` — live firing
+  (`_on_helicase_slot_reached()`) already stops dead the instant real
+  `SWEEPING` ends (it ignores every index from the helicase's escort walk
+  onward), so catch-up must take over immediately or the lagging strand
+  sits completely undriven for the whole escort walk plus `Phase.SETTLING`
+  — a visible pause. The `Phase.DONE` branch still calls
+  `_lagging_start_catchup()` too, as a redundant safety net; the function
+  itself is idempotent against a double-start (skips if the timer is
+  already running, since restarting a live `Timer` resets its countdown).
+  The lagging polymerase's own fade does **not** fire the instant
+  `lagging_total_consumed` reaches `num_nucleotide_slots` — see
+  "Independent end-of-run fade cascade" below for why, and how it's
+  deferred.
+
+### Independent end-of-run fade cascade
+
+Each enzyme fades the instant *its own* work is done, at a normal
+unaccelerated pace, rather than everyone fading together behind one shared
+gate — this doubles as a diegetic progress cue ("the polymerases vanished —
+oh, it's the ligase finishing up") and replaces the old accelerating
+"hurry up" behavior described below.
+
+- **Helicase sprite** fades first, the instant `helicase.gd`'s state machine
+  enters `Phase.FINISHING_LAST_PULSE` (i.e. the moment it reaches its own
+  last slot) — well before `Phase.DONE`. `helicase.gd` emits a dedicated
+  `sprite_should_fade` signal for this (`_on_helicase_sprite_should_fade()`
+  in `replication_manager.gd`), separate from `phase_changed`, since
+  `_on_helicase_phase_changed()` already has an unrelated, specific meaning
+  tied to `Phase.DONE` (kicking off lagging catch-up).
+- **"Invisible escort"**: the helicase's state machine keeps quietly running
+  through `FINISHING_LAST_PULSE` after its sprite fades — this is *not* dead
+  code. The leading polymerase's position is still derived every frame as
+  `helicase_x - offset` (unchanged — see "Helicase-anchored positioning"
+  below; this was a deliberate choice over giving the leading polymerase its
+  own independent position, specifically to avoid expanding the lagging
+  polymerase's positioning exception), so the helicase must keep stepping,
+  invisibly, until `extra_steps_done >= extra_steps_total` — one step per
+  sequence slot still ahead of the leading polymerase — to finish escorting
+  it to the true end. These extra steps now run at the same flat
+  `step_duration` as normal `SWEEPING` (the old `finishing_acceleration`
+  export — a compounding 0.85x-per-step speedup down to a 0.05s floor — is
+  gone entirely; it used to cascade into every other enzyme's pacing too,
+  since `helicase_mgr.step_duration` is what primer placement/Pol I/ligase/
+  lagging-strand firing all read directly).
+- **Leading polymerase** fades independently once that escort finishes (the
+  `FINISHING_LAST_PULSE → SETTLING` transition, `not leading_faded` guarded
+  in `_on_helicase_phase_changed()`).
+- **Lagging polymerase** fades independently once its own catch-up finishes
+  — does not wait on ligase/Pol I. "Finishes" is deliberately *not* the
+  instant `lagging_total_consumed` reaches `sim.num_nucleotide_slots`:
+  that counter increments synchronously inside `_lagging_fire_step()` at
+  fire time, before the fired step's own position tween
+  (`lagging_polymerase_tween`) or its capture-into-strand animation
+  (`_capture_begin_lagging()` → `_capture_finish_lagging()`, which is what
+  actually places the base and spawns its hydrogen bonds) have visibly
+  finished — fading immediately off that counter used to fade the
+  polymerase out while its last base was still flying into place.
+  `_lagging_request_terminal_finish()` / `_lagging_try_finish_terminal()`
+  defer the actual fade (mirroring the `_lagging_fade_pending` /
+  `_lagging_try_deferred_fade()` pattern ligase/Pol I already use, and the
+  "never race a tween" gate `_lagging_apply_atom_tier_position_swap()`
+  already follows): armed once the counter reaches its max, then re-checked
+  from every plausible "last thing still in flight" completion point —
+  itself right after arming, the tail of `_capture_finish_lagging()`, and
+  (the one *guaranteed* re-check) `update()`'s own per-frame poll. An
+  earlier version of this also chained a `tween_callback` onto the
+  position tween's own completion instead of polling — dropped after
+  headless testing caught it getting stuck forever with both gates already
+  clear: two independently-created Tweens (the position tween and the
+  capture's own leg-2 tween) finishing in the same frame raced, and
+  whichever event fired first didn't reliably trigger a re-check once the
+  second one *also* cleared. The per-frame poll in `update()` sidesteps
+  that entirely — it doesn't depend on any specific callback ordering. The
+  position tween itself is still safe to just check `is_valid()` on
+  (nothing kills it once fired — there's no next fire-step). The capture is
+  **not** safe to wait on indefinitely: `_capture_update_lagging()`'s
+  leg 2 (the thing that would eventually call `_capture_finish_lagging()`
+  on its own) is driven entirely by `lagging_pump_tween`, which
+  `_lagging_fire_step()` kills and recreates on *every* call — including a
+  call whose own slot is already populated (a primer slot, which the
+  terminal fragment routinely is) and which therefore never reaches
+  `_capture_begin_lagging()`'s force-finish branch. If the previous step's
+  capture hadn't crossed its own `phase >= 0.5` leg-2 trigger by then, that
+  kill orphans it — and since this is the terminal step, no future
+  fire-step will ever come along to force-finish it (that only happens as
+  a side effect of starting the *next* real capture). So
+  `_lagging_try_finish_terminal()` doesn't wait for a lingering
+  `lagging_capture_node` — by the time it's checking, the strand is already
+  guaranteed to be at its true end, so it force-finishes it directly
+  (`_capture_finish_lagging(lagging_capture_target_slot,
+  lagging_capture_node)`, the identical call `_capture_begin_lagging()`
+  already uses to preempt a stale capture with a new one — here there's no
+  new one, just nothing left to preempt it with). This truncates at most
+  the very last base's own slide-into-place animation, snapping it to its
+  final resting position slightly early instead of finishing the glide.
+  `_capture_begin_lagging()` also now runs that same force-finish check
+  *before* its "slot already populated" early return (previously after),
+  closing the same gap for any primer slot encountered mid-run, not just
+  the terminal one.
+- **Ligase and Pol I** each fade independently once their own queue drains —
+  `_ligase_settled()`/`_pol1_settled()` (a split of the old
+  `_lagging_enzymes_settled()`), checked at the tail of each enzyme's own
+  completion handler and fired via `_lagging_try_deferred_fade()`, which now
+  fades whichever of the two just became eligible rather than gating one
+  shared tween behind both. `_ligase_settled()` still chains through
+  `_pol1_settled()` as a cheap safety net (ligase's own eligibility already
+  requires `frag.primer_removed`, so it's structurally always the last of
+  the two to finish) even though the old shared "everyone waits for
+  everyone" gate is gone.
+- `is_fully_complete()` returns a new `_scene_fully_faded` bool (set by
+  `_check_scene_fully_faded()`, called after each of the four independent
+  fade sites above) instead of the old `lagging_polymerase_faded` proxy —
+  true only once every active enzyme has faded, matching what its own doc
+  comment always claimed.
+- **Scrub determinism**: the scrub-index axis gained two more deterministic
+  segments past the lagging catch-up one (see "Scrub-catch-up" below):
+  leading-polymerase-finish (`get_leading_finish_steps_needed()` — the same
+  "how many extra steps past the last slot" formula `helicase.gd`'s own
+  trigger uses live, extracted so both share one implementation) and a
+  ligase/Pol I "settle" segment (`get_enzyme_settle_ticks_needed()` — a
+  small **fixed event count**, not duration-derived: `1` Pol I event `+ 1`
+  ligase event when `ligase_enabled`, `0` otherwise). The settle segment is
+  a known, explicitly-flagged simplification: it assumes Pol I/ligase
+  per-job animation time stays fast relative to fragment-closing cadence
+  (true under every currently-shipped tuning, so no real backlog
+  accumulates before the strand finishes) — a future tuning pass that made
+  Pol I genuinely slower than fragment cadence would need a real
+  backlog-aware event queue instead. Ligase/Pol I are already fully hidden
+  throughout scrub regardless of position (scrub shows only finished
+  states, never in-progress travel/seal), so this segment has no new visual
+  effect of its own — it exists purely so `get_max_scrub_index()` (and the
+  scrubber slider, which reads it directly) extends far enough to cover a
+  live run's full settle window.
+- **`_on_helicase_slot_reached()` ignores escort/overshoot indices**: this
+  handler (the lagging-strand and primase trigger — NOT
+  `_capture_on_leading_slot_reached()`, the leading-strand base-capture
+  trigger, which is a separate handler on the same `slot_reached` signal and
+  legitimately needs every index) returns immediately when `index >=
+  num_nucleotide_slots` — i.e. during the helicase's `FINISHING_LAST_PULSE`
+  escort steps, which don't correspond to any newly exposed template. Without
+  this guard, escort-triggered lagging fire-steps could race
+  `lagging_total_consumed` to completion mid-fragment, abandoning it
+  half-tiled and jumping straight to `_polymerases_move_to_rest()` — again
+  invisible at the old accelerated pace, clearly visible once flat.
+- **Atom-tier position-swap functions respect the new fade bools**:
+  `_leading_apply_atom_tier_position_swap()` and
+  `_lagging_apply_atom_tier_position_swap()` (zoom-tier position/alpha
+  swap, called every frame from `render()`) used to gate solely on
+  `_polymerases_at_rest`, which is only set once the LAGGING strand fully
+  finishes. Since `leading_faded`/`lagging_polymerase_faded` can now fire
+  well before that, both functions were re-asserting `modulate.a` back
+  toward `1.0` (their `dip_shape` term is ~0 outside an active zoom
+  transition, so this fired on nearly every frame) and re-deriving position
+  from the helicase-offset formula — undoing the fade and sliding the
+  polymerase back to its old resting spot. Both now return immediately once
+  their own `*_faded` bool is true.
 
 ### Lagging polymerase animation
 
@@ -123,8 +268,15 @@ fired, whether live or during catch-up — tweens `lagging_polymerase.position`
 to the new slot's x over `duration`, using `Tween.TRANS_CUBIC` /
 `Tween.EASE_OUT` to deliberately match the helicase's own easing curve.
 `duration` is supplied by the caller: `helicase_mgr.step_duration` (already
-dynamic — reflects speed multiplier and finishing acceleration) for live
-firing, `lagging_catchup_step_duration` for catch-up firing. Because
+dynamic — reflects the speed multiplier) for live firing,
+`replication_manager.gd`'s own `_lagging_catchup_step_duration()` —
+`helicase_mgr.base_step_duration / speed_multiplier`, the identical formula
+— for catch-up firing. These two used to diverge (catch-up ran off a fixed,
+independently-tuned constant), which was invisible while the old
+FINISHING_LAST_PULSE acceleration made live pacing very fast by the time
+catch-up began, but became a real, visible pace jump at the DONE boundary
+once that acceleration was removed — see "Independent end-of-run fade
+cascade" below. Because
 `_lagging_fire_step()` is the *only* place position changes during live/
 catch-up play, a fragment's first slot (the "jump back" to start the next
 fragment) goes through the identical code path as any other slot — same
@@ -180,19 +332,23 @@ Implementation Status, bug #1, for the fix.
 slot per known interval, in a fixed order), the scrub *index* space itself
 was extended rather than inventing a parallel wall-clock-based rebuild path.
 `simulation.gd`'s `get_max_scrub_index()` returns `num_slots - 1 +
-catchup_needed` (`catchup_needed` from
-`replication_manager.get_lagging_catchup_steps_needed()`), and
-`scrub_to_nucleotide_index()` routes any index past `num_slots - 1` to a new
-`scrub_to_lagging_catchup(catchup_step)`, which threads `catchup_step` through
-`scrub_rebuild()`'s `ctx` as `lagging_catchup_step`. `_lagging_scrub_rebuild()`
+leading_finish_needed + catchup_needed + settle_needed` — three segments
+stacked past the helicase's own last slot (`leading_finish_needed` from
+`replication_manager.get_leading_finish_steps_needed()`, `catchup_needed`
+from `get_lagging_catchup_steps_needed()`, `settle_needed` from
+`get_enzyme_settle_ticks_needed()` — see "Independent end-of-run fade
+cascade" above for what each one represents). `scrub_to_nucleotide_index()`
+routes any index past `num_slots - 1` to whichever of
+`scrub_to_leading_finish()` / `scrub_to_lagging_catchup()` /
+`scrub_to_enzyme_settle()` owns that segment. `_lagging_scrub_rebuild()`
 treats catch-up steps as strictly additive on top of the "natural" tiling
 point (`attempted_consumed`) computed at the helicase's own final position —
 reaching `DONE` no longer *implies* full completion for either live play or
-scrub; both require the explicit extra steps. This currently only extends
-arrow-key stepping (`scrub_to_nucleotide_index()`) — the slider widget's own
-`max_value` is intentionally left at the old ceiling (`total_bases`) until a
-future UI pass; dragging the slider to its current max still lands on the
-"natural" point, not full catch-up.
+scrub; both require the explicit extra steps. The scrubber slider reads
+`get_max_scrub_index()` directly (`player_ui.gd`'s
+`_on_simulation_initialized()`/`_on_simulation_progress_changed()`), so it
+automatically covers all three segments too — no separate arrow-key-only
+ceiling.
 
 ### Minimum sequence length
 

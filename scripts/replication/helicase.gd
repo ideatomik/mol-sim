@@ -11,6 +11,11 @@ extends Node
 # ---------- SIGNALS ----------
 signal slot_reached(index: int)       # Fired once per step when helicase arrives at a new slot
 signal phase_changed(new_phase: int)  # Fired on every phase transition (passes Phase enum value)
+signal sprite_should_fade             # Fired once, at SWEEPING -> FINISHING_LAST_PULSE — the
+                                       # helicase's own unwinding job is done and its sprite
+                                       # should fade, even though the state machine keeps
+                                       # quietly running to finish escorting the leading
+                                       # polymerase's derived position to the true end.
 
 # ---------- SPEED ----------
 # step_duration is seconds per slot at 1x. Speed multiplier divides it.
@@ -38,9 +43,11 @@ var settling_duration: float = 0.5   # Should match simulation.gd export
 # ---------- FINISHING ----------
 # Extra steps taken after last_slot_index, one per leading slot still ahead of factory_x.
 # Set by simulation.gd via start_finishing(count) when FINISHING_LAST_PULSE begins.
+# Runs at the same flat step_duration as normal SWEEPING — no acceleration. The helicase
+# sprite itself has already faded by this point (see sprite_should_fade); these steps only
+# exist to keep escorting the leading polymerase's helicase-derived position to the true end.
 var extra_steps_total: int = 0
 var extra_steps_done: int = 0
-@export var finishing_acceleration: float = 0.85  # step_duration * this each step (< 1.0 = faster)
 
 # ---------- CONTEXT (set by simulation.gd after _ready) ----------
 var slot_count: int = 0             # Total number of slots — set by simulation.gd
@@ -83,17 +90,16 @@ func _process(delta: float) -> void:
 		Phase.FINISHING_LAST_PULSE:
 			# Step past the last slot, emitting slot_reached so leading bases
 			# spawn naturally via the position-based synthesis path.
-			# Accelerates each step. Self-transitions to SETTLING when done.
-			if step_t == 0.0 and extra_steps_done == 0:
-				print("[HELICASE] FINISHING_LAST_PULSE first tick — step_duration=%.4f extra_steps_total=%d" % [step_duration, extra_steps_total])
+			# Flat pace (same step_duration as SWEEPING) — the helicase sprite
+			# already faded on entering this phase; this just finishes escorting
+			# the leading polymerase's derived position. Self-transitions to
+			# SETTLING when done.
 			step_t += delta / step_duration
 			if step_t >= 1.0:
 				step_t -= 1.0
 				current_slot_index += 1
 				emit_signal("slot_reached", current_slot_index)
-				step_duration = max(step_duration * finishing_acceleration, 0.05)
 				extra_steps_done += 1
-				print("[HELICASE] FINISHING step %d/%d — step_duration now=%.4f" % [extra_steps_done, extra_steps_total, step_duration])
 				if extra_steps_done >= extra_steps_total:
 					settling_t = 0.0
 					_set_phase(Phase.SETTLING)
@@ -116,8 +122,7 @@ func start_intro() -> void:
 	is_running = false  # Intro is driven by tween in simulation.gd
 	extra_steps_total = 0
 	extra_steps_done = 0
-	step_duration = base_step_duration / speed_multiplier  # Reset speed after finishing acceleration
-	print("[HELICASE] start_intro — step_duration reset to %.3f" % step_duration)
+	step_duration = base_step_duration / speed_multiplier
 
 func finish_intro() -> void:
 	# Called by simulation.gd when the intro tween completes
@@ -143,15 +148,15 @@ func start_finishing(remaining_leading_slots: int) -> void:
 	# Minimum 1 so helicase always exits visually.
 	extra_steps_total = max(1, remaining_leading_slots)
 	extra_steps_done = 0
-	step_duration = base_step_duration / speed_multiplier  # Reset before acceleration
+	step_duration = base_step_duration / speed_multiplier
 
 func scrub_to_slot(index: int) -> void:
 	current_slot_index = clamp(index, 0, last_slot_index)
 	step_t = 0.0
 	is_running = false
-	extra_steps_total = 0  # ADD — clear stale finishing state from a previous run
-	extra_steps_done = 0   # ADD
-	step_duration = base_step_duration / speed_multiplier  # ADD — undo finishing acceleration
+	extra_steps_total = 0  # clear stale finishing state from a previous run
+	extra_steps_done = 0
+	step_duration = base_step_duration / speed_multiplier
 	# Phase is set by simulation.gd's scrub_to() after calling this
 
 func set_phase(new_phase: int) -> void:
@@ -199,3 +204,5 @@ func _set_phase(new_phase: int) -> void:
 		return
 	phase = new_phase
 	emit_signal("phase_changed", new_phase)
+	if new_phase == Phase.FINISHING_LAST_PULSE:
+		emit_signal("sprite_should_fade")

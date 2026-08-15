@@ -27,7 +27,7 @@ extends Node2D
 # CHILD OF THE LIGASE NODE, which buys three behaviors for free and is the
 # reason no lifecycle code appears in this file:
 #   - ligase.visible = false in _ligase_reset_visual() hides this too
-#   - _lagging_fade_enzyme_scene()'s modulate fade reaches these beads
+#   - ligase's own independent end-of-run modulate fade reaches these beads
 #   - _ligase_park_offstage() carries them along
 # All local space. Legitimate here, unlike the helicase case, because ligase
 # is STATIONARY for the entire ATP sequence — it only moves during TRAVELING,

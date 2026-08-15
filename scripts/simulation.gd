@@ -102,7 +102,11 @@ var track_length: float = 0.0
 @export var settling_threshold: float = 2.0
 @export var lagging_gap_enabled: bool = false  # false: base complexity — lagging polymerase catches up, closing the strand fully. true: reserved for the telomerase tier, where the trailing gap is left standing.
 @export var ligase_enabled: bool = false  # false: base complexity — continuous lagging backbone (no ligase modeled). true: reserved for the ligase tier — per-fragment backbone with visible nicks until ligase joins them.
-@export var lagging_catchup_step_duration: float = 0.3  # pace of post-DONE catch-up firing — independent of helicase timing, since there's no fork driving it anymore
+# lagging_catchup_step_duration removed — post-DONE catch-up now paces itself
+# from helicase_mgr.base_step_duration / speed_multiplier, matching live
+# firing exactly (see replication_manager.gd's _lagging_catchup_step_duration()).
+# An independent fixed constant here created a real pace jump at the DONE
+# boundary once the old helicase finishing-acceleration was removed.
 
 
 @export_group("Wobble")
@@ -773,10 +777,11 @@ func _process(delta):
 			# INTRO is the load-bearing exclusion: step_t is 0 there, which
 			# sits inside the spark window and would fire a cleave at scene
 			# load, before replication has begun. FINISHING_LAST_PULSE stays
-			# ON — the cycle lives in step_t space, so finishing_acceleration
-			# compresses it proportionally exactly as it already does the
-			# barrel roll, and switching the lens off while the helicase
-			# visibly keeps translocating would read as fuel-free motion.
+			# ON — the state machine keeps quietly stepping through it (see
+			# helicase.gd's sprite_should_fade), and helicase_atp_cycle is a
+			# child of helicase_node, so it fades out automatically along
+			# with the sprite via modulate inheritance; no separate gating
+			# needed here.
 			var cofactor_stepping: bool = phase == helicase_mgr.Phase.SWEEPING or phase == helicase_mgr.Phase.FINISHING_LAST_PULSE
 			helicase_atp_cycle.byproducts_visible = %ComplexityManager.is_enabled("cofactor_byproducts")
 			helicase_atp_cycle.update(
@@ -1042,9 +1047,11 @@ func toggle_play():
 		if helicase_mgr.get_phase() == helicase_mgr.Phase.INTRO:
 			_run_intro()
 		else:
+			# resume_enzymes() restores helicase_node's alpha itself, guarded by
+			# helicase_sprite_faded — pausing mid-FINISHING_LAST_PULSE (sprite
+			# already faded, state machine still finishing the leading-strand
+			# escort) must not force it back to visible on resume.
 			replication_mgr.resume_enzymes()
-			if helicase_node:
-				helicase_node.modulate.a = 1.0
 			helicase_mgr.resume()
 	elif helicase_mgr != null:
 		helicase_mgr.pause()
@@ -1110,6 +1117,12 @@ func scrub_to(progress: float):
 			settle_blend = 0.0
 
 	var is_done_phase = helicase_mgr != null and helicase_mgr.get_phase() == helicase_mgr.Phase.DONE
+	# M0: the helicase reaching its own last slot — sprite fades here, well
+	# before leading/lagging (see get_max_scrub_index()'s segments). Within
+	# this function's own range ([0, num_nucleotide_slots - 1]) leading and
+	# lagging can never yet be faded — that only happens in
+	# scrub_to_leading_finish()/scrub_to_lagging_catchup() past this point.
+	var helicase_faded_here = target_slot >= num_nucleotide_slots - 1
 
 	# ---- Delegate synthesis rebuild to replication_mgr ----
 	if replication_mgr != null:
@@ -1118,6 +1131,9 @@ func scrub_to(progress: float):
 			target_polymerase_x = target_polymerase_x,
 			helicase_x = helicase_x,
 			is_done_phase = is_done_phase,
+			helicase_sprite_faded = helicase_faded_here,
+			leading_faded = false,
+			lagging_faded = false,
 			num_slots = num_nucleotide_slots,
 			nucleotide_original_x = nucleotide_original_x,
 			template_strand_y = template_strand_y,
@@ -1139,30 +1155,111 @@ func scrub_to(progress: float):
 	for i in range(top_strand_slots.size()):
 		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
 
-
 	if helicase_node:
-		helicase_node.modulate.a = 1.0
-
-	if helicase_node:
+		# Pre-existing bug fix: this used to unconditionally clobber back to
+		# 1.0 here, undoing the phase-dependent 0.0 set above — meaning a
+		# scrub landing exactly on the last slot briefly showed a visible
+		# helicase before the next frame's logic caught up. Must match
+		# helicase_faded_here, not always force visible.
+		helicase_node.modulate.a = 0.0 if helicase_faded_here else 1.0
 		helicase_node.position = Vector2(helicase_x, center_y)
 
 	_notify_zoom_scrub()
 	queue_redraw()
 
+## Scrub index axis, past num_nucleotide_slots - 1 (M0 — the helicase's own
+## last slot, where its sprite fades): M1 = leading polymerase's own finish
+## (get_leading_finish_steps_needed() steps past M0), M2 = lagging polymerase's
+## own catch-up (get_lagging_catchup_steps_needed() steps past M1), M3 =
+## ligase/Pol I settling (get_enzyme_settle_ticks_needed() steps past M2, see
+## get_max_scrub_index()). Each of the three intermediate helpers below owns
+## one segment.
 func scrub_to_nucleotide_index(index: int):
 	var max_index = get_max_scrub_index()
 	index = clamp(index, 0, max_index)
-	var catchup_needed = 0
-	if replication_mgr != null and not lagging_gap_enabled:
-		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
-	
+
 	if index <= num_nucleotide_slots - 1:
 		var progress = float(index) / float(num_nucleotide_slots - 1)
 		scrub_to(progress)
-	else:
-		var catchup_step = index - (num_nucleotide_slots - 1)
-		scrub_to_lagging_catchup(catchup_step)
+		return
 
+	var m0 = num_nucleotide_slots - 1
+	var leading_finish_needed = 0
+	var catchup_needed = 0
+	if replication_mgr != null and not lagging_gap_enabled:
+		leading_finish_needed = replication_mgr.get_leading_finish_steps_needed(num_nucleotide_slots, nucleotide_original_x)
+		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
+	var m1 = m0 + leading_finish_needed
+	var m2 = m1 + catchup_needed
+
+	if index <= m1:
+		scrub_to_leading_finish(index - m0)
+	elif index <= m2:
+		scrub_to_lagging_catchup(index - m1)
+	else:
+		var settle_step = index - m2
+		scrub_to_enzyme_settle(settle_step)
+
+## Segment A (M0 < index <= M1): the helicase sprite has already faded; its
+## state machine is still quietly walking through FINISHING_LAST_PULSE to
+## escort the leading polymerase's derived position toward the true end (see
+## helicase.gd's sprite_should_fade). finish_step counts completed extra
+## steps — an instant snap, no easing, matching every other scrub target.
+func scrub_to_leading_finish(finish_step: int) -> void:
+	lagging_last_catchup_step = 0
+	var last_valid = num_nucleotide_slots - 1
+
+	if helicase_mgr != null:
+		helicase_mgr.scrub_to_slot(last_valid)
+		helicase_mgr.set_phase(helicase_mgr.Phase.FINISHING_LAST_PULSE)
+
+	helicase_x = nucleotide_original_x[last_valid] + finish_step * nucleotide_slot_spacing
+	polymerase_x = helicase_x - polymerase_x_offset_slots * nucleotide_slot_spacing
+	settle_blend = 0.0
+
+	var leading_finish_needed = 0
+	if replication_mgr != null:
+		leading_finish_needed = replication_mgr.get_leading_finish_steps_needed(num_nucleotide_slots, nucleotide_original_x)
+	var leading_done = finish_step >= leading_finish_needed
+
+	if replication_mgr != null:
+		replication_mgr.scrub_rebuild({
+			target_slot = last_valid,
+			target_polymerase_x = polymerase_x,
+			helicase_x = helicase_x,
+			is_done_phase = true,
+			helicase_sprite_faded = true,
+			leading_faded = leading_done,
+			lagging_faded = false,
+			num_slots = num_nucleotide_slots,
+			nucleotide_original_x = nucleotide_original_x,
+			template_strand_y = template_strand_y,
+			new_top_template_y = new_top_template_y,
+			new_bottom_template_y = new_bottom_template_y,
+			helicase_mgr = helicase_mgr,
+		})
+
+	for i in range(num_nucleotide_slots):
+		if template_hydrogen_bonds[i] != null:
+			template_hydrogen_bonds[i].visible = (nucleotide_original_x[i] >= helicase_x)
+
+	_rebuild_rail()
+	_rebuild_top_rail()
+	for i in range(template_strand_bottom.size()):
+		template_strand_bottom[i].progress = track_length - nucleotide_original_x[i]
+	for i in range(top_strand_slots.size()):
+		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
+
+	if helicase_node:
+		helicase_node.modulate.a = 0.0  # already past M0
+		helicase_node.position = Vector2(helicase_x, center_y)
+
+	_notify_zoom_scrub()
+	queue_redraw()
+
+## Segment B (M1 < index <= M2): leading polymerase has already faded; the
+## lagging polymerase is still working through its own independent,
+## unaccelerated catch-up (see replication_manager.gd's lagging_catchup_timer).
 func scrub_to_lagging_catchup(catchup_step: int) -> void:
 	lagging_last_catchup_step = catchup_step
 	var target_slot = num_nucleotide_slots - 1
@@ -1176,12 +1273,20 @@ func scrub_to_lagging_catchup(catchup_step: int) -> void:
 	polymerase_x = last_x
 	settle_blend = 1.0
 
+	var catchup_needed = 0
+	if replication_mgr != null:
+		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
+	var lagging_done = catchup_step >= catchup_needed
+
 	if replication_mgr != null:
 		replication_mgr.scrub_rebuild({
 			target_slot = target_slot,
 			target_polymerase_x = polymerase_x,
 			helicase_x = helicase_x,
 			is_done_phase = true,
+			helicase_sprite_faded = true,
+			leading_faded = true,
+			lagging_faded = lagging_done,
 			lagging_catchup_step = catchup_step,
 			num_slots = num_nucleotide_slots,
 			nucleotide_original_x = nucleotide_original_x,
@@ -1202,8 +1307,26 @@ func scrub_to_lagging_catchup(catchup_step: int) -> void:
 	for i in range(top_strand_slots.size()):
 		top_strand_slots[i].progress = track_length - nucleotide_original_x[i]
 
+	if helicase_node:
+		helicase_node.modulate.a = 0.0
+		helicase_node.position = Vector2(helicase_x, center_y)
+
 	_notify_zoom_scrub()
 	queue_redraw()
+
+## Segment C (index > M2): ligase/Pol I are still finishing their own
+## trailing work. They're already fully hidden throughout scrub regardless of
+## position (scrub shows only finished states, never in-progress travel/
+## seal — see replication_manager.gd's scrub_rebuild() dispatcher), so there's
+## no additional visual state to reproduce here; this milestone exists purely
+## so get_max_scrub_index() extends far enough to cover a live run's full
+## settle window. See get_enzyme_settle_ticks_needed()'s own header for the
+## known simplification this rests on.
+func scrub_to_enzyme_settle(_settle_step: int) -> void:
+	var catchup_needed = 0
+	if replication_mgr != null:
+		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
+	scrub_to_lagging_catchup(catchup_needed)
 
 
 # ==========================================
@@ -1356,10 +1479,12 @@ func find_nearest_matching_pair(base_pair_type: String) -> Dictionary:
 	}
 
 func get_max_scrub_index() -> int:
-	var catchup_needed = 0
-	if replication_mgr != null and not lagging_gap_enabled:
-		catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
-	return num_nucleotide_slots - 1 + catchup_needed
+	if replication_mgr == null or lagging_gap_enabled:
+		return num_nucleotide_slots - 1
+	var leading_finish_needed = replication_mgr.get_leading_finish_steps_needed(num_nucleotide_slots, nucleotide_original_x)
+	var catchup_needed = replication_mgr.get_lagging_catchup_steps_needed(num_nucleotide_slots, nucleotide_original_x)
+	var settle_needed = replication_mgr.get_enzyme_settle_ticks_needed()
+	return num_nucleotide_slots - 1 + leading_finish_needed + catchup_needed + settle_needed
 
 ## LongSequenceDesign.md follow-up — the one funnel point for drag-to-scrub
 ## gestures from helicase_ring.gd (connected below) and both polymerase
@@ -1707,9 +1832,9 @@ func _setup_helicase():
 	# being a pure function of one float), so an ATP visual parented inside it
 	# would either break that contract or need every field forwarded twice.
 	# Parenting under helicase_node instead also inherits helicase_node.modulate
-	# for free, which matters at end-of-run: _lagging_fade_enzyme_scene() fades
-	# the whole enzyme scene, and a cycle parented at the scene root would be
-	# the one object left behind.
+	# for free, which matters at end-of-run: the helicase sprite fades on its
+	# own (see helicase.gd's sprite_should_fade), and a cycle parented at the
+	# scene root would be the one object left behind.
 	helicase_atp_cycle = HelicaseAtpCycle.new()
 	helicase_atp_cycle.z_as_relative = false
 	helicase_atp_cycle.z_index = %ThemeManager.cofactor_z

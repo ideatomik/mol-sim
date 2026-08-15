@@ -110,16 +110,28 @@ var leading_strand_bond_marks: Array[Node2D] = []
 var leading_polymerase: Node2D = null  # renamed from top_polymerase
 var leading_fade_in_started: bool = false # true once the proximity-based fade-in has been triggered (see update())
 var lagging_polymerase: Node2D = null  # renamed from synthesis_circle — reference to scene node, set in initialize()
-var lagging_polymerase_faded: bool = false  # renamed from synthesis_circle_faded
+var lagging_polymerase_faded: bool = false  # renamed from synthesis_circle_faded — literally "this sprite has faded", set the instant lagging's own synthesis work is done (does not wait on ligase/Pol I)
+# ---------- INDEPENDENT END-OF-RUN FADE CASCADE ----------
+# Each enzyme fades the instant ITS OWN work is done, at a normal pace, rather
+# than everyone fading together behind one shared gate — see helicase.gd's
+# sprite_should_fade and _on_helicase_sprite_should_fade() below for why the
+# helicase sprite fades earliest of all, well before helicase_mgr.Phase.DONE.
+var helicase_sprite_faded: bool = false
+var leading_faded: bool = false
+var pol1_faded: bool = false
+var ligase_faded: bool = false
+var _scene_fully_faded: bool = false
 # Set when the strand itself is fully consumed but ligase/Pol I still have
-# pending trailing work (a queued job, or mid-travel/seal) — the scene-wide
-# fade used to fire the instant total_consumed reached num_slots regardless
-# of whether trailing enzymes had caught up, which meant the LAST valid
-# fragment's own seal (gated behind Pol I's fragment-lag removal, itself
-# gated behind the very last fragment closing) routinely happened AFTER the
-# fade had already hidden everything — functionally correct, invisibly so.
-# See _lagging_enzymes_settled()/_lagging_try_deferred_fade().
+# pending trailing work (a queued job, or mid-travel/seal) — ligase/Pol I
+# each fade independently once their OWN queue drains, not together. See
+# _ligase_settled()/_pol1_settled()/_lagging_try_deferred_fade().
 var _lagging_fade_pending: bool = false
+## Set once the strand's last real fire-step has been dispatched (counter
+## reached sim.num_nucleotide_slots) but that step's own position tween
+## and/or capture-into-strand animation may still be in flight — the
+## lagging polymerase's own fade must wait for both to finish. See
+## _lagging_request_terminal_finish()/_lagging_try_finish_terminal().
+var _lagging_polymerase_finish_pending: bool = false
 ## Gap mode only — set once when the terminal primer removal is kicked off at
 ## strand completion, so the removal (and gap recording) fires exactly once
 ## even though catch-up completion can be re-entered via the deferred-fade path.
@@ -375,7 +387,17 @@ func update(delta: float, ctx: Dictionary) -> void:
 	ctx_num_slots = ctx.num_slots
 	ctx_nucleotide_original_x = sim.nucleotide_original_x
 
-
+	# Per-frame safety net for the deferred lagging-polymerase terminal
+	# fade: _lagging_request_terminal_finish() also chains a tween_callback
+	# onto the last position tween and relies on _capture_finish_lagging()'s
+	# own tail-call to wake this back up, but both are event-driven and can
+	# still be missed by whatever exact order two independently-created
+	# Tweens finish in during the same frame. Polling here guarantees this
+	# resolves within one frame of both gates actually clearing, regardless
+	# of whether either callback fired. Cheap: _lagging_try_finish_terminal()
+	# is a single bool check when nothing is pending.
+	if _lagging_polymerase_finish_pending:
+		_lagging_try_finish_terminal()
 
 	# ---- Enzyme positions: each polymerase sits on its own template strand's row ----
 	if leading_polymerase and phase != helicase_mgr.Phase.DONE:
@@ -441,7 +463,13 @@ func update(delta: float, ctx: Dictionary) -> void:
 
 func scrub_rebuild(ctx: Dictionary) -> void:
 	# ctx keys: target_polymerase_x, helicase_x, is_done_phase, num_slots,
-	#           nucleotide_original_x, template_strand_y, helicase_mgr
+	#           nucleotide_original_x, template_strand_y, helicase_mgr,
+	#           helicase_sprite_faded, leading_faded, lagging_faded — the
+	#           three independent end-of-run fade milestones (see simulation.gd's
+	#           scrub_to()/scrub_to_leading_finish()/scrub_to_lagging_catchup()
+	#           for where each is computed). is_done_phase still drives the
+	#           STRUCTURAL fragment/base tiling only (unchanged) — these three
+	#           are purely the independent-fade VISUAL layer on top of it.
 	# Capture never runs during scrub — scrub always shows finished slots
 	# only, same rule the pump already follows. Any in-flight traveling
 	# nucleotide (and its node — not yet in the synthesized-bases arrays, so
@@ -453,17 +481,30 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	_leading_scrub_rebuild(ctx)
 	_lagging_scrub_rebuild(ctx)
 
+	# Resync the fade-tracking bools themselves, not just alpha — scrubbing
+	# must leave these matching the scrub target exactly, or resuming live
+	# play afterward reads stale state (same class of bug as the
+	# lagging_total_consumed / lagging_batch_cursor scrub desyncs documented
+	# elsewhere in this file). helicase_sprite_faded has no separate alpha
+	# line here — simulation.gd sets sim.helicase_node.modulate.a itself.
+	helicase_sprite_faded = ctx.get("helicase_sprite_faded", false)
+	leading_faded = ctx.get("leading_faded", false)
+	_scene_fully_faded = false  # never true via scrub — see _check_scene_fully_faded()'s ligase/Pol I note below
+	# Any tween_callback chained onto lagging_polymerase_tween by
+	# _lagging_request_terminal_finish() dies with that tween below (Tween.kill()
+	# stops it from firing further callbacks) — reset the flag itself too, or a
+	# scrub landing mid-deferred-finish would leave it stuck pending forever.
+	_lagging_polymerase_finish_pending = false
+
 	# ---- Enzyme visibility/position on scrub: each polymerase sits on its own template strand's row ----
 	# Fade-in state must resync here too, not just alpha — scrubbing backward
 	# past the proximity trigger point must reset leading_fade_in_started /
 	# lagging_fade_in_started, or resuming live play afterward would think
-	# the fade already happened and skip it (same class of bug as the
-	# lagging_total_consumed / lagging_batch_cursor scrub desyncs documented
-	# elsewhere in this file).
+	# the fade already happened and skip it (same class of bug as above).
 	var leading_near = ctx.num_slots > 0 and (sim.nucleotide_original_x[0] - target_polymerase_x) <= 3.0 * sim.nucleotide_slot_spacing
 	leading_fade_in_started = leading_near
 	if leading_polymerase:
-		leading_polymerase.modulate.a = 0.0 if ctx.is_done_phase else (1.0 if leading_near else 0.0)
+		leading_polymerase.modulate.a = 0.0 if leading_faded else (1.0 if leading_near else 0.0)
 		leading_polymerase.position = Vector2(target_polymerase_x, ctx.new_top_template_y)
 		if leading_clamp != null: leading_clamp.set_pump(0.0)
 
@@ -471,8 +512,8 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 	var lagging_near = lagging_first_slot >= 0 and (sim.nucleotide_original_x[lagging_first_slot] - target_polymerase_x) <= 3.0 * sim.nucleotide_slot_spacing
 	lagging_fade_in_started = lagging_near
 	if lagging_polymerase:
-		lagging_polymerase_faded = ctx.is_done_phase
-		lagging_polymerase.modulate.a = 0.0 if ctx.is_done_phase else (1.0 if lagging_near else 0.0)
+		lagging_polymerase_faded = ctx.get("lagging_faded", false)
+		lagging_polymerase.modulate.a = 0.0 if lagging_polymerase_faded else (1.0 if lagging_near else 0.0)
 		if lagging_pump_tween != null and lagging_pump_tween.is_valid():
 			lagging_pump_tween.kill()
 		# Any in-flight lagging_polymerase_tween must die here too, or it
@@ -510,11 +551,28 @@ func scrub_rebuild(ctx: Dictionary) -> void:
 # ENZYME ANIMATION — called from simulation.gd toggle_play() / _run_intro()
 # ==========================================
 
+## Resuming after a pause must not blindly force every enzyme back to
+## visible — each of them can have independently faded already (see the
+## end-of-run fade cascade below), and a resume mid-cascade must leave
+## whichever ones already faded alone. Every restore here is guarded by that
+## enzyme's own *_faded bool for exactly that reason — this is the single
+## highest-risk spot for the "scrub back, hit play" class of bug documented
+## elsewhere in this file (lagging_total_consumed/lagging_batch_cursor).
 func resume_enzymes() -> void:
-	if leading_polymerase and leading_fade_in_started:
+	if leading_polymerase and leading_fade_in_started and not leading_faded:
 		leading_polymerase.modulate.a = 1.0
-	if lagging_polymerase and lagging_fade_in_started:
+	if lagging_polymerase and lagging_fade_in_started and not lagging_polymerase_faded:
 		lagging_polymerase.modulate.a = 1.0
+	if sim.helicase_node and not helicase_sprite_faded:
+		sim.helicase_node.modulate.a = 1.0
+	if ligase != null and not ligase_faded:
+		ligase.modulate.a = 1.0
+	if pol1 != null and not pol1_faded:
+		pol1.modulate.a = 1.0
+	# Reachable only when helicase_mgr isn't yet Phase.DONE (toggle_play()
+	# routes the is_done() case to a fresh intro instead) — lagging catch-up
+	# can't have started yet, so these are always already false here; reset
+	# anyway to stay explicit rather than relying on that invariant silently.
 	lagging_polymerase_faded = false
 	_lagging_fade_pending = false
 
@@ -1289,12 +1347,14 @@ func _leading_apply_atom_tier_position_swap(ctx: Dictionary) -> void:
 	# has started — so this needs its own explicit "run is over" check, or
 	# it fights both _polymerases_move_to_rest()'s slide-to-rest tween
 	# (while ligase/Pol I are still catching up on the lagging tail) and
-	# _lagging_fade_enzyme_scene()'s later fade-out tween, snapping
-	# leading_polymerase back to the last synthesized slot's position each
-	# frame. _polymerases_at_rest goes true first (at _polymerases_move_to_
-	# rest()) and stays true through the later fade, so gating on it alone
-	# covers both.
-	if _polymerases_at_rest:
+	# leading_polymerase's own independent end-of-run fade-out tween, snapping
+	# leading_polymerase back to full visibility at its old helicase-derived
+	# position every frame. leading_faded now fires well before
+	# _polymerases_at_rest (which waits on the LAGGING strand finishing) —
+	# gating on leading_faded directly is the real "run is over" signal for
+	# THIS polymerase; _polymerases_at_rest is kept as a second, redundant
+	# gate since it's a strictly later event and costs nothing extra to check.
+	if leading_faded or _polymerases_at_rest:
 		return
 	var latest_slot: int = _leading_latest_synthesized_slot()
 	if latest_slot < 0:
@@ -1407,6 +1467,19 @@ func connect_helicase(helicase_mgr: Node) -> void:
 		helicase_mgr.slot_reached.connect(_capture_on_leading_slot_reached)
 	if not helicase_mgr.phase_changed.is_connected(_on_helicase_phase_changed):
 		helicase_mgr.phase_changed.connect(_on_helicase_phase_changed)
+	if not helicase_mgr.sprite_should_fade.is_connected(_on_helicase_sprite_should_fade):
+		helicase_mgr.sprite_should_fade.connect(_on_helicase_sprite_should_fade)
+
+## The helicase's own unwinding job is done — fade its sprite immediately,
+## independent of the leading-strand escort work its state machine keeps
+## quietly doing in the background (see helicase.gd's sprite_should_fade).
+func _on_helicase_sprite_should_fade() -> void:
+	if helicase_sprite_faded:
+		return
+	helicase_sprite_faded = true
+	if sim.helicase_node:
+		sim.create_tween().tween_property(sim.helicase_node, "modulate:a", 0.0, sim.fade_duration)
+	_check_scene_fully_faded()
 
 func _lagging_reset(num_slots: int) -> void:
 	lagging_fragments.clear()
@@ -1424,8 +1497,13 @@ func _lagging_reset(num_slots: int) -> void:
 	lagging_batch_cursor = 0
 	lagging_polymerase_x = 0.0
 	_lagging_fade_pending = false
+	_lagging_polymerase_finish_pending = false
 	_terminal_removal_started = false
 	_polymerases_at_rest = false
+	lagging_polymerase_faded = false
+	helicase_sprite_faded = false
+	leading_faded = false
+	_scene_fully_faded = false
 	if lagging_catchup_timer != null:
 		lagging_catchup_timer.stop()
 	if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
@@ -1482,6 +1560,22 @@ func _lagging_teardown() -> void:
 	lagging_current_fragment = null
 
 func _on_helicase_slot_reached(index: int) -> void:
+	# slot_reached also fires for the helicase's escort/overshoot steps past
+	# its own last real slot (Phase.FINISHING_LAST_PULSE — see helicase.gd) —
+	# those exist purely so the leading polymerase's helicase-derived
+	# position can reach the true end, and don't correspond to any newly
+	# exposed template. This handler must ignore them entirely: letting them
+	# through used to fire real lagging steps (and, in principle, bogus
+	# primase tiling checks) for indices past the real sequence, which
+	# could race lagging_total_consumed to completion mid-escort — visible
+	# as the lagging strand abandoning a half-finished fragment and jumping
+	# to its end-of-run rest position. _capture_on_leading_slot_reached()
+	# (the OTHER handler on this same signal, driving the leading strand's
+	# own base-capture animation) legitimately needs these indices and is
+	# deliberately left untouched.
+	if index >= sim.num_nucleotide_slots:
+		return
+
 	# Fires ahead of every early-return below — primase acts on newly-
 	# exposed template as soon as the helicase passes it, independent of
 	# Pol III's own backlog/startup delay (which can lag many steps behind).
@@ -1551,6 +1645,13 @@ func _lagging_fire_step(duration: float) -> void:
 ## to warrant smoothing out.
 func _lagging_apply_atom_tier_position_swap() -> void:
 	if lagging_polymerase == null or molecule_renderer == null:
+		return
+	# Same "run is over" gate as _leading_apply_atom_tier_position_swap() —
+	# lagging_polymerase_faded fires independently now (at strand
+	# completion), not necessarily in lockstep with lagging_current_fragment
+	# going null, so it needs its own explicit check rather than relying
+	# solely on the tween/latest-slot guards below.
+	if lagging_polymerase_faded:
 		return
 	if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
 		return  # tween owns position mid-travel -- never race it
@@ -2162,6 +2263,7 @@ func _pol1_reset_visual() -> void:
 		_pol1_tween.kill()
 	_pol1_state = Pol1Phase.OFFSTAGE
 	_pol1_queue.clear()
+	pol1_faded = false
 	if pol1 != null:
 		pol1.modulate.a = 0.0
 		pol1.set_pulse(0.0)
@@ -2263,9 +2365,10 @@ func _ligase_reset_visual() -> void:
 		_ligase_tween.kill()
 	_ligase_state = LigaseState.IDLE
 	_ligase_active_gap_slot = -2
+	ligase_faded = false
 	if ligase != null:
 		ligase.visible = false
-		ligase.modulate.a = 1.0  # undoes _lagging_fade_enzyme_scene()'s end-of-run fade — otherwise the NEXT run's first seal sets visible=true while alpha is still 0 from the last one
+		ligase.modulate.a = 1.0  # undoes ligase's own end-of-run fade — otherwise the NEXT run's first seal sets visible=true while alpha is still 0 from the last one
 		ligase.set_pulse(0.0)
 		if ligase_cofactor != null:
 			ligase_cofactor.reset()
@@ -2608,64 +2711,205 @@ func _lagging_scrub_spawn_fragment(frag: Dictionary) -> void:
 		lagging_hydrogen_bonds[i] = _spawn_lagging_hydrogen_bonds(i)
 
 func _on_helicase_phase_changed(new_phase: int) -> void:
+	if new_phase == connected_helicase_mgr.Phase.SETTLING and not leading_faded:
+		# extra_steps_done >= extra_steps_total was just reached — the leading
+		# polymerase's helicase-derived position has caught up to the true end
+		# of the strand, so its own work is done. Fade it independently, well
+		# before the helicase's state machine itself reaches Phase.DONE.
+		leading_faded = true
+		if leading_polymerase:
+			# leading_clamp is a child of leading_polymerase (see
+			# _leading_setup_backbones()), so this fade already cascades to it —
+			# no separate tween needed, same free ride ligase_cofactor gets from
+			# ligase's own fade.
+			sim.create_tween().tween_property(leading_polymerase, "modulate:a", 0.0, sim.fade_duration)
+		_check_scene_fully_faded()
+	if new_phase == connected_helicase_mgr.Phase.FINISHING_LAST_PULSE and not sim.manual_override:
+		# Real SWEEPING just ended — _on_helicase_slot_reached() ignores every
+		# index from here on (they're the helicase's own escort/overshoot
+		# steps, not newly exposed template — see that function's header), so
+		# live firing is now permanently dead. Without this, the lagging
+		# strand would sit completely undriven for the whole escort walk plus
+		# Phase.SETTLING (a visible multi-step pause) before catch-up ever got
+		# a chance to start on Phase.DONE below. Starting it here instead
+		# means catch-up becomes the sole driver the instant it's needed, with
+		# no gap — live and catch-up pacing already match exactly (see
+		# _lagging_catchup_step_duration()), so the handoff is seamless.
+		_lagging_start_catchup()
 	if new_phase == connected_helicase_mgr.Phase.DONE and not sim.manual_override:
 		# Both modes run the same catch-up now — Pol III finishes the strand.
 		# In gap mode the difference is deferred to catch-up completion, where
 		# the terminal primer is removed (leaving its footprint as the gap)
 		# instead of the strand simply ending. Synthesized DNA is never
 		# discarded — the old discard-the-open-fragment model is gone.
+		# Redundant with the FINISHING_LAST_PULSE branch above in the normal
+		# case (catch-up is already running by now) — _lagging_start_catchup()
+		# is idempotent against that, kept here as a safety net.
 		_lagging_start_catchup()
+
+## The lagging strand's catch-up must run at the SAME pace live firing
+## used — base_step_duration / speed_multiplier, i.e. helicase_mgr's own
+## formula (helicase_mgr.step_duration itself isn't safe to read here: once
+## Phase.DONE is reached it stops being updated for live-pacing purposes).
+## Previously catch-up used an independent fixed constant
+## (lagging_catchup_step_duration, now unused), which created a real pace
+## jump right at this boundary — masked before by the old helicase
+## acceleration already being very fast by the time DONE was reached, and
+## clearly visible as a "hurry up" once that acceleration was removed.
+func _lagging_catchup_step_duration() -> float:
+	var hm = sim.helicase_mgr
+	if hm == null or hm.speed_multiplier <= 0.0:
+		return sim.helicase_mgr.base_step_duration if hm != null else 0.5
+	return hm.base_step_duration / hm.speed_multiplier
 
 func _lagging_start_catchup() -> void:
 	if lagging_polymerase_faded:
 		return
 	if lagging_total_consumed >= sim.num_nucleotide_slots:
-		_lagging_finish_or_remove_terminal()
+		_lagging_request_terminal_finish()
+		return
+	# Idempotent against being called from both the FINISHING_LAST_PULSE and
+	# DONE branches of _on_helicase_phase_changed() — restarting an
+	# already-running Timer resets its current countdown, a small avoidable
+	# stutter, so skip if catch-up is already ticking.
+	if lagging_catchup_timer != null and not lagging_catchup_timer.is_stopped():
 		return
 	if lagging_catchup_timer == null:
 		lagging_catchup_timer = Timer.new()
 		lagging_catchup_timer.one_shot = false
 		sim.add_child(lagging_catchup_timer)
 		lagging_catchup_timer.timeout.connect(_lagging_catchup_tick)
-	lagging_catchup_timer.wait_time = sim.lagging_catchup_step_duration
+	lagging_catchup_timer.wait_time = _lagging_catchup_step_duration()
 	lagging_catchup_timer.start()
 
 func _lagging_catchup_tick() -> void:
+	# Re-read each tick (not just at start) so a mid-catchup speed change
+	# (e.g. the player adjusting playback speed) is honored immediately,
+	# same as live firing already does via helicase_mgr.step_duration.
+	var duration = _lagging_catchup_step_duration()
+	lagging_catchup_timer.wait_time = duration
 	if lagging_current_fragment == null:
 		_lagging_open_next_fragment()
-	_lagging_fire_step(sim.lagging_catchup_step_duration)
+	_lagging_fire_step(duration)
 	if lagging_total_consumed >= sim.num_nucleotide_slots:
 		lagging_catchup_timer.stop()
-		_lagging_finish_or_remove_terminal()
+		_lagging_request_terminal_finish()
 
-## True once ligase and (if pol1_enabled) Pol I have both fully drained their
-## queues and returned to idle — the gate the scene-wide fade waits on so it
-## never hides a trailing seal/removal that's still genuinely in flight.
-func _lagging_enzymes_settled() -> bool:
+## Arms the deferred terminal-finish check — see _lagging_try_finish_terminal()
+## for why this can't just call _lagging_finish_or_remove_terminal() directly
+## here. Deliberately does NOT chain a tween_callback onto the in-flight
+## position tween: two independently-created Tweens (this one and the
+## capture's own leg-2 tween) finishing in the same frame raced in practice
+## and could leave the callback chain never firing at all (observed via
+## headless testing — _lagging_polymerase_finish_pending stuck true forever
+## with both gates already clear). update()'s per-frame poll is the sole,
+## reliable wake-up mechanism now; this just arms the flag and takes one
+## immediate shot in case nothing is in flight yet.
+func _lagging_request_terminal_finish() -> void:
+	_lagging_polymerase_finish_pending = true
+	_lagging_try_finish_terminal()  # covers the case nothing is actually in flight
+
+## lagging_total_consumed reaching sim.num_nucleotide_slots happens
+## synchronously at fire time (_lagging_fire_step() increments it before its
+## own tween/capture animation has visibly finished) — fading
+## lagging_polymerase immediately off the back of that counter, as this used
+## to do, could fade it out while the very last base was still flying into
+## place, or before its hydrogen bonds had even spawned
+## (_capture_finish_lagging()). Deferred here, mirroring the
+## _lagging_fade_pending / _lagging_try_deferred_fade() pattern ligase/Pol I
+## already use. Called from several places that could plausibly be the last
+## of the last step's animations to finish (this function itself right
+## after firing, _capture_finish_lagging()'s tail) — but the one guaranteed
+## re-check is update()'s per-frame poll (see its own comment for why the
+## event-driven wake-ups alone weren't reliable).
+func _lagging_try_finish_terminal() -> void:
+	if not _lagging_polymerase_finish_pending:
+		return
+	if lagging_polymerase_tween != null and lagging_polymerase_tween.is_valid():
+		return  # position tween for the last slot still in flight
+	if lagging_capture_node != null:
+		# Can't just wait here: _capture_update_lagging()'s leg 2 (the thing
+		# that would eventually call _capture_finish_lagging() on its own)
+		# is driven entirely by lagging_pump_tween, which _lagging_fire_step()
+		# kills and recreates on every call — including this terminal one, if
+		# its own slot was already populated (a primer slot, which primase
+		# fills ahead of time, and which the terminal fragment routinely is)
+		# and so never reached the "force-finish the old capture" branch in
+		# _capture_begin_lagging(). If the previous step's capture hadn't
+		# crossed its own phase >= 0.5 leg-2 trigger by then, that kill
+		# orphans it permanently — there is no next fire-step to ever force-
+		# finish it, since this was the last one. We already know (via
+		# _lagging_polymerase_finish_pending) that we're at the guaranteed
+		# true end of the strand, so waiting is never correct here — force
+		# it to finish now, the same way _capture_begin_lagging() already
+		# force-finishes a stale capture when preempting it with a new one.
+		# This re-enters this function via _capture_finish_lagging()'s own
+		# tail call once both gates are clear, so just return here.
+		_capture_finish_lagging(lagging_capture_target_slot, lagging_capture_node)
+		return
+	_lagging_polymerase_finish_pending = false
+	_lagging_finish_or_remove_terminal()
+
+## True once Pol I has fully drained its queue and returned offstage — or
+## trivially true if Pol I isn't part of this run at all.
+func _pol1_settled() -> bool:
+	if not _pol1_enabled():
+		return true
+	return _pol1_state == Pol1Phase.OFFSTAGE and _pol1_queue.is_empty()
+
+## True once ligase has returned to idle — or trivially true if ligase isn't
+## part of this run. Also requires Pol I to be settled: ligase's own
+## eligibility (_ligase_kick()) already requires frag.primer_removed, so
+## ligase is structurally always the last of the two to finish; chaining
+## through _pol1_settled() here is a cheap safety net, not the real gate.
+func _ligase_settled() -> bool:
+	if not sim.ligase_enabled:
+		return true
 	if _ligase_state != LigaseState.IDLE:
 		return false
-	if _pol1_enabled() and (_pol1_state != Pol1Phase.OFFSTAGE or not _pol1_queue.is_empty()):
-		return false
-	return true
+	return _pol1_settled()
 
 ## Called from the tail of ligase's and Pol I's own completion handlers —
-## picks up wherever _lagging_start_catchup()/_lagging_catchup_tick() left
-## off if the strand itself was already done but trailing work wasn't.
-## No-ops silently in every other case (nothing pending, or not settled yet).
+## fades each of them independently, the instant ITS OWN queue drains, rather
+## than gating one shared fade behind both. No-ops silently if the strand
+## itself isn't done yet, or if a given enzyme already faded.
 func _lagging_try_deferred_fade() -> void:
-	if not _lagging_fade_pending or lagging_polymerase_faded:
+	if not _lagging_fade_pending:
 		return
 	if lagging_total_consumed < sim.num_nucleotide_slots:
 		return  # shouldn't normally happen, but stay safe
-	if not _lagging_enzymes_settled():
+	if not pol1_faded and _pol1_settled():
+		pol1_faded = true
+		if pol1 != null:
+			sim.create_tween().tween_property(pol1, "modulate:a", 0.0, sim.fade_duration)
+		_check_scene_fully_faded()
+	if not ligase_faded and _ligase_settled():
+		ligase_faded = true
+		if ligase != null:
+			# ligase_cofactor is a child of ligase, so this fade already
+			# cascades to it — see its own header comment.
+			sim.create_tween().tween_property(ligase, "modulate:a", 0.0, sim.fade_duration)
+		_check_scene_fully_faded()
+
+## True once every active enzyme has independently faded — sets
+## _scene_fully_faded, which is_fully_complete() reads. Called after each of
+## the four independent fade sites (helicase sprite, leading, lagging, and
+## here for ligase/Pol I) since any one of them might be the last to finish.
+func _check_scene_fully_faded() -> void:
+	if _scene_fully_faded:
 		return
-	_lagging_fade_pending = false
-	lagging_polymerase_faded = true
-	_lagging_fade_enzyme_scene()
+	if not (helicase_sprite_faded and leading_faded and lagging_polymerase_faded):
+		return
+	if _pol1_enabled() and not pol1_faded:
+		return
+	if sim.ligase_enabled and not ligase_faded:
+		return
+	_scene_fully_faded = true
 
 ## Catch-up has reached the strand's end. In gap mode, remove the terminal
-## primer (leaving its footprint as the telomere gap) BEFORE the scene fades;
-## otherwise fall straight through to the normal settle-gated fade. Guarded to
+## primer (leaving its footprint as the telomere gap) before recording it as
+## a fade target; otherwise fall straight through to fading the lagging
+## polymerase itself and arming the trailing ligase/Pol I fades. Guarded to
 ## fire the removal exactly once — the deferred-fade path can re-enter here.
 func _lagging_finish_or_remove_terminal() -> void:
 	# The lagging polymerase has finished its last fragment. Slide both
@@ -2673,15 +2917,21 @@ func _lagging_finish_or_remove_terminal() -> void:
 	# exactly when Pol I / ligase are still working the tail of their queues,
 	# and a stationary lagging polymerase would sit on top of them.
 	_polymerases_move_to_rest()
+	# The lagging polymerase's own synthesis job is done right here — fade it
+	# immediately, independent of any trailing Pol I/ligase work still ahead
+	# (that work touches the strand's bases directly, not the polymerase
+	# sprite itself).
+	if not lagging_polymerase_faded:
+		lagging_polymerase_faded = true
+		if lagging_polymerase != null:
+			sim.create_tween().tween_property(lagging_polymerase, "modulate:a", 0.0, sim.fade_duration)
+		_check_scene_fully_faded()
 	if complexity_mgr != null and complexity_mgr.is_enabled("lagging_gap") and not _terminal_removal_started:
 		_terminal_removal_started = true
 		_lagging_start_terminal_removal()
 		return
-	if not _lagging_enzymes_settled():
-		_lagging_fade_pending = true
-		return
-	lagging_polymerase_faded = true
-	_lagging_fade_enzyme_scene()
+	_lagging_fade_pending = true
+	_lagging_try_deferred_fade()
 
 ## Slides both polymerases to a shared end-of-run rest spot: the lagging one
 ## travels up to meet the leading one, and both nudge a couple slot-spacings
@@ -2803,19 +3053,6 @@ func _lagging_finalize_terminal_gap(terminal_frag, rna_slots: Array) -> void:
 	_ligase_kick()  # seal the now-clean terminal fragment's 5' nick
 	_lagging_fade_pending = true
 	_lagging_try_deferred_fade()
-
-func _lagging_fade_enzyme_scene() -> void:
-	var fade_tween = sim.create_tween()
-	if lagging_polymerase != null:
-		fade_tween.tween_property(lagging_polymerase, "modulate:a", 0.0, sim.fade_duration)
-	if leading_polymerase:
-		fade_tween.parallel().tween_property(leading_polymerase, "modulate:a", 0.0, sim.fade_duration)
-	if sim.helicase_node:
-		fade_tween.parallel().tween_property(sim.helicase_node, "modulate:a", 0.0, sim.fade_duration)
-	if ligase != null:
-		fade_tween.parallel().tween_property(ligase, "modulate:a", 0.0, sim.fade_duration)
-	if pol1 != null:
-		fade_tween.parallel().tween_property(pol1, "modulate:a", 0.0, sim.fade_duration)
 
 func _spawn_lagging_base(index: int, base_type: String, start_pos = null, color_override = null, shape_override = null) -> Node2D:
 	var base = sim.NewNitrogenBaseScene.instantiate()
@@ -3379,11 +3616,14 @@ func _update_bond_marks_generic(marks: Array, points: PackedVector2Array, sprite
 		mark.visible = segment.length() > 0.0
 	return marks
 
-func _lagging_natural_done_consumed(num_slots: int, nucleotide_original_x: Array) -> int:
-	# How many lagging slots would be consumed by pure position-based tiling
-	# the instant the helicase reaches its own final position — before any
-	# catch-up steps are applied. Shared by _lagging_scrub_rebuild() and
-	# get_lagging_catchup_steps_needed() so both use the identical formula.
+## Public: how many extra steps past the helicase's own last slot the leading
+## polymerase needs to reach the true end of the strand — one per sequence
+## slot still ahead of where the leading polymerase sits at that instant.
+## Same formula helicase.gd's start_finishing()/replication_manager.gd's own
+## FINISHING-trigger use live (see simulation.gd's update()); extracted here
+## so _lagging_natural_done_consumed() and simulation.gd's scrub-index math
+## share the identical computation instead of two copies silently drifting.
+func get_leading_finish_steps_needed(num_slots: int, nucleotide_original_x: Array) -> int:
 	var last_slot_index = num_slots - 1
 	var offset_px = sim.polymerase_x_offset_slots * sim.nucleotide_slot_spacing
 	var polymerase_x_at_last_slot = nucleotide_original_x[last_slot_index] - offset_px
@@ -3391,7 +3631,15 @@ func _lagging_natural_done_consumed(num_slots: int, nucleotide_original_x: Array
 	for i in range(num_slots):
 		if nucleotide_original_x[i] > polymerase_x_at_last_slot:
 			remaining_leading += 1
-	var effective_index = last_slot_index + max(1, remaining_leading)
+	return max(1, remaining_leading)
+
+func _lagging_natural_done_consumed(num_slots: int, nucleotide_original_x: Array) -> int:
+	# How many lagging slots would be consumed by pure position-based tiling
+	# the instant the helicase reaches its own final position — before any
+	# catch-up steps are applied. Shared by _lagging_scrub_rebuild() and
+	# get_lagging_catchup_steps_needed() so both use the identical formula.
+	var last_slot_index = num_slots - 1
+	var effective_index = last_slot_index + get_leading_finish_steps_needed(num_slots, nucleotide_original_x)
 
 	var threshold = sim.okazaki_fragment_size + sim.pll_slot_count
 	var exposed_count = max(0, effective_index)
@@ -3407,16 +3655,29 @@ func _lagging_natural_done_consumed(num_slots: int, nucleotide_original_x: Array
 func get_lagging_catchup_steps_needed(num_slots: int, nucleotide_original_x: Array) -> int:
 	return num_slots - _lagging_natural_done_consumed(num_slots, nucleotide_original_x)
 
+## Public: how many discrete "settle events" past the lagging catch-up
+## milestone are needed for ligase/Pol I to finish their trailing work — a
+## small fixed count, not a duration-derived one (see get_enzyme_settle_ticks_needed
+## call sites in simulation.gd's scrub-index math for the full rationale: Pol I/
+## ligase per-job animation time is fast relative to fragment-closing cadence
+## under every currently-shipped tuning, so no real backlog accumulates before
+## the strand finishes — this is a known simplification, not a general
+## backlog simulator).
+func get_enzyme_settle_ticks_needed() -> int:
+	if not sim.ligase_enabled:
+		return 0
+	var pol1_events = 1 if _pol1_enabled() else 0
+	var ligase_events = 1
+	return pol1_events + ligase_events
+
 func is_fully_complete() -> bool:
-	# True only once the whole replisome has visually faded out — i.e. after
-	# lagging catch-up finishes (or, under lagging_gap_enabled, after the
-	# telomere-gap discard settles). helicase_mgr reaching Phase.DONE is NOT
-	# this: the lagging strand keeps synthesizing on its own independent
-	# lagging_catchup_timer for a while after the helicase itself finishes
-	# (see _on_helicase_phase_changed() / _lagging_start_catchup()). Callers
-	# that want "is there still anything moving on screen" should use this,
-	# not helicase_mgr.get_phase() == Phase.DONE.
-	return lagging_polymerase_faded
+	# True only once every enzyme has independently faded — see
+	# _check_scene_fully_faded(). helicase_mgr reaching Phase.DONE is NOT
+	# this: the leading/lagging strands and ligase/Pol I keep finishing their
+	# own trailing work well after the helicase's own sprite (and even its
+	# state machine) are done. Callers that want "is there still anything
+	# moving on screen" should use this, not helicase_mgr.get_phase() == Phase.DONE.
+	return _scene_fully_faded
 
 func _lagging_render_fragment_markers(frag: Dictionary, wobble_t: float, dna_ribbons_gap: float, new_bottom_template_y: float, nucleotide_original_x: Array) -> void:
 	if frag.slots.size() == 0 or not frag.complete:
@@ -3608,12 +3869,19 @@ func _capture_finish_leading(index: int, node: Node2D) -> void:
 # ---------- LAGGING ----------
 
 func _capture_begin_lagging(index: int, duration: float) -> void:
+	# Force-finish any lingering capture BEFORE the early-return below, not
+	# after — a primer slot (already populated by primase ahead of Pol III
+	# reaching it, which the terminal fragment routinely is) would otherwise
+	# skip this entirely, leaving the previous step's capture stranded with
+	# nothing left to ever force-finish it: _lagging_fire_step() kills and
+	# recreates lagging_pump_tween (the sole driver of the OLD capture's own
+	# leg-2 completion) on every call, including this early-return one.
+	if lagging_capture_node != null:
+		_capture_finish_lagging(lagging_capture_target_slot, lagging_capture_node)
 	if lagging_synthesized_bases[index] != null:
 		if not _pol1_enabled():
 			_pol3_convert_primer_if_needed(index)
 		return
-	if lagging_capture_node != null:
-		_capture_finish_lagging(lagging_capture_target_slot, lagging_capture_node)
 	# Reverted — see _convert_primer_base_to_dna()'s comment.
 	var base_type = sim.dna_sequence.get_base(index)
 	var fallback_pos = Vector2(sim.nucleotide_original_x[index], sim.new_bottom_template_y + sim.dna_ribbons_gap)
@@ -3653,6 +3921,12 @@ func _capture_finish_lagging(index: int, node: Node2D) -> void:
 		if lagging_capture_tween != null and lagging_capture_tween.is_valid():
 			lagging_capture_tween.kill()
 		lagging_capture_tween = null
+	# Tail-call the deferred terminal-finish check, same "every completion
+	# handler checks whether it was the last thing blocking a pending fade"
+	# shape _ligase_finish_seal()/_pol1_finish_job() already use for
+	# _lagging_try_deferred_fade(). No-ops unless the strand's very last
+	# fire-step's capture was the one that just landed.
+	_lagging_try_finish_terminal()
 
 # ==========================================
 # SHARED SPAWNING HELPERS
