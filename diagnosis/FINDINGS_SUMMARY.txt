@@ -158,8 +158,8 @@ because each relationship has its own fixed sign combination.
 Every one of the first 10 slots in BOTH the leading/template_top section
 and the lagging/template_bottom section showed IDENTICAL letters (AA, TT,
 GG — never AT, TA, GC, CG). Investigated and fixed (see
-docs/MolecularStructure_BasePairExpansion.md's Bug E entry for the full
-account). Root cause confirmed against docs/SKILL.md's own polarity
+docs/molecular-structure/MolecularStructure_BasePairExpansion.md's Bug E entry for the full
+account). Root cause confirmed against docs/skills/zymulador-gdscript_SKILL.md's own polarity
 table: leading's real template is template_top (get_complement(i)), so
 leading's own letter must be get_base(i), not get_complement(i) as every
 call site had it (and symmetrically for lagging vs. template_bottom).

@@ -1078,7 +1078,7 @@ func get_synthesized_nucleotides() -> Array[Dictionary]:
 				# get_complement(i) as get_template_nucleotides() claimed) — a
 				# separate, older, pre-existing inconsistency between those two
 				# functions. Leading's real template is template_top (still
-				# confirmed via docs/SKILL.md's polarity table); template_top's
+				# confirmed via docs/skills/zymulador-gdscript_SKILL.md's polarity table); template_top's
 				# REAL displayed letter is get_base(i), so leading (its
 				# complement) must be get_complement(i). Fixed at the other end
 				# instead: see get_template_nucleotides() in simulation.gd.

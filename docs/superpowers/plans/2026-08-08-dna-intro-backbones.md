@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **No multiline `or` expressions in GDScript** — a parser bug causes indentation errors when `or` spans multiple lines; always write conditions on one line (`docs/SKILL.md`, GDScript Hard Rules).
+- **No multiline `or` expressions in GDScript** — a parser bug causes indentation errors when `or` spans multiple lines; always write conditions on one line (`docs/skills/zymulador-gdscript_SKILL.md`, GDScript Hard Rules).
 - **ThemeManager is a scene node, not an autoload** — access it via `%ThemeManager` (already how `player_ui.gd`'s `_play_dna_intro()` gets `tm`); never add a global singleton reference.
 - **No automated test coverage exists for `dna_unwind_intro.gd`, and none is added by this plan** — this is a pure `_draw()`-driven visual animation (confirmed in the spec's own Testing section); every task's verification step is a manual run-and-look check in the Godot editor, not a `pytest`-style assertion.
 - **Reuse real `ThemeManager` values instead of inventing new decorative constants whenever a real on-screen analog exists** — established throughout this file (e.g. `ROTATION_RADIUS_RATIO` ties to the real strand gap, `BOND_INSET_RATIO` ties to the real bead radius); the new backbone constants follow the same rule (`tm.backbone_offset_distance`, `tm.template_backbone_color`, `tm.backbone_line_width`), all zoom-scaled the same way every other pixel value already passed into `play()` is.
