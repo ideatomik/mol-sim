@@ -12,11 +12,38 @@ handling note.**_
 _None open._
 
 ### Features
-- [ ] **UI rework.**
-  - [ ] **Localization UI.** Replace the `L` debug locale-cycling keybind
-        with a real user-facing language switcher. (Supersedes the old
-        "remove the `L` keybind" housekeeping item — the debug mechanism
-        was standing in for a UI that was never built.)
+- [ ] **Export size — deeper cuts** (post-alpha). Alpha ships at ~108MB
+      after the font-cleanup + `exclude_filter` pass (see "Removed this
+      pass" below). Two paths investigated tonight, both deferred:
+      - **Custom-compiled export templates** (disable_3d, disable advanced
+        text server, disable advanced GUI objects, unused modules, Engine
+        Compilation Configuration profile — per
+        [this build-size tutorial](https://popcar.bearblog.dev/how-to-minify-godots-build-size/)).
+        Biggest remaining lever (that tutorial: 93MB→~30MB range before
+        UPX/Brotli) but requires building Godot's export templates from
+        source (SCons + full toolchain) — not attempted under a ship
+        deadline. Note: "disable advanced GUI objects" is NOT safely
+        available to this project — `SequenceLabel`
+        (`scripts/ui/player_ui.gd`) and `enzyme_label.gd` both depend on
+        `RichTextLabel`/bbcode directly, which that option strips.
+      - **UPX packing** — tried tonight, fails with `CantPackException:
+        section size problem` on this project's exported `.exe`. Known
+        Godot 4 incompatibility when `Embed PCK` is on (the embedded pck
+        creates a section UPX 5.x can't repack). Would need `Embed PCK`
+        disabled (separate `.pck` alongside the `.exe`) to even attempt
+        UPX on the launcher stub — untested, and savings would be marginal
+        since most size is engine content inside the pck, not the stub.
+- [ ] **Settings / Setup menu split** (post-alpha). `ComplexitySetupPopup`
+      currently mixes two different kinds of choice in one dialog: general
+      app settings (language — added for the alpha ship) and simulation
+      setup (topology mode, Primase/Ligase/Pol I/Telomerase/Cofactor
+      toggles). Once more simulation types exist beyond DNA replication
+      (transcription, RNA translation, Krebs Cycle, etc.), that setup half
+      needs to become a simulation-type picker rather than DNA-replication-
+      specific toggles, and general settings (language, display/theme
+      options) need their own home separate from per-simulation setup — one
+      dialog won't scale across both axes. Needs its own brainstorm/design
+      pass before implementation; not scoped yet.
 
 ---
 
@@ -55,6 +82,15 @@ _None open._
 
 ## Removed this pass (resolved, superseded, or relocated)
 
+- ~~**Localization UI.** Replace the `L` debug locale-cycling keybind with a
+  real user-facing language switcher.~~ — built for the alpha ship: a
+  `LanguageRow` dropdown (endonym names — English / Português (BR) /
+  Español) added to `ComplexitySetupPopup`, wired live to
+  `%LocaleManager.set_locale()`, synced to the active locale on every
+  `show_dialog()`. The debug `KEY_L` cycle and its prints were removed from
+  `locale_manager.gd`. Superseded in turn by the Settings/Setup menu split
+  above — this dropdown is the general-settings item that split will need
+  to relocate once that lands.
 - ~~Retune `polymerase_label_margin` in vertical~~ — fixed.
 - ~~Vertical mode~~ — feature itself is in cold storage; no open items
   tracked here until it's picked back up.

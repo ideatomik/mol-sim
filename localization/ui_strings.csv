@@ -7,7 +7,8 @@ UI_CANCEL_BUTTON,CANCEL,CANCELAR,CANCELAR
 UI_LOAD_BUTTON,LOAD,CARREGAR,CARGAR
 UI_ENZYME_DROPDOWN_PLACEHOLDER,Enzymes,Enzimas,Enzimas
 UI_COMPLEXITY_SETUP_TITLE,COMPLEXITY SETTINGS,CONFIGURAÇÕES DE COMPLEXIDADE,CONFIGURACIÓN DE COMPLEJIDAD
-UI_TOPOLOGY_MODE_LABEL,Cell Type,Tipo de Célula,Tipo de Célula
+UI_LANGUAGE_LABEL,Language,Idioma,Idioma
+UI_TOPOLOGY_MODE_LABEL,DNA Type,Tipo de DNA,Tipo de ADN
 UI_TOPOLOGY_CIRCULAR,Prokaryotic (circular),Procariótico (circular),Procariota (circular)
 UI_TOPOLOGY_LINEAR,Eukaryotic (linear),Eucariótico (linear),Eucariota (lineal)
 UI_PRIMASE_TOGGLE_LABEL,Primase (RNA primers),Primase (primers de RNA),Primasa (cebadores de ARN)

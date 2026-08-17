@@ -444,7 +444,6 @@ func _on_zoom_in_pressed():
 	zoom_mgr.set_zoom_level(zoom_mgr.zoom_level + 1)
 
 func _on_reset_zoom_pressed():
-	print("[RESETZOOM] button pressed")
 	zoom_mgr.reset_zoom()
 
 ## LongSequenceDesign.md Part 3 — explicit recenter action, distinct from
@@ -590,8 +589,6 @@ func _on_simulation_progress_changed(new_progress: float):
 
 func _on_sequence_loaded(new_sequence: String):
 	"""Called when the user loads a new sequence from the popup."""
-	print("[PlayerUI] New sequence loaded: %s" % new_sequence)
-
 	# Initialize the simulation with the new sequence
 	simulation.initialize_simulation(new_sequence)
 

@@ -202,10 +202,16 @@ func _swap_in_vertical_player_ui(zoom_mgr) -> void:
 	# fully initialised and connected by the time we get here. Freeing it drops
 	# those connections with it (Godot disconnects on free), so the two never
 	# both respond to a signal.
+	ui_root.remove_child(old_ui)  # synchronous — frees up the "PlayerUI" name
+	                                # immediately, unlike queue_free() below,
+	                                # which only defers deallocation
 	old_ui.queue_free()
 	var vertical = VERTICAL_PLAYER_UI_SCENE.instantiate()
 	vertical.name = "PlayerUI"   # keep the node path stable
 	vertical.simulation = self   # the editor-wired @export, by hand
+	vertical.zoom_mgr = zoom_mgr # this runtime instance can't reach %ZoomManager
+	                              # itself (see player_ui.gd's zoom_mgr comment) —
+	                              # same cross-scene-ownership problem as `simulation`
 	ui_root.add_child(vertical)
 	print("[VERTICAL] PlayerUI -> VerticalPlayerUI")
 

@@ -73,6 +73,25 @@ vertical_alignment = 1
 layout_mode = 2
 theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
 
+[node name="LanguageRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936141]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/LanguageRow" unique_id=545144892]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_font_sizes/font_size = 15
+text = "UI_LANGUAGE_LABEL"
+
+[node name="LanguageOption" type="OptionButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/LanguageRow" unique_id=1473359050]
+layout_mode = 2
+
+[node name="LanguageSeparator" type="HSeparator" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936142]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
+
 [node name="TopologyRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936139]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -137,6 +156,10 @@ text = "UI_POL1_TOGGLE_LABEL"
 [node name="Pol1Toggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/Pol1Row" unique_id=371483688]
 layout_mode = 2
 
+[node name="OkazakiSeparator" type="HSeparator" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936143]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
+
 [node name="TelomeraseRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1240096146]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -151,6 +174,10 @@ text = "UI_TELOMERASE_TOGGLE_LABEL"
 
 [node name="TelomeraseToggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/TelomeraseRow" unique_id=371483689]
 layout_mode = 2
+
+[node name="TelomeraseSeparator" type="HSeparator" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936144]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
 
 [node name="CofactorRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1344976575]
 layout_mode = 2
@@ -181,6 +208,10 @@ text = "UI_COFACTOR_BYPRODUCTS_TOGGLE_LABEL"
 
 [node name="CofactorByproductsToggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/CofactorByproductsRow" unique_id=1875611907]
 layout_mode = 2
+
+[node name="CofactorSeparator" type="HSeparator" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936145]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
 
 [node name="ActionsRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=134919167]
 layout_mode = 2

@@ -32,6 +32,7 @@ wobble_phase_offset = 1.0
 unique_name_in_owner = true
 position = Vector2(640, 360)
 script = ExtResource("2_1hwtu")
+vertical_mode = true
 
 [node name="CameraRegent" type="Node" parent="." unique_id=527255606]
 script = ExtResource("16_camregent")

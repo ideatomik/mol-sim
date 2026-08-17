@@ -19,6 +19,7 @@ signal setup_confirmed
 # --- DEBUG: Set to true to auto-show when running this scene alone (F6) ---
 const DEBUG_AUTO_SHOW: bool = false
 
+@onready var language_option: OptionButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/LanguageRow/LanguageOption
 @onready var primase_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/PrimaseRow/PrimaseToggle
 @onready var ligase_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/LigaseRow/LigaseToggle
 @onready var pol1_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/Pol1Row/Pol1Toggle
@@ -30,6 +31,13 @@ const DEBUG_AUTO_SHOW: bool = false
 @onready var cancel_button: Button = $CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow/CancelButton
 
 var complexity_mgr: Node = null  # %ComplexityManager, resolved in _ready()
+var locale_mgr: Node = null  # %LocaleManager, resolved in _ready()
+
+# Endonyms (each language's own name for itself) rather than translated
+# strings — a language switcher needs to stay legible to someone who can't
+# read the *current* locale, so these are fixed regardless of tr().
+const _LOCALE_CODES: Array[String] = ["en", "pt_BR", "es"]
+const _LOCALE_NAMES: Array[String] = ["English", "Português (BR)", "Español"]
 
 # Toggle values as of the moment this dialog was opened — since toggles
 # apply LIVE to ComplexityManager as they're pressed (same immediate-apply
@@ -49,6 +57,15 @@ func _ready() -> void:
 	if complexity_mgr == null:
 		push_error("ComplexitySetupPopup: %ComplexityManager not found!")
 		return
+
+	locale_mgr = get_node_or_null("%LocaleManager")
+	if locale_mgr == null:
+		push_error("ComplexitySetupPopup: %LocaleManager not found!")
+	else:
+		language_option.clear()
+		for name in _LOCALE_NAMES:
+			language_option.add_item(name)
+		language_option.item_selected.connect(_on_language_selected)
 
 	# Item order must match ComplexityManager.Topology enum order exactly
 	# (CIRCULAR = 0, LINEAR = 1) — OptionButton.selected is used directly as
@@ -83,6 +100,10 @@ func _ready() -> void:
 		show_dialog()
 
 func show_dialog(is_startup: bool = false) -> void:
+	if locale_mgr != null:
+		var current_index := _LOCALE_CODES.find(locale_mgr.get_locale())
+		if current_index != -1:
+			language_option.select(current_index)
 	if complexity_mgr != null:
 		_snapshot_primase = complexity_mgr.is_enabled("primase")
 		_snapshot_ligase = complexity_mgr.is_enabled("ligase")
@@ -115,6 +136,12 @@ func hide_dialog() -> void:
 	visible = false
 
 # ----- SIGNAL HANDLERS -----
+
+## Applies live and immediately, same as WobbleToggle/NCloudToggle in
+## PlayerUI — not part of the Cancel-revert snapshot below, since language
+## isn't simulation state the player would expect "Cancel" to undo.
+func _on_language_selected(index: int) -> void:
+	locale_mgr.set_locale(_LOCALE_CODES[index])
 
 func _on_primase_toggled(pressed: bool) -> void:
 	complexity_mgr.set_primase_enabled(pressed)
