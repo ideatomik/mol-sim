@@ -1490,7 +1490,7 @@ func _on_helicase_ring_drag_started() -> void:
 	if cursor_mgr != null:
 		cursor_mgr.set_dragging(helicase_ring, true)
 
-## CursorAffordanceDesign.md wiring — helicase_ring.gd holds no external
+## docs/archive/CursorAffordanceDesign.md wiring — helicase_ring.gd holds no external
 ## references (see its own header), so it only emits hover_changed/
 ## scrub_drag_started/scrub_drag_ended; this script (which already owns
 ## the ring and connects those signals for scrub purposes) forwards them

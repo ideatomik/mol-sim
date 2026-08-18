@@ -106,7 +106,7 @@ signal scrub_drag_ended()
 ## currently lagging-only by product decision, scoped at the connection site
 ## in replication_manager.gd, not here.
 signal follow_requested()
-## CursorAffordanceDesign.md — pure hover, independent of press/drag state.
+## docs/archive/CursorAffordanceDesign.md — pure hover, independent of press/drag state.
 ## See helicase_ring.gd's own copy of this signal for the full rationale;
 ## this file holds no cursor-manager reference either, same "owning script
 ## forwards it" contract.

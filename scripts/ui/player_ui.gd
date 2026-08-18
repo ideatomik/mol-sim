@@ -104,7 +104,7 @@ func _ready():
 	scrubber.step = 1.0
 	scrubber.value_changed.connect(_on_scrubber_dragged)
 
-	# CursorAffordanceDesign.md — Scrubber is a Control, so
+	# docs/archive/CursorAffordanceDesign.md — Scrubber is a Control, so
 	# CursorAffordanceManager wires its own mouse_entered/mouse_exited
 	# internally (reliable for Control, unlike the Area2D picking this
 	# project avoids elsewhere — see helicase_ring.gd's own comment).

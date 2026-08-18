@@ -10,7 +10,7 @@ class_name CursorAffordanceManager
 # [autoload] entries in project.godot; every manager is a plain Node
 # instanced under the simulation root, reached via %UniqueName).
 #
-# See docs/CursorAffordanceDesign.md for the design rationale.
+# See docs/archive/CursorAffordanceDesign.md for the design rationale.
 #
 # WIRING: helicase_ring.gd and polymerase_clamp.gd deliberately hold no
 # external references (their own header comments — pure, simulation-
@@ -28,7 +28,7 @@ class_name CursorAffordanceManager
 enum CursorAffordance { DEFAULT, DRAGGABLE, INSPECTABLE, SCRUB }
 
 # Hotspots measured directly from each asset's non-transparent bounding box
-# — see docs/CursorAffordanceDesign.md's asset table. All assets are
+# — see docs/archive/CursorAffordanceDesign.md's asset table. All assets are
 # 64x64 PNGs from Kenney's free CC0 Cursor Pack (kenney.nl/assets/cursor-pack).
 const _DEFAULT_TEXTURE: Texture2D = preload("res://cursors/pointer_c.png")
 const _DEFAULT_HOTSPOT: Vector2 = Vector2(4, 4)
@@ -42,7 +42,7 @@ const _DRAGGABLE_HOTSPOT: Vector2 = Vector2(31, 31)
 ## ad hoc testing toggle, not a real second layout yet (see
 ## docs/camera-intro/VerticalModeDesign.md). Revisit once that's built out
 ## properly rather than branching on vertical_mode here in the meantime.
-## Hotspot not separately measured in docs/CursorAffordanceDesign.md's
+## Hotspot not separately measured in docs/archive/CursorAffordanceDesign.md's
 ## asset table (only tracking_horizontal's is) — 64x64 native and visually
 ## center-symmetric, so the same center hotspot is used; revisit if that
 ## assumption is wrong once seen on screen.
@@ -107,6 +107,6 @@ func _apply() -> void:
 			CursorAffordance.SCRUB:
 				Input.set_custom_mouse_cursor(_SCRUB_TEXTURE, Input.CURSOR_ARROW, _SCRUB_HOTSPOT)
 				return
-			# INSPECTABLE: no asset shipped yet (docs/CursorAffordanceDesign.md) —
+			# INSPECTABLE: no asset shipped yet (docs/archive/CursorAffordanceDesign.md) —
 			# falls through to DEFAULT below until one lands.
 	Input.set_custom_mouse_cursor(_DEFAULT_TEXTURE, Input.CURSOR_ARROW, _DEFAULT_HOTSPOT)

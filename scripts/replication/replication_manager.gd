@@ -1020,7 +1020,7 @@ func _on_lagging_clamp_follow_requested() -> void:
 	if zoom_mgr != null:
 		zoom_mgr.request_follow("lagging_polymerase")
 
-## CursorAffordanceDesign.md wiring — polymerase_clamp.gd holds no external
+## docs/archive/CursorAffordanceDesign.md wiring — polymerase_clamp.gd holds no external
 ## references (see its own header), so it only emits hover_changed/
 ## scrub_drag_started/scrub_drag_ended; this script (which already owns
 ## both clamps and connects those signals for scrub purposes) forwards

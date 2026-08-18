@@ -128,7 +128,7 @@ signal scrub_drag_ended()
 ## (no scrub_drag_started for that press), so following an enzyme never also
 ## fires a spurious zero-delta scrub.
 signal follow_requested()
-## CursorAffordanceDesign.md — pure hover, independent of press/drag state.
+## docs/archive/CursorAffordanceDesign.md — pure hover, independent of press/drag state.
 ## Nothing tracked this before (the click-region test only ever ran on
 ## InputEventMouseButton.pressed); this file still holds no reference to
 ## the cursor manager itself (see header), so the owning script forwards
