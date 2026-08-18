@@ -76,6 +76,7 @@ ticks_on_borders = true
 layout_mode = 2
 size_flags_horizontal = 4
 size_flags_vertical = 8
+alignment = 1
 
 [node name="SpeedControls" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer" unique_id=1597779852]
 unique_name_in_owner = true
@@ -83,6 +84,14 @@ custom_minimum_size = Vector2(346, 0)
 layout_mode = 2
 size_flags_horizontal = 8
 alignment = 2
+
+[node name="SpeedSpacer3" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1267078392]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+
+[node name="SpeedSpacer4" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1087086178]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
 
 [node name="SpeedLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1997999734]
 unique_name_in_owner = true
@@ -96,6 +105,7 @@ horizontal_alignment = 2
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_SPEED_DECREASE"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "-"
@@ -116,6 +126,7 @@ layout_mode = 2
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_SPEED_INCREASE"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "+"
@@ -124,11 +135,23 @@ text = "+"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(28, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_WOBBLE_TOGGLE"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 toggle_mode = true
 button_pressed = true
 text = ""
+
+[node name="NCloudToggle" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=31216635]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(28, 24)
+layout_mode = 2
+tooltip_text = "UI_TOOLTIP_NCLOUD_TOGGLE"
+theme_override_fonts/font = ExtResource("4_08kqy")
+theme_override_styles/normal = ExtResource("4_p6wq6")
+toggle_mode = true
+button_pressed = true
+text = "N"
 
 [node name="SpeedSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/SpeedControls" unique_id=1667768660]
 custom_minimum_size = Vector2(32, 0)
@@ -155,6 +178,7 @@ alignment = 1
 unique_name_in_owner = true
 custom_minimum_size = Vector2(52, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_PLAY_PAUSE"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "▶"
@@ -171,6 +195,7 @@ layout_mode = 2
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_FAST_BACKWARD"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "⏮"
@@ -179,6 +204,7 @@ text = "⏮"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_BACKWARD"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
@@ -187,6 +213,7 @@ text = ""
 unique_name_in_owner = true
 custom_minimum_size = Vector2(32, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_STOP"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "⏹"
@@ -195,6 +222,7 @@ text = "⏹"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_FORWARD"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
@@ -203,6 +231,7 @@ text = ""
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_FAST_FORWARD"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "⏭"
@@ -212,6 +241,7 @@ custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
 [node name="EjectSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/TransportButtons" unique_id=1895488134]
+visible = false
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
@@ -219,6 +249,7 @@ layout_mode = 2
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_EJECT"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
@@ -227,6 +258,7 @@ text = ""
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_MENU"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
@@ -238,28 +270,33 @@ size_flags_horizontal = 2
 theme_override_constants/separation = 8
 alignment = 1
 
-[node name="NCloudToggle" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=31216635]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(28, 24)
-layout_mode = 2
-theme_override_fonts/font = ExtResource("4_08kqy")
-theme_override_styles/normal = ExtResource("4_p6wq6")
-toggle_mode = true
-button_pressed = true
-text = "N"
-
 [node name="ZoomSpacer" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=453914453]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
-[node name="ZoomSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=179622597]
+[node name="ZoomSpacer3" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1804424141]
+visible = false
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
+
+[node name="ZoomSpacer2" type="Control" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=179622597]
+visible = false
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+
+[node name="HighlightLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=2090212984]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("3_p6wq6")
+text = "Destaque:"
+horizontal_alignment = 2
 
 [node name="HighlightButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/HBoxContainer/ZoomControls" unique_id=1503029032]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(28, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_HIGHLIGHT"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 toggle_mode = true
@@ -269,6 +306,7 @@ text = ""
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_ZOOM_OUT"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "-"
@@ -283,6 +321,7 @@ theme_override_fonts/font = ExtResource("3_p6wq6")
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_ZOOM_IN"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "+"
@@ -291,6 +330,7 @@ text = "+"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(28, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_RESET_ZOOM"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
@@ -299,6 +339,7 @@ text = ""
 unique_name_in_owner = true
 custom_minimum_size = Vector2(28, 24)
 layout_mode = 2
+tooltip_text = "UI_TOOLTIP_RECENTER_PAN"
 theme_override_fonts/font = ExtResource("4_08kqy")
 theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""

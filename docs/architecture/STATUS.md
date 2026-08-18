@@ -1709,6 +1709,104 @@ now it eases in.
 
 ---
 
+## Alpha-Ship Pass — UI/Localization + Replication Bug Fixes (v85)
+
+Alpha-ship prep pass: language switcher, export-size cuts, a new
+`CursorAffordanceManager`, a per-sequence Okazaki fragment-size control,
+localized button tooltips — and three real replication-visual bugs traced
+to root cause rather than patched at the symptom. The three bugs share a
+lesson worth keeping: this project's tween-tracking convention
+(`_pol1_tween`/`_ligase_tween`/`_primase_tween` as instance vars,
+kill-before-create, killed on reset) is a real invariant, not boilerplate —
+every place it was skipped or applied incompletely produced a visible bug.
+
+### Bugs found and fixed this pass
+
+**Primase's per-base placement tween wasn't tracked.**
+`_primase_place_primer_base()` created its base-flight tween as a local
+`var base_tween`, unlike `_primase_tween`/`_pol1_tween`/`_ligase_tween`
+(all instance vars, killed on every reset). A tween in flight at reload
+time kept running untracked, later firing its completion callback against
+the *new* sequence's state — writing a stale node into the new
+`lagging_synthesized_bases` array at the old index. Visible as a
+disconnected floating base ("leftover Uracil") and an orphaned backbone
+segment after reload. Fixed by tracking every in-flight placement in
+`_primase_pending_bases` (a list, not a single slot — placements
+legitimately overlap, since `_primase_place_sequence()` chains to the next
+base via the blip's own travel tween finishing, independent of each
+base's own flight tween), killed/freed in bulk in
+`_primase_blip_reset_visual()`.
+
+*First attempt regressed normal play*: collapsing this into a single
+shared tween slot (kill-before-create) fixed the reload leak but broke
+concurrent in-flight bases during ordinary play — starting the next
+base's flight killed the previous one mid-air, orphaning it at a frozen,
+wrong position. The list-based fix (track all pending, don't serialize)
+resolved both without the regression.
+
+**`_primase_check_slot()` had no idempotency guard.** It only checked "is
+this the tile's anchor slot," not "has this tile's primer already been
+placed." Scrubbing backward past a completed fragment and resuming play
+re-visits that anchor slot as "newly reached" (the helicase's own position
+genuinely rewinds on scrub) — replaying the whole primer/Pol I/Ligase
+placement animation on top of already-sealed state. Confirmed via Output
+log: `tile anchor=47` fired twice in one session, the second time after a
+scrub-back, for a tile Pol I had already converted and Ligase had already
+sealed. Fixed with `_primase_fired_tile_ends` (cleared every reset).
+
+**`resume_enzymes()` didn't check each enzyme's actual state.** It gated
+restoring Pol I/Ligase visibility on `not pol1_faded`/`not ligase_faded` —
+but those are one-shot flags set only once, at the very end of an entire
+run (`_lagging_try_deferred_fade()`), staying `false` through the whole
+middle of a run across every individual per-fragment job. Every unpause
+during that window force-set `modulate.a = 1.0` regardless of whether the
+enzyme was correctly idle/offstage between jobs — snapping it back to
+visible wherever it was last positioned. This was the actual root cause
+behind "Pol I instantiates at the last place it was visible," reproducible
+on reload+play, scrub+resume, and pause-mid-leave+resume alike, since all
+three are just "resume while idle." Fixed by also requiring
+`_pol1_state != Pol1Phase.OFFSTAGE` / `_ligase_state != LigaseState.IDLE`.
+
+**Related edge case**: `_primase_primer_length()`'s clamp
+(`clampi(round(f * ratio), 1, f - 1)`) degenerates to a zero-length primer
+at `okazaki_fragment_size == 1` (`f - 1 == 0`, a `clampi(x, 1, 0)` — min >
+max — evaluates to `0` regardless of `x`), reachable via the new
+fragment-size slider on short sequences. Fixed with `max(1, f - 1)`.
+
+### New: CursorAffordanceManager
+
+`%CursorAffordanceManager` (plain scene Node under the simulation root,
+same Inspector-editable-not-autoload convention as
+`ComplexityManager`/`LocaleManager`) swaps the OS cursor on hover/drag —
+grab-hand over the helicase ring and both polymerase clamps, a scrub-track
+icon over the Scrubber. Assets: Kenney's CC0 Cursor Pack, `res://cursors/`.
+
+Wiring note: `helicase_ring.gd`/`polymerase_clamp.gd` deliberately hold no
+external references (pure, simulation-agnostic components), so they only
+emit a new `hover_changed` signal (reusing existing
+`scrub_drag_started`/`scrub_drag_ended` for drag state); their owning
+scripts (`simulation.gd` for the ring, `replication_manager.gd` for both
+clamps — the same scripts that already connect those signals for scrub
+purposes) forward everything to the manager. The Scrubber (a `Control`) is
+registered directly by `player_ui.gd` instead, since `Control`'s own
+`mouse_entered`/`mouse_exited` are reliable — unlike the `Area2D` picking
+this project avoids project-wide (see `helicase_ring.gd`'s own "Manual
+hit-test" comment).
+
+### Okazaki fragment-size control
+
+`SequenceLoaderPopup` gained a range slider for `okazaki_fragment_size`,
+bounds derived live from the sequence length being typed/loaded
+(`max ≈ length / 2.5`, `min = ceil(length / 6)`), set on
+`simulation.okazaki_fragment_size` immediately before
+`initialize_simulation()` runs — i.e. exactly the sequence-load moment,
+never mid-run (`replication_manager.gd` caches a derived
+`lagging_total_fragments` from this value in `_lagging_reset()`; changing
+it mid-simulation would desync that cache from every other live read of
+the property).
+
+---
+
 ## Scene Structure
 
 ```
@@ -1728,6 +1826,9 @@ root (Node2D, simulation.gd)
 ├── ThemeManager (Node, %ThemeManager)
 ├── ComplexityManager (Node, %ComplexityManager)
 ├── LocaleManager (Node, %LocaleManager)
+├── CursorAffordanceManager (Node, %CursorAffordanceManager) — hover/drag
+│                                    cursor swaps; see "Alpha-Ship Pass
+│                                    (v85)" above
 └── UI (CanvasLayer)
     ├── ComplexitySetupPopup           — shown at startup, before SequenceLoaderPopup
     ├── SequenceLoaderPopup

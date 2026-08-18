@@ -106,8 +106,14 @@ signal scrub_drag_ended()
 ## currently lagging-only by product decision, scoped at the connection site
 ## in replication_manager.gd, not here.
 signal follow_requested()
+## CursorAffordanceDesign.md — pure hover, independent of press/drag state.
+## See helicase_ring.gd's own copy of this signal for the full rationale;
+## this file holds no cursor-manager reference either, same "owning script
+## forwards it" contract.
+signal hover_changed(hovering: bool)
 
 var _dragging: bool = false
+var _hovering: bool = false
 ## Same dead-zone fix as helicase_ring.gd — see its var block for the full
 ## rationale (found via [FOLLOWCLICK] prints: LP's smaller click region made
 ## the spurious-pause bug near-guaranteed, vs. intermittent on helicase).
@@ -133,14 +139,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			scrub_drag_ended.emit()
 		elif _pending:
 			_pending = false
-	elif event is InputEventMouseMotion and (_dragging or _pending):
-		if _pending:
-			if (event.position - _drag_start_screen).length() < DRAG_DEADZONE_PX:
-				return
-			_pending = false
-			_dragging = true
-			scrub_drag_started.emit()
-		scrub_drag_delta.emit(event.position - _drag_start_screen)
+	elif event is InputEventMouseMotion:
+		if _dragging or _pending:
+			if _pending:
+				if (event.position - _drag_start_screen).length() < DRAG_DEADZONE_PX:
+					return
+				_pending = false
+				_dragging = true
+				scrub_drag_started.emit()
+			scrub_drag_delta.emit(event.position - _drag_start_screen)
+		if not _dragging:
+			var hovering := _point_in_click_region(get_global_mouse_position())
+			if hovering != _hovering:
+				_hovering = hovering
+				hover_changed.emit(_hovering)
 
 ## Asked of ZoomManager through _sim — the same reach this file already makes
 ## for %ThemeManager and %ComplexityManager in setup(). 0.0 horizontally.

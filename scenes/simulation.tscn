@@ -16,6 +16,7 @@
 [ext_resource type="PackedScene" path="res://scenes/DnaUnwindIntro.tscn" id="13_dnaintro"]
 [ext_resource type="FontFile" uid="uid://ba4l0yjamuoiq" path="res://fonts/Raleway/static/Raleway-Bold.ttf" id="15_i46hp"]
 [ext_resource type="Script" uid="uid://bx0u4xq8xew0o" path="res://scripts/ui/camera_regent.gd" id="16_camregent"]
+[ext_resource type="Script" uid="uid://be2m7frvnrqrs" path="res://scripts/ui/cursor_affordance_manager.gd" id="17_cursormgr"]
 
 [sub_resource type="Curve2D" id="Curve2D_mwrr7"]
 
@@ -32,7 +33,6 @@ wobble_phase_offset = 1.0
 unique_name_in_owner = true
 position = Vector2(640, 360)
 script = ExtResource("2_1hwtu")
-vertical_mode = true
 
 [node name="CameraRegent" type="Node" parent="." unique_id=527255606]
 script = ExtResource("16_camregent")
@@ -119,6 +119,10 @@ script = ExtResource("9_1hwtu")
 [node name="ComplexityManager" type="Node" parent="." unique_id=1075586656]
 unique_name_in_owner = true
 script = ExtResource("10_cplxmgr")
+
+[node name="CursorAffordanceManager" type="Node" parent="." unique_id=-2094967295]
+unique_name_in_owner = true
+script = ExtResource("17_cursormgr")
 
 [node name="ThemeManager" type="Node" parent="." unique_id=264924326]
 unique_name_in_owner = true

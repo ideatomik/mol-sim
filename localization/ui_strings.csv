@@ -1,8 +1,10 @@
 keys,en,pt_BR,es
 UI_CHAR_COUNT,%d / %d characters,%d / %d caracteres,%d / %d caracteres
+UI_HIGHLIGHT_LABEL,Highlight:,Destaque:,Resaltar:
 UI_SEQUENCE_LOADER_TITLE,LOAD NEW DNA SEQUENCE,CARREGAR NOVA SEQUÊNCIA DE DNA,CARGAR NUEVA SECUENCIA DE ADN
 UI_SEQUENCE_INPUT_PLACEHOLDER,ENTER SEQUENCE,PREENCHER SEQUÊNCIA,INGRESAR SECUENCIA
 UI_SELECT_SEQUENCE_LABEL,SELECT SEQUENCE:,SELECIONAR SEQUÊNCIA:,SELECCIONAR SECUENCIA:
+UI_FRAGMENT_SIZE_LABEL,Fragment Size:,Tamanho do Fragmento:,Tamaño del Fragmento:
 UI_CANCEL_BUTTON,CANCEL,CANCELAR,CANCELAR
 UI_LOAD_BUTTON,LOAD,CARREGAR,CARGAR
 UI_ENZYME_DROPDOWN_PLACEHOLDER,Enzymes,Enzimas,Enzimas
@@ -22,3 +24,20 @@ UI_COFACTOR_BYPRODUCTS_REQUIRES_COFACTOR_TOOLTIP,Requires Cofactor,Requer Cofato
 UI_CONTINUE_BUTTON,CONTINUE,CONTINUAR,CONTINUAR
 UI_QUIT_BUTTON,QUIT,SAIR,SALIR
 UI_POL1_COMING_SOON,Coming soon — requires Primase and Ligase,Em breve — requer Primase e Ligase,Próximamente — requiere Primasa y Ligasa
+UI_TOOLTIP_SPEED_DECREASE,Decrease playback speed,Diminuir velocidade de reprodução,Disminuir velocidad de reproducción
+UI_TOOLTIP_SPEED_INCREASE,Increase playback speed,Aumentar velocidade de reprodução,Aumentar velocidad de reproducción
+UI_TOOLTIP_WOBBLE_TOGGLE,Toggle wobble animation,Ativar/desativar animação de oscilação,Activar/desactivar animación de oscilación
+UI_TOOLTIP_NCLOUD_TOGGLE,Toggle nucleotide cloud,Ativar/desativar nuvem de nucleotídeos,Activar/desactivar nube de nucleótidos
+UI_TOOLTIP_PLAY_PAUSE,Play / Pause,Reproduzir / Pausar,Reproducir / Pausar
+UI_TOOLTIP_FAST_BACKWARD,Jump back one fragment,Voltar um fragmento,Retroceder un fragmento
+UI_TOOLTIP_BACKWARD,Step back one base,Voltar uma base,Retroceder una base
+UI_TOOLTIP_STOP,Stop and reset to start,Parar e voltar ao início,Detener y volver al inicio
+UI_TOOLTIP_FORWARD,Step forward one base,Avançar uma base,Avanzar una base
+UI_TOOLTIP_FAST_FORWARD,Jump forward one fragment,Avançar um fragmento,Avanzar un fragmento
+UI_TOOLTIP_EJECT,Load a new sequence,Carregar nova sequência,Cargar nueva secuencia
+UI_TOOLTIP_MENU,Settings,Configurações,Configuración
+UI_TOOLTIP_HIGHLIGHT,Toggle enzyme highlight,Ativar/desativar destaque de enzima,Activar/desactivar resaltado de enzima
+UI_TOOLTIP_ZOOM_OUT,Zoom out,Diminuir zoom,Alejar zoom
+UI_TOOLTIP_ZOOM_IN,Zoom in,Aumentar zoom,Acercar zoom
+UI_TOOLTIP_RESET_ZOOM,Reset zoom,Redefinir zoom,Restablecer zoom
+UI_TOOLTIP_RECENTER_PAN,Recenter view,Recentralizar visualização,Recentrar vista

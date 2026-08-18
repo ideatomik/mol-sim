@@ -1,49 +1,51 @@
 extends Node2D
 
 # ==========================================
-# v 84 — DNA helix-unwind startup intro
-# - New dna_unwind_intro.gd (+ DnaUnwindIntro.tscn, wired into
-#   simulation.tscn under UI) plays a startup animation on every sequence
-#   load: a twisted double-helix pose settles into the live rail view's
-#   exact flat layout before handing off, replacing the previous hard cut
-#   straight to the live view.
-# - Rotation is a real body rotating in the Y-Z plane, viewed edge-on — the
-#   same z-order + periodic-crossing technique HelicaseDesign.md shipped
-#   for the ring's own barrel-roll (docs/Topoisomerase.md explicitly names
-#   it as reusable for any twisted-pair visual). sin(phase)'s SIGN decides
-#   draw order each frame, flipping only at the pair's max-Y-separation
-#   extremes (invisible), not at the crossing itself — an earlier
-#   sin-for-one/cos-for-other approach was a vertical oscillation with no
-#   depth concept at all, not a rotation.
-# - Rungs styled as real nucleotide bead glyphs (plain filled circles,
-#   nitrogen_base.gd's exact draw_circle call) connected by real
-#   hydrogen-bond bundles (2 lines A-T / 3 lines C-G, simulation.gd's
-#   _spawn_template_hydrogen_bonds() styling) instead of generic shapes.
-# - Per-strand backbone line: each backbone point is a second point on the
-#   same rotating rod as its bead (same phase/mean_cos, larger radius),
-#   drawn as antialiased draw_line segments with round-cap circles at every
-#   endpoint (no Line2D/Curve2D). Z-order reuses top_is_front directly — a
-#   bead's own backbone shares that bead's own front/back status (real
-#   backbone sits outside the double helix, bases inside), so the front
-#   bead's own backbone momentarily covers it right at each crossing. See
-#   docs/superpowers/specs/2026-08-08-dna-intro-backbones-design.md.
-# - Settle-phase handoff triggers not on a fixed clock but on the natural
-#   moment the rightmost bead pair's rotating Y already coincides with its
-#   real resting Y (zero-crossing detection during the rotation's final
-#   lap, in _process()) — falls back to a fixed-duration trigger if that
-#   coincidence never occurs. The final lap itself decelerates to a stop
-#   (velocity-continuous cubic Hermite curve, matched to the incoming
-#   constant angular speed) so freezing never reads as an instant cutoff.
-#   Each bead then glides in Y to its real position, staggered right to
-#   left as a settling wave.
-# - Real per-base wobble (simulation.gd's get_wobble_y() hash-seeded double
-#   sine, reproduced verbatim) layered on top of both phases, so the intro
-#   strand jitters the same way the live strand does.
-# - nucleotide_field.gd: new start_load_fade_in()/load_fade_in_duration —
-#   the ambient field now eases in once the intro hands off instead of
-#   popping to full opacity the instant the overlay disappears (it's
-#   already fully rebuilt/repositioned behind that overlay well before the
-#   handoff moment).
+# v 85 — Alpha-ship UI/localization pass + replication bug fixes
+# - Language switcher: ComplexitySetupPopup gained a LanguageRow dropdown
+#   (endonym names, live via %LocaleManager), replacing the debug KEY_L
+#   cycle; section spacers now group the dialog's rows.
+# - Export size: removed 26 unused font files (~26MB) and added
+#   export_presets.cfg exclude filters for docs/, diagnosis/, and debug
+#   scenes.
+# - Fixed a stray-newline bug in the FastBackward button label (both
+#   PlayerUI.tscn and VerticalPlayerUI.tscn).
+# - Vertical-mode fix: _swap_in_vertical_player_ui()'s queue_free()/
+#   add_child() ordering race (old PlayerUI still tree-attached when the
+#   new instance was added, so Godot silently renamed it to "PlayerUI2")
+#   was breaking F2 and camera_regent.gd's Recording Shot — fixed via a
+#   synchronous remove_child() first. Also fixed a missing zoom_mgr
+#   injection into the swapped-in vertical instance.
+# - New Okazaki fragment-size range control in SequenceLoaderPopup, bounds
+#   derived live from sequence length, applied to
+#   simulation.okazaki_fragment_size before each load.
+# - Three replication-visual bugs traced and fixed in
+#   replication_manager.gd:
+#   - Primase's per-base placement tween was untracked (a local var,
+#     unlike its sibling tweens), so it could survive a reload and write a
+#     stale base into the next sequence — the "leftover Uracil/backbone"
+#     bug. Fixed via _primase_pending_bases, killed/freed on reset.
+#   - _primase_check_slot() had no idempotency guard, so scrubbing back
+#     past a completed fragment and resuming replayed its whole
+#     primer/Pol I/Ligase animation on top of already-sealed state. Fixed
+#     with _primase_fired_tile_ends.
+#   - resume_enzymes() forced Pol I/Ligase back to visible on every
+#     unpause, gated only on a one-shot end-of-run *_faded flag rather
+#     than each enzyme's actual current state — the real root cause of
+#     "Pol I instantiates at the last place it was visible." Fixed by also
+#     checking _pol1_state/_ligase_state.
+#   - Also fixed a related degenerate edge case: okazaki_fragment_size ==
+#     1 collapsed _primase_primer_length()'s clamp to a zero-length
+#     primer.
+# - New CursorAffordanceManager (%CursorAffordanceManager, plain scene
+#   Node, matching the ComplexityManager/LocaleManager convention) —
+#   hover/drag cursor swaps for the helicase ring, both polymerase clamps,
+#   and the Scrubber, using Kenney's CC0 Cursor Pack (res://cursors/).
+# - Enzyme dropdown: new_leading_strand/new_lagging_strand filtered out of
+#   the picker for this version (still registered with zoom_mgr
+#   underneath).
+# - New HighlightLabel plus a full localized-tooltip pass (tooltip_text)
+#   across all 17 PlayerUI buttons.
 #
 # CURRENT VERSION ONLY. Prior versions live in CHANGELOG.md — when
 # delivering a new version, move this block there first, then write the new
@@ -1484,6 +1486,24 @@ func request_drag_scrub(target_index: int) -> void:
 
 func _on_helicase_ring_drag_started() -> void:
 	_ring_drag_start_index = get_synthesized_count()
+	var cursor_mgr = get_node_or_null("%CursorAffordanceManager")
+	if cursor_mgr != null:
+		cursor_mgr.set_dragging(helicase_ring, true)
+
+## CursorAffordanceDesign.md wiring — helicase_ring.gd holds no external
+## references (see its own header), so it only emits hover_changed/
+## scrub_drag_started/scrub_drag_ended; this script (which already owns
+## the ring and connects those signals for scrub purposes) forwards them
+## to %CursorAffordanceManager.
+func _on_helicase_ring_hover_changed(hovering: bool) -> void:
+	var cursor_mgr = get_node_or_null("%CursorAffordanceManager")
+	if cursor_mgr != null:
+		cursor_mgr.set_hovering(helicase_ring, hovering)
+
+func _on_helicase_ring_drag_ended() -> void:
+	var cursor_mgr = get_node_or_null("%CursorAffordanceManager")
+	if cursor_mgr != null:
+		cursor_mgr.set_dragging(helicase_ring, false)
 
 ## Converts screen-space cumulative drag pixels into a slot delta relative
 ## to _ring_drag_start_index — NOT the ring's own current position. Same
@@ -1811,7 +1831,12 @@ func _setup_helicase():
 	helicase_node.add_child(helicase_ring)
 	helicase_ring.scrub_drag_started.connect(_on_helicase_ring_drag_started)
 	helicase_ring.scrub_drag_delta.connect(_on_helicase_ring_drag_delta)
+	helicase_ring.scrub_drag_ended.connect(_on_helicase_ring_drag_ended)
 	helicase_ring.follow_requested.connect(_on_helicase_ring_follow_requested)
+	helicase_ring.hover_changed.connect(_on_helicase_ring_hover_changed)
+	var cursor_mgr = get_node_or_null("%CursorAffordanceManager")
+	if cursor_mgr != null:
+		cursor_mgr.register(helicase_ring, cursor_mgr.CursorAffordance.DRAGGABLE)
 
 	# ATP cycle — a SIBLING of the ring, not a child of it. helicase_ring.gd
 	# deliberately holds no ThemeManager reference (its own header insists on

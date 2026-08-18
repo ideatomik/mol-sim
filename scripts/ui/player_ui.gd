@@ -41,6 +41,7 @@ extends CanvasLayer
 
 # Zoom Controls
 @onready var zoom_controls: HBoxContainer = get_node_or_null("%ZoomControls")
+@onready var highlight_label: Label = get_node_or_null("%HighlightLabel")
 @onready var highlight_button: Button = get_node_or_null("%HighlightButton")
 @onready var zoom_out_button: Button = get_node_or_null("%ZoomOutButton")
 @onready var enzyme_dropdown: OptionButton = get_node_or_null("%EnzymeDropdown")
@@ -103,6 +104,14 @@ func _ready():
 	scrubber.step = 1.0
 	scrubber.value_changed.connect(_on_scrubber_dragged)
 
+	# CursorAffordanceDesign.md — Scrubber is a Control, so
+	# CursorAffordanceManager wires its own mouse_entered/mouse_exited
+	# internally (reliable for Control, unlike the Area2D picking this
+	# project avoids elsewhere — see helicase_ring.gd's own comment).
+	var cursor_mgr = get_node_or_null("%CursorAffordanceManager")
+	if cursor_mgr != null:
+		cursor_mgr.register(scrubber, cursor_mgr.CursorAffordance.SCRUB)
+
 	# LongSequenceDesign.md Part 4 — click/drag-to-scrub on SequenceLabel.
 	# meta_hover_started/ended fire regardless of button state (hover
 	# tracking is motion-based, not click-based), which is what lets the
@@ -143,6 +152,10 @@ func _ready():
 		# is also a Control text property, so it auto-refreshes on
 		# TranslationServer.set_locale() with zero extra plumbing.
 		speed_label.text = "UI_SPEED_LABEL"
+		# HighlightLabel is optional (vertical layout omits the whole
+		# ZoomControls row) — same guard every other ref in that row uses.
+		if highlight_label != null:
+			highlight_label.text = "UI_HIGHLIGHT_LABEL"
 		speed_decrease_button.pressed.connect(_on_speed_decrease)
 		speed_increase_button.pressed.connect(_on_speed_increase)
 		# NOT _apply_speed_to_helicase() here — PlayerUI is a child of
@@ -492,7 +505,14 @@ func _populate_enzyme_dropdown():
 	enzyme_dropdown.add_item(tr("UI_ENZYME_DROPDOWN_PLACEHOLDER"))
 	enzyme_dropdown.set_item_disabled(0, true)
 
-	var ids = zoom_mgr.get_target_ids()
+	# new_leading_strand/new_lagging_strand stay registered with zoom_mgr
+	# (register_target() in replication_manager.gd) but are hidden from
+	# this dropdown for this version — filtering here rather than
+	# unregistering keeps the underlying zoom targets intact for whenever
+	# they're wanted back.
+	var ids = zoom_mgr.get_target_ids().filter(
+		func(id): return id != "new_leading_strand" and id != "new_lagging_strand"
+	)
 	for id in ids:
 		var display_name = zoom_mgr.get_target_display_name(id)
 		enzyme_dropdown.add_item(display_name)
@@ -587,8 +607,9 @@ func _on_simulation_progress_changed(new_progress: float):
 	if _is_simulation_done():
 		play_pause_button.text = "▶"
 
-func _on_sequence_loaded(new_sequence: String):
+func _on_sequence_loaded(new_sequence: String, okazaki_fragment_size: int):
 	"""Called when the user loads a new sequence from the popup."""
+	simulation.okazaki_fragment_size = okazaki_fragment_size
 	# Initialize the simulation with the new sequence
 	simulation.initialize_simulation(new_sequence)
 

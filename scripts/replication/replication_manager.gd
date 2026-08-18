@@ -190,11 +190,40 @@ var _ligase_active_gap_slot: int = -2
 var primase_blip: PrimaseBlip = null
 var primase_halo: PolymeraseHalo = null
 var _primase_tween: Tween = null
+## {tween: Tween, node: Node2D} for every RNA base currently flying into
+## position (distinct from _primase_tween above, which only animates the
+## blip's own blob/pulse). PLURAL and deliberately not a single tracked
+## slot: _primase_place_sequence() chains to the NEXT base via the blip's
+## own travel/pulse tween finishing, which is independent of — and often
+## faster than — each base's own flight tween, so multiple bases can
+## legitimately be mid-flight at once (see _primase_place_primer_base()'s
+## "separate node/tween/lifecycle" comment). A single shared slot here
+## would kill an earlier base's still-running tween the moment the next
+## one starts, orphaning it mid-flight instead of fixing the leak.
+## Entries are removed in _primase_finish_base() on natural completion, or
+## killed+freed in bulk on reset (an untracked tween here would otherwise
+## keep running past teardown/reset and write a stale base into the NEW
+## sequence's lagging_synthesized_bases at reload's old index).
+var _primase_pending_bases: Array = []
 ## tile_end (int) -> {backbone: Line2D, bond_marks: Array} — primer backbone
 ## geometry for a tile whose bases primase has placed but whose fragment
 ## Pol III hasn't opened yet. Adopted (not recreated) by
 ## _lagging_open_next_fragment() the moment it opens that same tile.
 var primase_pending_backbones: Dictionary = {}
+## Set (Dictionary used as one, same style as primase_pending_backbones
+## above) of tile_end values whose primer sequence has already been
+## triggered — guards _primase_check_slot() against firing a SECOND time
+## for a tile that's already been placed/converted/sealed. Without this,
+## scrubbing backward past a completed fragment and resuming forward
+## re-visits its anchor slot as "newly reached" (the helicase's own
+## position genuinely rewinds on scrub), and _primase_check_slot() had no
+## way to tell that apart from a real first-time arrival — replaying the
+## whole placement animation on top of already-finished state, which is
+## what spawned the stray Pol I jobs / leftover backbones. Cleared in
+## _lagging_reset() along with every other primase/fragment tracking
+## structure, so a genuinely new sequence starts with a clean slate even
+## if its tile_end values happen to numerically overlap the old one's.
+var _primase_fired_tile_ends: Dictionary = {}
 
 # ---------- POL I (Complex tier — OkazakiMaturationDesign.md) ----------
 # True-absence lifecycle (unlike ligase/primase): not instantiated until its
@@ -286,7 +315,12 @@ func initialize(p_sim: Node) -> void:
 	lagging_clamp.setup(sim, false)
 	lagging_clamp.scrub_drag_started.connect(_on_lagging_clamp_drag_started)
 	lagging_clamp.scrub_drag_delta.connect(_on_lagging_clamp_drag_delta)
+	lagging_clamp.scrub_drag_ended.connect(_on_lagging_clamp_drag_ended)
 	lagging_clamp.follow_requested.connect(_on_lagging_clamp_follow_requested)
+	lagging_clamp.hover_changed.connect(_on_lagging_clamp_hover_changed)
+	var lagging_cursor_mgr = sim.get_node_or_null("%CursorAffordanceManager")
+	if lagging_cursor_mgr != null:
+		lagging_cursor_mgr.register(lagging_clamp, lagging_cursor_mgr.CursorAffordance.DRAGGABLE)
 	lagging_halo = PolymeraseHalo.new()
 	lagging_polymerase.add_child(lagging_halo)
 	lagging_halo.setup(sim, false)
@@ -565,9 +599,19 @@ func resume_enzymes() -> void:
 		lagging_polymerase.modulate.a = 1.0
 	if sim.helicase_node and not helicase_sprite_faded:
 		sim.helicase_node.modulate.a = 1.0
-	if ligase != null and not ligase_faded:
+	# not ligase_faded/not pol1_faded alone isn't enough: those are one-shot
+	# flags set only once, at the very end of an entire run
+	# (_lagging_try_deferred_fade()) — they stay false through the whole
+	# middle of a run, across every individual per-fragment job. Without
+	# also checking each enzyme's OWN current state, this forced them back
+	# to alpha 1.0 on every resume even when correctly idle/offstage
+	# between jobs, snapping them back to visible wherever they were last
+	# left (reported as "Pol I instantiates at the last place it was
+	# visible" — on reload+play, scrub+resume, and pause-mid-leave+resume
+	# alike, since all three are just "resume while idle").
+	if ligase != null and not ligase_faded and _ligase_state != LigaseState.IDLE:
 		ligase.modulate.a = 1.0
-	if pol1 != null and not pol1_faded:
+	if pol1 != null and not pol1_faded and _pol1_state != Pol1Phase.OFFSTAGE:
 		pol1.modulate.a = 1.0
 	# Reachable only when helicase_mgr isn't yet Phase.DONE (toggle_play()
 	# routes the is_done() case to a fresh intro instead) — lagging catch-up
@@ -948,19 +992,48 @@ func _apply_highlight() -> void:
 # feel is identical across all three enzymes.
 func _on_leading_clamp_drag_started() -> void:
 	_leading_drag_start_index = sim.get_synthesized_count()
+	_set_clamp_dragging(leading_clamp, true)
 
 func _on_leading_clamp_drag_delta(cumulative_px: Vector2) -> void:
 	_request_clamp_drag_scrub(_leading_drag_start_index, cumulative_px)
 
+func _on_leading_clamp_drag_ended() -> void:
+	_set_clamp_dragging(leading_clamp, false)
+
+func _on_leading_clamp_hover_changed(hovering: bool) -> void:
+	_set_clamp_hovering(leading_clamp, hovering)
+
 func _on_lagging_clamp_drag_started() -> void:
 	_lagging_drag_start_index = sim.get_synthesized_count()
+	_set_clamp_dragging(lagging_clamp, true)
 
 func _on_lagging_clamp_drag_delta(cumulative_px: Vector2) -> void:
 	_request_clamp_drag_scrub(_lagging_drag_start_index, cumulative_px)
 
+func _on_lagging_clamp_drag_ended() -> void:
+	_set_clamp_dragging(lagging_clamp, false)
+
+func _on_lagging_clamp_hover_changed(hovering: bool) -> void:
+	_set_clamp_hovering(lagging_clamp, hovering)
+
 func _on_lagging_clamp_follow_requested() -> void:
 	if zoom_mgr != null:
 		zoom_mgr.request_follow("lagging_polymerase")
+
+## CursorAffordanceDesign.md wiring — polymerase_clamp.gd holds no external
+## references (see its own header), so it only emits hover_changed/
+## scrub_drag_started/scrub_drag_ended; this script (which already owns
+## both clamps and connects those signals for scrub purposes) forwards
+## them to %CursorAffordanceManager.
+func _set_clamp_dragging(clamp_node: Node, dragging: bool) -> void:
+	var cursor_mgr = sim.get_node_or_null("%CursorAffordanceManager")
+	if cursor_mgr != null:
+		cursor_mgr.set_dragging(clamp_node, dragging)
+
+func _set_clamp_hovering(clamp_node: Node, hovering: bool) -> void:
+	var cursor_mgr = sim.get_node_or_null("%CursorAffordanceManager")
+	if cursor_mgr != null:
+		cursor_mgr.set_hovering(clamp_node, hovering)
 
 func _request_clamp_drag_scrub(start_index: int, cumulative_px: Vector2) -> void:
 	if zoom_mgr == null or sim.nucleotide_slot_spacing <= 0.0:
@@ -1124,6 +1197,11 @@ func _leading_setup_backbones() -> void:
 	leading_clamp.setup(sim, true)
 	leading_clamp.scrub_drag_started.connect(_on_leading_clamp_drag_started)
 	leading_clamp.scrub_drag_delta.connect(_on_leading_clamp_drag_delta)
+	leading_clamp.scrub_drag_ended.connect(_on_leading_clamp_drag_ended)
+	leading_clamp.hover_changed.connect(_on_leading_clamp_hover_changed)
+	var leading_cursor_mgr = sim.get_node_or_null("%CursorAffordanceManager")
+	if leading_cursor_mgr != null:
+		leading_cursor_mgr.register(leading_clamp, leading_cursor_mgr.CursorAffordance.DRAGGABLE)
 	leading_halo = PolymeraseHalo.new()
 	leading_polymerase.add_child(leading_halo)
 	leading_halo.setup(sim, true)
@@ -1470,6 +1548,7 @@ func _lagging_reset(num_slots: int) -> void:
 	lagging_fragments.clear()
 	lagging_current_fragment = null
 	lagging_telomere_gap = null
+	_primase_fired_tile_ends.clear()
 	lagging_synthesized_bases.clear()
 	lagging_hydrogen_bonds.clear()
 	for i in range(num_slots):
@@ -1865,9 +1944,16 @@ func _primase_tile_end(index: int) -> int:
 ## Ratio of okazaki_fragment_size (tm.primer_length_ratio), clamped so a
 ## primer never consumes an entire fragment (always leaves at least one slot
 ## for Pol III to actually extend) and is never zero.
+##
+## max(1, f - 1) guards okazaki_fragment_size == 1 (reachable via the
+## sequence loader's fragment-size slider on short sequences): f - 1 would
+## be 0 there, making this a clampi(x, 1, 0) — min > max — which evaluates
+## to 0 regardless of x. A zero-length primer then produces an EMPTY seq in
+## _pol1_enqueue_job()/_primase_place_sequence(), and _pol1_kick()'s
+## `job.seq[0]` read is an out-of-bounds error on that empty array.
 func _primase_primer_length() -> int:
 	var f = sim.okazaki_fragment_size
-	return clampi(int(round(f * tm.primer_length_ratio)), 1, f - 1)
+	return clampi(int(round(f * tm.primer_length_ratio)), 1, max(1, f - 1))
 
 ## Purely geometric — true if `index` falls within its tile's primer span
 ## (the top primer_length() slots of that tile, ending at the same
@@ -1963,6 +2049,9 @@ func _primase_check_slot(index: int) -> void:
 	# opposite directions within what's meant to read as one fragment).
 	if index != tile_end - 1:
 		return
+	if _primase_fired_tile_ends.has(tile_end):
+		return
+	_primase_fired_tile_ends[tile_end] = true
 
 	var span = _primase_primer_length()
 	var seq: Array = []
@@ -2065,6 +2154,8 @@ func _primase_place_primer_base(index: int, is_first: bool, is_last: bool, seq: 
 	var color = _primer_rna_color_for(base_type)
 	var node = _spawn_lagging_base(index, base_type, start_pos, color, "rounded_square")
 	var base_tween = sim.create_tween()
+	var pending_entry := {tween = base_tween, node = node}
+	_primase_pending_bases.append(pending_entry)
 	base_tween.tween_property(node, "position", Vector2(target_x, target_y), step_duration)\
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	base_tween.tween_callback(_primase_finish_base.bind(index, node))
@@ -2074,14 +2165,31 @@ func _primase_finish_base(index: int, node: Node2D) -> void:
 	node.position = Vector2(world_x, _lagging_template_y_at(world_x) + sim.dna_ribbons_gap)
 	lagging_synthesized_bases[index] = node
 	lagging_hydrogen_bonds[index] = _spawn_lagging_hydrogen_bonds(index)
+	for i in range(_primase_pending_bases.size()):
+		if _primase_pending_bases[i].node == node:
+			_primase_pending_bases.remove_at(i)
+			break
 
 ## Kills any in-flight blip animation and snaps to invisible/rest. Used
 ## during scrub and on a fresh sequence load — mirrors
 ## _ligase_reset_visual()'s shape. Does NOT touch already-placed primer
-## bases — those are real persisted state now, untouched by this reset.
+## bases (those in lagging_synthesized_bases) — those are real persisted
+## state now, cleared separately by _lagging_reset()/_lagging_teardown().
+## DOES kill/free every still-in-flight base tween + node in
+## _primase_pending_bases, since those exist outside
+## lagging_synthesized_bases until _primase_finish_base() runs for each —
+## a reload that lands mid-flight would otherwise leave an untracked tween
+## running past teardown, writing a stale base into the NEXT sequence's
+## state once it eventually completes (the leftover Uracil bug).
 func _primase_blip_reset_visual() -> void:
 	if _primase_tween != null and _primase_tween.is_valid():
 		_primase_tween.kill()
+	for entry in _primase_pending_bases:
+		if entry.tween != null and entry.tween.is_valid():
+			entry.tween.kill()
+		if entry.node != null and is_instance_valid(entry.node):
+			entry.node.queue_free()
+	_primase_pending_bases.clear()
 	if primase_blip != null:
 		primase_blip.modulate.a = 0.0
 		primase_blip.set_pulse(0.0)

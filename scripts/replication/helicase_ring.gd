@@ -128,8 +128,15 @@ signal scrub_drag_ended()
 ## (no scrub_drag_started for that press), so following an enzyme never also
 ## fires a spurious zero-delta scrub.
 signal follow_requested()
+## CursorAffordanceDesign.md — pure hover, independent of press/drag state.
+## Nothing tracked this before (the click-region test only ever ran on
+## InputEventMouseButton.pressed); this file still holds no reference to
+## the cursor manager itself (see header), so the owning script forwards
+## this to CursorAffordanceManager.set_hovering().
+signal hover_changed(hovering: bool)
 
 var _dragging: bool = false
+var _hovering: bool = false
 ## Press landed in the click region but hasn't yet crossed DRAG_DEADZONE_PX —
 ## still could resolve as a plain click (including the first half of a
 ## double-click) rather than a drag. Without this, ANY motion between press
@@ -159,14 +166,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			scrub_drag_ended.emit()
 		elif _pending:
 			_pending = false  # released inside the deadzone — a plain click, never became a drag
-	elif event is InputEventMouseMotion and (_dragging or _pending):
-		if _pending:
-			if (event.position - _drag_start_screen).length() < DRAG_DEADZONE_PX:
-				return  # still jitter, not a drag yet
-			_pending = false
-			_dragging = true
-			scrub_drag_started.emit()
-		scrub_drag_delta.emit(event.position - _drag_start_screen)
+	elif event is InputEventMouseMotion:
+		if _dragging or _pending:
+			if _pending:
+				if (event.position - _drag_start_screen).length() < DRAG_DEADZONE_PX:
+					return  # still jitter, not a drag yet
+				_pending = false
+				_dragging = true
+				scrub_drag_started.emit()
+			scrub_drag_delta.emit(event.position - _drag_start_screen)
+		if not _dragging:
+			var hovering := _point_in_click_region(get_global_mouse_position())
+			if hovering != _hovering:
+				_hovering = hovering
+				hover_changed.emit(_hovering)
 
 ## Click region reuses the same footprint formula simulation.gd already
 ## computes for this ring's label positioning (ring_radius + max_blob_height

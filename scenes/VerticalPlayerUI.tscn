@@ -55,6 +55,7 @@ size_flags_horizontal = 4
 alignment = 1
 
 [node name="PlayPauseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1558987811]
+tooltip_text = "UI_TOOLTIP_PLAY_PAUSE"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(80, 24)
 layout_mode = 2
@@ -71,6 +72,7 @@ custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
 [node name="FastBackward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=2010278088]
+tooltip_text = "UI_TOOLTIP_FAST_BACKWARD"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
@@ -79,6 +81,7 @@ theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "⏮"
 
 [node name="Backward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=22219196]
+tooltip_text = "UI_TOOLTIP_BACKWARD"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
@@ -87,6 +90,7 @@ theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
 
 [node name="StopButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=2068371549]
+tooltip_text = "UI_TOOLTIP_STOP"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(32, 24)
 layout_mode = 2
@@ -95,6 +99,7 @@ theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "⏹"
 
 [node name="Forward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1016918973]
+tooltip_text = "UI_TOOLTIP_FORWARD"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
@@ -103,6 +108,7 @@ theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
 
 [node name="FastForward" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=541614670]
+tooltip_text = "UI_TOOLTIP_FAST_FORWARD"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
@@ -119,6 +125,7 @@ custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
 
 [node name="Eject" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1414868271]
+tooltip_text = "UI_TOOLTIP_EJECT"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
@@ -127,6 +134,7 @@ theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
 
 [node name="Menu" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1507383150]
+tooltip_text = "UI_TOOLTIP_MENU"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
@@ -135,6 +143,7 @@ theme_override_styles/normal = ExtResource("4_p6wq6")
 text = ""
 
 [node name="ResetZoomButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/TransportButtons" unique_id=1426854269]
+tooltip_text = "UI_TOOLTIP_RESET_ZOOM"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(28, 24)
 layout_mode = 2
@@ -161,6 +170,7 @@ text = "Speed:"
 horizontal_alignment = 2
 
 [node name="SpeedDecreaseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=356436354]
+tooltip_text = "UI_TOOLTIP_SPEED_DECREASE"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
@@ -181,6 +191,7 @@ custom_minimum_size = Vector2(10, 0)
 layout_mode = 2
 
 [node name="SpeedIncreaseButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=880152674]
+tooltip_text = "UI_TOOLTIP_SPEED_INCREASE"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
@@ -189,6 +200,7 @@ theme_override_styles/normal = ExtResource("4_p6wq6")
 text = "+"
 
 [node name="WobbleToggle" type="Button" parent="Panel/MarginContainer/VBoxContainer/SpeedControls" unique_id=734664873]
+tooltip_text = "UI_TOOLTIP_WOBBLE_TOGGLE"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(28, 24)
 layout_mode = 2

@@ -1,18 +1,24 @@
 # Zymulador — Brief
 
 - **Phase:** Active development.
-- **Last milestone:** Molecular Structure design's Lattice phase (Crystal
-  Building Method) closed out — docs-only, no code changed. All six
-  originally-flagged design files ground-truthed, every open question
-  bearing on the DNA-first milestone decided. See
-  `docs/architecture/CHANGELOG.md` (top entry) and `MolecularStructureDesign.md`.
-  This sits on top of the lagging-strand Okazaki maturation relay (primase →
-  Pol I → ligase) and the topology-mode/telomere-gap mechanic, both already
-  implemented, animated, and QA'd — see `docs/architecture/STATUS.md`.
+- **Last milestone:** v85 — alpha-ship UI/localization pass: language
+  switcher, export size cut (~26MB unused fonts removed), a new
+  `CursorAffordanceManager` (hover/drag cursor swaps), a per-sequence
+  Okazaki fragment-size control, localized tooltips across all 17
+  `PlayerUI` buttons, and three real replication-visual bugs traced to
+  root cause (primase's untracked placement tween, a missing
+  scrub-retrigger idempotency guard, and `resume_enzymes()` not checking
+  each enzyme's actual state before forcing it visible). See
+  `docs/architecture/CHANGELOG.md` (top entry) and `docs/architecture/STATUS.md`
+  ("Alpha-Ship Pass — UI/Localization + Replication Bug Fixes (v85)").
+  Sits on top of the still-more-fundamental Molecular Structure Lattice
+  closeout (Crystal Building Method, docs-only) from the prior milestone —
+  see `MolecularStructureDesign.md`.
 - **Current focus:** Growth phase — implementing the Molecular Structure
   work against its scope fence (ribose ring deriver, phosphodiester
   operator, skeletal rendering gated to free-camera deep zoom). No
-  implementation code exists yet as of the last changelog entry.
+  implementation code exists yet as of this entry; v85 was a parallel
+  alpha-ship-prep detour, not part of this work.
 - **Also open, per `docs/architecture/TODO.md`:** a future Settings/Setup
   menu split — `ComplexitySetupPopup` currently mixes general app settings
   (language) with per-simulation setup (topology, Okazaki toggles), which
