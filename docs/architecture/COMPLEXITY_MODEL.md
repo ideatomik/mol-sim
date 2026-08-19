@@ -399,8 +399,8 @@ sparse relationships; a full N×N matrix would be mostly empty.
 | primer_removal (pol1_enabled) | Enzyme — bridge toggle | primase, ligase_enabled | — | Built (Complex tier) |
 | telomerase_visual | Enzyme | lagging_gap_enabled | linear mode only | NEW (designed — TelomeraseDesign.md) |
 | shelterin | Enzyme | telomerase (force-enabled by it) | linear mode only | NEW (telomere-end protection — see TelomeraseDesign.md) |
-| trombone_loop | Structural | lagging_polymerase | — | Planned |
-| full_replisome | Structural | trombone_loop | — | Planned |
+| trombone_loop | Structural | lagging_polymerase | — | Designed (TauBodyDesign.md, TromboneLoopDesign.md) |
+| full_replisome | Structural | trombone_loop | — | Planned (τ body + clamps integration) |
 | termination_tus_ter | Enzyme | helicase | circular mode only | NEW (sketched — TusTerDesign.md) |
 | leading_proofreading | Fidelity | leading_polymerase | — | Planned (layer 6) |
 | lagging_proofreading | Fidelity | lagging_polymerase | — | Planned (layer 6) |

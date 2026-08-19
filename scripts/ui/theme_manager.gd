@@ -466,6 +466,21 @@ extends Node
 @export var pol1_travel_duration: float = 0.35
 @export var pol1_leave_duration: float = 0.35
 
+@export_group("Tau Body")
+## E. coli tau body replisome model (TauBodyDesign.md) — visual coupling between
+## helicase and lagging polymerase with dynamic trombone loop geometry.
+@export var tau_body_color: Color = Color(0.6, 0.4, 0.7, 1.0)
+@export var tau_body_width: float = 12.0
+@export var tau_body_connector_count: int = 3
+@export var tau_body_pre_loop_length_min: float = 80.0
+@export_range(0.1, 2.0) var tau_body_loop_tightness: float = 0.5
+@export var tau_body_z: int = 3
+@export var tau_body_label_margin: float = 10.0
+
+@export_subgroup("Colors")
+@export var tau_body_connector_color: Color = Color(0.7, 0.5, 0.8, 1.0)
+@export var tau_body_loop_color: Color = Color(0.5, 0.6, 0.9, 1.0)
+
 @export_group("RNA Primer")
 ## Ratio of okazaki_fragment_size, not a fixed slot count — scales if fragment
 ## size is tuned per-domain (see COMPLEXITY_MODEL.md's Okazaki fragment size
