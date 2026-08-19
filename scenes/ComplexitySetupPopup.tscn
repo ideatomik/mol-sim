@@ -1,8 +1,8 @@
 [gd_scene format=3 uid="uid://culfpeb6hrg2j"]
 
 [ext_resource type="Script" uid="uid://cvql8e3nlhp1b" path="res://scripts/ui/complexity_setup_popup.gd" id="1_cplxpop"]
-[ext_resource type="FontFile" uid="uid://q1v5f1fmoxhk" path="res://fonts/Raleway/static/Raleway-SemiBold.ttf" id="2_cplxpop"]
-[ext_resource type="FontFile" uid="uid://dkyjnrbvkb6g6" path="res://fonts/GoogleSans/GoogleSans-Medium.ttf" id="3_cplxpop"]
+[ext_resource type="FontFile" uid="uid://ba4l0yjamuoiq" path="res://fonts/Raleway/static/Raleway-Bold.ttf" id="2_hw4rr"]
+[ext_resource type="FontFile" uid="uid://dswfvl6c65it4" path="res://fonts/Raleway/static/Raleway-Medium.ttf" id="3_n85m8"]
 [ext_resource type="FontFile" uid="uid://dxdsv5nrybqcb" path="res://fonts/Raleway/static/Raleway-ExtraBold.ttf" id="4_cplxpop"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cplxpanel"]
@@ -63,7 +63,7 @@ alignment = 1
 [node name="TitleLabel" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=531592403]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
-theme_override_fonts/font = ExtResource("2_cplxpop")
+theme_override_fonts/font = ExtResource("2_hw4rr")
 theme_override_font_sizes/font_size = 22
 text = "UI_COMPLEXITY_SETUP_TITLE"
 horizontal_alignment = 1
@@ -81,7 +81,7 @@ size_flags_horizontal = 3
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
-theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_fonts/font = ExtResource("3_n85m8")
 theme_override_font_sizes/font_size = 15
 text = "UI_LANGUAGE_LABEL"
 
@@ -89,6 +89,25 @@ text = "UI_LANGUAGE_LABEL"
 layout_mode = 2
 
 [node name="LanguageSeparator" type="HSeparator" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1146936142]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
+
+[node name="EnzymeLabelsRow" type="HBoxContainer" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1900000001]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/EnzymeLabelsRow" unique_id=1900000002]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("3_n85m8")
+theme_override_font_sizes/font_size = 15
+text = "UI_ENZYME_LABELS_TOGGLE_LABEL"
+
+[node name="EnzymeLabelsToggle" type="CheckButton" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout/EnzymeLabelsRow" unique_id=1900000003]
+layout_mode = 2
+
+[node name="EnzymeLabelsSeparator" type="HSeparator" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=1900000004]
 layout_mode = 2
 theme_override_styles/separator = SubResource("StyleBoxLine_cplxsep")
 
@@ -100,7 +119,7 @@ size_flags_horizontal = 3
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
-theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_fonts/font = ExtResource("3_n85m8")
 theme_override_font_sizes/font_size = 15
 text = "UI_TOPOLOGY_MODE_LABEL"
 
@@ -119,7 +138,7 @@ size_flags_horizontal = 3
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
-theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_fonts/font = ExtResource("3_n85m8")
 theme_override_font_sizes/font_size = 15
 text = "UI_PRIMASE_TOGGLE_LABEL"
 
@@ -134,7 +153,7 @@ size_flags_horizontal = 3
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
-theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_fonts/font = ExtResource("3_n85m8")
 theme_override_font_sizes/font_size = 15
 text = "UI_LIGASE_TOGGLE_LABEL"
 
@@ -149,7 +168,7 @@ size_flags_horizontal = 3
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
-theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_fonts/font = ExtResource("3_n85m8")
 theme_override_font_sizes/font_size = 15
 text = "UI_POL1_TOGGLE_LABEL"
 
@@ -168,7 +187,7 @@ size_flags_horizontal = 3
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
-theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_fonts/font = ExtResource("3_n85m8")
 theme_override_font_sizes/font_size = 15
 text = "UI_TELOMERASE_TOGGLE_LABEL"
 
@@ -187,7 +206,7 @@ size_flags_horizontal = 3
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
-theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_fonts/font = ExtResource("3_n85m8")
 theme_override_font_sizes/font_size = 15
 text = "UI_COFACTOR_TOGGLE_LABEL"
 
@@ -202,7 +221,7 @@ size_flags_horizontal = 3
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
-theme_override_fonts/font = ExtResource("3_cplxpop")
+theme_override_fonts/font = ExtResource("3_n85m8")
 theme_override_font_sizes/font_size = 15
 text = "UI_COFACTOR_BYPRODUCTS_TOGGLE_LABEL"
 

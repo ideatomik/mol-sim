@@ -58,9 +58,9 @@ signal targets_changed()  # fires on register_target()/unregister_target() — l
 		if is_inside_tree():
 			_apply_orientation()
 
-var pan_offset_x: float = 0.0  # arrow-key offset ALONG THE TRACK (world x in both
+var pan_offset_x: float = 0.0  # WASD offset ALONG THE TRACK (world x in both
                                 # modes — only the key binding swaps, see
-                                # _pan_action_positive()). Added on top of whatever the
+                                # _pan_key_positive()). Added on top of whatever the
                                 # current frame computes — reset on any target/level/sequence change
 
 # Set by _compute_strand_fit() as a side effect each time it runs — true
@@ -204,16 +204,23 @@ func get_cross_extent() -> float:
 func get_label_counter_rotation() -> float:
 	return rotation
 
-## Arrow keys pan ALONG the track. pan_offset_x itself needs no change between
-## modes — it's applied as a world-x offset and world x is along-track in both
-## — so only which physical key means "forward" swaps. Pleasingly, this is also
-## exactly the pair _input() must consume to keep the Scrubber from seeing them:
-## an HSlider reacts to ui_left/ui_right, a VSlider to ui_up/ui_down.
-func _pan_action_negative() -> String:
-	return "ui_up" if vertical_mode else "ui_left"
+## WASD pans ALONG the track. pan_offset_x itself needs no change between
+## modes — it's applied as a world-x offset and world x is along-track in
+## both — so only which physical key means "forward" swaps. Raw keycodes,
+## not Godot's ui_left/ui_right/ui_up/ui_down actions — those are used
+## pervasively by every focusable Control for arrow-key focus navigation
+## project-wide, so remapping them at the input-map level would change
+## keyboard UI navigation everywhere, not just camera pan. Checking
+## Input.is_key_pressed() directly (in _process() below) leaves those
+## actions untouched — same approach player_ui.gd's own shortcut handler
+## uses (event.keycode, not named actions). PlaybackShortcutsDesign.md's
+## keyboard layer claims the arrow keys for base/fragment stepping now,
+## which is what prompted this move off them.
+func _pan_key_negative() -> Key:
+	return KEY_W if vertical_mode else KEY_A
 
-func _pan_action_positive() -> String:
-	return "ui_down" if vertical_mode else "ui_right"
+func _pan_key_positive() -> Key:
+	return KEY_S if vertical_mode else KEY_D
 
 ## Screen-space pixel offset -> world-space offset. The ONLY screen->world
 ## conversion in this file; every other quantity here is world-native. In
@@ -223,16 +230,6 @@ func _screen_to_world_offset(screen_delta: Vector2, zoom_value: float) -> Vector
 	if zoom_value <= 0.0:
 		return Vector2.ZERO
 	return (screen_delta / zoom_value).rotated(rotation)
-
-## Node._input() fires BEFORE GUI input is distributed to focused Controls
-## (PlayerUI's Scrubber HSlider included), so consuming ui_left/ui_right here
-## reliably stops the slider from ever seeing them — regardless of whether it
-## currently has focus. The actual panning movement itself happens in
-## _process() below (polling, not per-keypress), so this is purely "claim the
-## keys before anything else can."
-func _input(event: InputEvent) -> void:
-	if event.is_action(_pan_action_negative()) or event.is_action(_pan_action_positive()):
-		get_viewport().set_input_as_handled()
 
 ## Background click-drag (pan) and scroll-wheel (zoom) — free camera mode,
 ## see the var block above. Runs as _unhandled_input specifically so any
@@ -285,6 +282,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			else:
 				_free_camera_scroll_zoom(event.position, -1)
 			get_viewport().set_input_as_handled()
+		elif event.pressed and event.button_index == MOUSE_BUTTON_MIDDLE:
+			# Single middle-click == ResetZoomButton, double == RecenterPanButton.
+			# Godot's own event.double_click already debounces this the same
+			# way MOUSE_BUTTON_LEFT's click/double-click split above does -
+			# no separate timer needed. reset_zoom()/recenter_pan() are the
+			# same public entry points those two PlayerUI buttons call.
+			if get_viewport().is_input_handled():
+				return
+			if event.double_click:
+				recenter_pan()
+			else:
+				reset_zoom()
+			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion:
 		if _follow_paused:
 			_follow_pause_drag(event.position)
@@ -300,10 +310,70 @@ func _unhandled_input(event: InputEvent) -> void:
 				global_position = _free_camera_position
 
 func _process(delta):
+	# Keyboard pan is free like mouse pan: W/S (screen-vertical) previously had
+	# NO binding outside vertical_mode, because _pan_key_negative()/
+	# _pan_key_positive() only ever return ONE axis's keys at a time (A/D in
+	# horizontal, W/S in vertical) — a single along-track scalar, not real 2D
+	# pan. Pressing W/S in horizontal mode did nothing at all — the reported bug.
+	#
+	# Fix: any of the four screen-fixed keys can now ENTER free camera mode on
+	# its own, exactly like a mouse drag/scroll already does — "free like mouse
+	# pan" applies to entry, not just to motion once inside it. A/D's own
+	# pre-existing cold-start behavior (the pan_offset_x branch further down,
+	# untouched) still works exactly as before; this only adds the
+	# previously-missing W/S case. Guarded against follow mode, matching how
+	# A/D already has no effect there (the _follow_mode branch below returns
+	# before reaching pan code).
+	if not _free_camera_mode and not _follow_mode:
+		var focus_is_text_field: bool = get_viewport().gui_get_focus_owner() is LineEdit
+		if not focus_is_text_field and (Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_S)):
+			_enter_free_camera_mode()
+
 	if _free_camera_mode:
 		# Position/drag are still fully owned by _unhandled_input() while this
-		# is active; only the scroll-zoom ease runs here.
+		# is active, EXCEPT WASD - mouse-drag pan and the scroll-zoom ease
+		# don't preclude also polling the same keys the level-based branch
+		# below uses, so WASD keeps working after scroll-zoom enters free
+		# camera mode instead of going dead. Unrotated Vector2(x, 0.0), same
+		# as the level-based pan branch below and _apply_live_frame()/
+		# _frame_strand()/scrub_snap(): world x is always along-track by
+		# design, and _pan_key_negative()/_pan_key_positive() already pick
+		# the orientation-correct physical key, so no further rotation
+		# belongs here. (Previously wrongly .rotated(rotation) here, copying
+		# _screen_to_world_offset()'s screen-to-world conversion for
+		# mouse-drag - wrong precedent, since that one starts from a
+		# screen-space delta rather than a world-space along-track one. The
+		# mismatch sent vertical-mode W/S along the cross-track axis.)
+				# TRUE 2D pan, screen-space fixed regardless of orientation — A/D is
+		# always screen-horizontal, W/S is always screen-vertical. Replaces the
+		# old single-axis _pan_key_negative()/_pan_key_positive() swap (which
+		# picked ONE physical key pair depending on vertical_mode and could
+		# only move along that one axis). Routed through
+		# _screen_to_world_offset() — the same rotation-aware screen->world
+		# conversion mouse-drag already uses — so no manual per-orientation
+		# swap is needed here: in horizontal mode this reduces to plain
+		# world-x/y; in vertical mode it correctly maps W/S to along-track and
+		# A/D to cross-track, matching what the camera's own rotation already
+		# does for the mouse.
 		_ease_free_camera_zoom(delta)
+		var screen_dir := Vector2.ZERO
+		var focus_is_text_field: bool = get_viewport().gui_get_focus_owner() is LineEdit
+		if not focus_is_text_field:
+			if Input.is_key_pressed(KEY_A):
+				screen_dir.x -= 1.0
+			if Input.is_key_pressed(KEY_D):
+				screen_dir.x += 1.0
+			if Input.is_key_pressed(KEY_W):
+				screen_dir.y -= 1.0
+			if Input.is_key_pressed(KEY_S):
+				screen_dir.y += 1.0
+		if screen_dir != Vector2.ZERO and _free_camera_zoom > 0.0:
+			# normalized() so a diagonal (e.g. W+D) isn't sqrt(2)x faster than
+			# a single key — matches how mouse-drag speed doesn't depend on
+			# drag angle either.
+			var world_offset: Vector2 = _screen_to_world_offset(screen_dir.normalized() * tm.zoom_pan_screen_speed * delta, _free_camera_zoom)
+			_free_camera_position += world_offset
+			global_position = _free_camera_position
 		return
 
 	if _follow_mode:
@@ -328,7 +398,7 @@ func _process(delta):
 				_follow_zoom = lerp(_follow_zoom, _follow_target_zoom, ease_t)
 			zoom = Vector2(_follow_zoom, _follow_zoom)
 		return  # position/zoom fully owned by follow mode while this is active —
-		        # same "one writer" shape as free camera above; arrow-key pan and
+		        # same "one writer" shape as free camera above; WASD pan and
 		        # the level-based tracking below don't apply here.
 
 	# Live tracking (_apply_live_frame / _frame_strand, in the branch below)
@@ -338,10 +408,15 @@ func _process(delta):
 	# Constant SCREEN speed: dividing by the current zoom converts a fixed
 	# px/sec-on-screen rate into the right amount of world-space movement,
 	# so panning feels the same regardless of how zoomed in we are.
+	# gui_get_focus_owner() guard: Input.is_key_pressed() polls raw key
+	# state regardless of GUI focus, so without this, typing 'A' — a real,
+	# common DNA/RNA base letter — into the Sequence Loader's LineEdit
+	# would also pan the camera on every keystroke.
 	var pan_dir: float = 0.0
-	if Input.is_action_pressed(_pan_action_negative()):
+	var _focus_is_text_field: bool = get_viewport().gui_get_focus_owner() is LineEdit
+	if not _focus_is_text_field and Input.is_key_pressed(_pan_key_negative()):
 		pan_dir -= 1.0
-	if Input.is_action_pressed(_pan_action_positive()):
+	if not _focus_is_text_field and Input.is_key_pressed(_pan_key_positive()):
 		pan_dir += 1.0
 	if pan_dir != 0.0 and zoom.x > 0.0:
 		pan_offset_x += pan_dir * tm.zoom_pan_screen_speed * delta / zoom.x
@@ -528,6 +603,18 @@ func set_zoom_level(level: int) -> void:
 			push_warning("ZoomManager: cannot enter level %d — '%s' isn't visible on screen yet" % [level, current_target_id])
 			return
 	_transition_to_level(level)
+
+## =/- keyboard shortcut entry point for "no target selected" — the discrete
+## 1-3 ladder above has nothing to frame against in that state (short of the
+## level>=2 safety net silently picking a target the player never chose), so
+## this routes straight to the same continuous free-camera zoom the mouse
+## wheel uses, anchored at the viewport center like _free_camera_nudge_zoom()
+## (Zoom In/Out buttons) already do. Deliberately NOT folded into
+## set_zoom_level() itself — that function's callers (1/2/3 tier keys,
+## trailer.gd) rely on its no-target safety net picking a target rather than
+## silently diverting into free-camera mode.
+func nudge_free_zoom(direction: int) -> void:
+	_free_camera_nudge_zoom(direction)
 
 ## Cycles to the next/previous VISIBLE target, skipping any that aren't
 ## currently on screen. No-ops if nothing is visible to cycle to.

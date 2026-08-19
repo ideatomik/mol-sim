@@ -60,6 +60,14 @@ signal simulation_initialized(total_bases: int)
 ## drag-to-scrub gestures — player_ui.gd connects to this the same way it
 ## already connects to the two signals above.
 signal drag_scrub_requested(index: int)
+## WindowChromeOverlay wiring — the single emission site for
+## set_player_ui_visible() below, so both F2 and the overlay's own toggle
+## button (whichever one changes visibility) keep the other side in sync.
+signal player_ui_visibility_changed(visible: bool)
+## ComplexitySetupPopup wiring — the single emission site for
+## set_enzyme_labels_enabled() below, so both F3 and the settings dialog's
+## checkbox (whichever one changes it) keep the other side in sync.
+signal enzyme_labels_visibility_changed(enabled: bool)
 
 # ---------- EXPORTS ----------
 const VERTICAL_PLAYER_UI_SCENE: PackedScene = preload("res://scenes/VerticalPlayerUI.tscn")
@@ -229,7 +237,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	match event.keycode:
 		KEY_F2:
-			set_player_ui_visible(not is_player_ui_visible())
+			# PlaybackShortcutsDesign.md — F2 does nothing while the exit-
+			# confirm popup is up, same "modal blocks background
+			# interaction" principle player_ui.gd's own keyboard layer
+			# applies to its three popups.
+			var exit_popup := get_node_or_null("WindowChromeOverlay/ExitConfirmPopup")
+			if exit_popup == null or not exit_popup.visible:
+				set_player_ui_visible(not is_player_ui_visible())
 		KEY_F3:
 			var tm := get_node_or_null("%ThemeManager")
 			set_enzyme_labels_enabled(tm == null or not tm.enzyme_labels_enabled)
@@ -280,6 +294,7 @@ func set_player_ui_visible(player_ui_visible: bool) -> bool:
 		return true
 	var previous: bool = player_ui.visible
 	player_ui.visible = player_ui_visible
+	player_ui_visibility_changed.emit(player_ui_visible)
 	return previous
 
 func is_player_ui_visible() -> bool:
@@ -314,6 +329,7 @@ func set_enzyme_labels_enabled(enabled: bool) -> bool:
 			replication_mgr.leading_clamp.refresh_label_visibility()
 		if replication_mgr.lagging_clamp != null:
 			replication_mgr.lagging_clamp.refresh_label_visibility()
+	enzyme_labels_visibility_changed.emit(enabled)
 	return previous
 
 func _ready():

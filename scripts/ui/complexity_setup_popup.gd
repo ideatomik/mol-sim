@@ -19,7 +19,13 @@ signal setup_confirmed
 # --- DEBUG: Set to true to auto-show when running this scene alone (F6) ---
 const DEBUG_AUTO_SHOW: bool = false
 
+## Wired via node_paths in simulation.tscn — needed because
+## set_enzyme_labels_enabled() lives on the Simulation root, not
+## %ComplexityManager/%LocaleManager (this popup's other two external refs).
+@export var simulation: Node2D
+
 @onready var language_option: OptionButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/LanguageRow/LanguageOption
+@onready var enzyme_labels_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/EnzymeLabelsRow/EnzymeLabelsToggle
 @onready var primase_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/PrimaseRow/PrimaseToggle
 @onready var ligase_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/LigaseRow/LigaseToggle
 @onready var pol1_toggle: CheckButton = $CenterContainer/DialogPanel/MarginContainer/MainLayout/Pol1Row/Pol1Toggle
@@ -74,6 +80,15 @@ func _ready() -> void:
 	topology_option.clear()
 	topology_option.add_item("UI_TOPOLOGY_CIRCULAR")  # Topology.CIRCULAR = 0
 	topology_option.add_item("UI_TOPOLOGY_LINEAR")    # Topology.LINEAR = 1
+
+	if simulation == null:
+		push_error("ComplexitySetupPopup: simulation node not assigned!")
+	else:
+		var tm := get_node_or_null("%ThemeManager")
+		if tm != null:
+			enzyme_labels_toggle.set_pressed_no_signal(tm.enzyme_labels_enabled)
+		enzyme_labels_toggle.toggled.connect(_on_enzyme_labels_toggled)
+		simulation.enzyme_labels_visibility_changed.connect(_on_enzyme_labels_visibility_changed)
 
 	primase_toggle.toggled.connect(_on_primase_toggled)
 	ligase_toggle.toggled.connect(_on_ligase_toggled)
@@ -142,6 +157,19 @@ func hide_dialog() -> void:
 ## isn't simulation state the player would expect "Cancel" to undo.
 func _on_language_selected(index: int) -> void:
 	locale_mgr.set_locale(_LOCALE_CODES[index])
+
+## Applies live and immediately, same as the language dropdown above — not
+## part of the Cancel-revert snapshot, since it isn't simulation state.
+func _on_enzyme_labels_toggled(pressed: bool) -> void:
+	if simulation != null:
+		simulation.set_enzyme_labels_enabled(pressed)
+
+## F3 stays bound during play, including while this dialog is open — keeps
+## the checkbox in sync with whichever side changed it, same
+## set_pressed_no_signal() guard every other toggle in this file uses to
+## avoid re-triggering its own toggled handler.
+func _on_enzyme_labels_visibility_changed(enabled: bool) -> void:
+	enzyme_labels_toggle.set_pressed_no_signal(enabled)
 
 func _on_primase_toggled(pressed: bool) -> void:
 	complexity_mgr.set_primase_enabled(pressed)

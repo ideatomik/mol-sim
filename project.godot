@@ -28,11 +28,6 @@ window/size/mode=2
 window/subwindows/embed_subwindows=false
 window/stretch/aspect="expand"
 
-[editor]
-
-version_control/plugin_name="GitPlugin"
-version_control/autoload_on_startup=true
-
 [gui]
 
 theme/default_font_hinting=2
@@ -53,7 +48,7 @@ rendering_device/driver.windows="d3d12"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 viewport/hdr_2d=true
-anti_aliasing/quality/msaa_2d=1
 anti_aliasing/quality/smaa_edge_detection_threshold=0.02
 anti_aliasing/quality/use_debanding=true
+environment/defaults/default_clear_color=Color(0.04674457, 0.085360445, 0.19028893, 1)
 anti_aliasing/quality/screen_space_aa=1

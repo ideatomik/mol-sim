@@ -17,6 +17,7 @@
 [ext_resource type="FontFile" uid="uid://ba4l0yjamuoiq" path="res://fonts/Raleway/static/Raleway-Bold.ttf" id="15_i46hp"]
 [ext_resource type="Script" uid="uid://bx0u4xq8xew0o" path="res://scripts/ui/camera_regent.gd" id="16_camregent"]
 [ext_resource type="Script" uid="uid://be2m7frvnrqrs" path="res://scripts/ui/cursor_affordance_manager.gd" id="17_cursormgr"]
+[ext_resource type="PackedScene" path="res://scenes/WindowChromeOverlay.tscn" id="18_chrome"]
 
 [sub_resource type="Curve2D" id="Curve2D_mwrr7"]
 
@@ -94,7 +95,8 @@ default_color = Color(0, 0, 0, 1)
 
 [node name="SequenceLoaderPopup" parent="UI" unique_id=1037424246 instance=ExtResource("5_mwrr7")]
 
-[node name="ComplexitySetupPopup" parent="UI" unique_id=197054953 instance=ExtResource("11_cplxpop")]
+[node name="ComplexitySetupPopup" parent="UI" unique_id=197054953 node_paths=PackedStringArray("simulation") instance=ExtResource("11_cplxpop")]
+simulation = NodePath("../..")
 
 [node name="PlayerUI" parent="UI" unique_id=1005777864 node_paths=PackedStringArray("simulation") instance=ExtResource("5_gimvv")]
 simulation = NodePath("../..")
@@ -103,6 +105,9 @@ simulation = NodePath("../..")
 unique_name_in_owner = true
 rotation_duration_seconds = 1.5
 total_spin_turns = 2.0
+
+[node name="WindowChromeOverlay" parent="." unique_id=-2094967294 node_paths=PackedStringArray("simulation") instance=ExtResource("18_chrome")]
+simulation = NodePath("..")
 
 [node name="NucleotideField" type="Node2D" parent="." unique_id=2115278003]
 script = ExtResource("8_160l5")

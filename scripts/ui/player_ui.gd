@@ -50,6 +50,18 @@ extends CanvasLayer
 @onready var recenter_pan_button: Button = get_node_or_null("%RecenterPanButton")
 @onready var ncloud_toggle: Button = get_node_or_null("%NCloudToggle")
 
+# PlaybackShortcutsDesign.md — sibling popups, checked so the keyboard
+# layer in _input() below skips entirely while any of them is open (same
+# "modal blocks background interaction" principle already established for
+# the exit-confirm popup). SequenceLoaderPopup/ComplexitySetupPopup reached
+# the same relative-path way _on_eject_pressed()/_on_menu_pressed() already
+# do; ExitConfirmPopup lives under WindowChromeOverlay (a root-level
+# sibling of UI, not nested inside it like this node is), so it's reached
+# via unique name instead of a relative path.
+@onready var sequence_loader_popup: Node = get_node_or_null("../SequenceLoaderPopup")
+@onready var complexity_setup_popup: Node = get_node_or_null("../ComplexitySetupPopup")
+@onready var exit_confirm_popup: Node = get_node_or_null("%ExitConfirmPopup")
+
 var zoom_mgr: Camera2D = null  # %ZoomManager — self-resolved in _ready() for the
                                 # horizontal layout; injected by simulation.gd's
                                 # _swap_in_vertical_player_ui() for the vertical
@@ -234,6 +246,98 @@ func _ready():
 		_on_simulation_initialized(simulation.num_nucleotide_slots)
 	else:
 		push_error("PlayerUI: simulation node not assigned!")
+
+# ==========================================
+# KEYBOARD SHORTCUTS (PlaybackShortcutsDesign.md)
+# _input(), not _unhandled_input() — zoom_manager.gd's own _input()
+# unconditionally consumes ui_left/ui_right every frame (to stop the
+# Scrubber HSlider from reacting to them) and calls
+# set_input_as_handled(), which only suppresses the LATER GUI-input/
+# _unhandled_input() phase, not other nodes' own _input(). Every node's
+# _input() still fires regardless, so this coexists cleanly with that
+# claim rather than losing the race to it.
+# ==========================================
+
+const _SHORTCUT_KEYS: Array[Key] = [
+	KEY_SPACE, KEY_LEFT, KEY_RIGHT, KEY_BRACKETLEFT, KEY_BRACKETRIGHT,
+	KEY_MINUS, KEY_EQUAL, KEY_1, KEY_2, KEY_3, KEY_Q, KEY_E,
+]
+
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	# _input() fires before GUI focus distribution (same reason it beats
+	# the Scrubber above) — an unguarded handler would also steal arrow
+	# keys/Space from SequenceLoaderPopup's SequenceInput LineEdit while
+	# typing a sequence. Deliberately NOT a blanket "any focus" check —
+	# the Scrubber itself is focusable, and suppressing all shortcuts
+	# after one mouse-drag on it would be a real regression.
+	if get_viewport().gui_get_focus_owner() is LineEdit:
+		return
+	# Modal popups block background interaction — same principle the
+	# exit-confirm popup's own F2 guard (simulation.gd) uses, generalized
+	# to every popup and every shortcut here.
+	if (sequence_loader_popup != null and sequence_loader_popup.visible) \
+			or (complexity_setup_popup != null and complexity_setup_popup.visible) \
+			or (exit_confirm_popup != null and exit_confirm_popup.visible):
+		return
+	if not _SHORTCUT_KEYS.has(event.keycode):
+		return
+	# Mark handled BEFORE dispatching — _input() fires before GUI focus
+	# distribution, so an unmarked event continues on to Godot's own
+	# built-in focused-Control behavior afterward (e.g. Space activates a
+	# focused OptionButton/Button, opening its dropdown) even after this
+	# handler already acted on it. Same fix exit_confirm_popup.gd's own
+	# Esc/Enter handling already applies.
+	get_viewport().set_input_as_handled()
+	match event.keycode:
+		KEY_SPACE:
+			_on_play_pause()
+		KEY_LEFT:
+			_on_fast_backward() if event.shift_pressed else _on_backward()
+		KEY_RIGHT:
+			_on_fast_forward() if event.shift_pressed else _on_forward()
+		KEY_BRACKETLEFT:
+			_on_speed_decrease()
+		KEY_BRACKETRIGHT:
+			_on_speed_increase()
+		KEY_MINUS:
+			# No target selected -> route to free-camera continuous zoom (same
+			# mechanism the mouse wheel uses) instead of the BUTTON's path —
+			# _on_zoom_out_pressed() calls set_zoom_level() unguarded, but with
+			# no target that's a no-op at level 1 (nothing to frame against),
+			# which is exactly what "zoom freely, like the mouse wheel" is
+			# asking to bypass.
+			if zoom_mgr:
+				if zoom_mgr.current_target_id == "":
+					zoom_mgr.nudge_free_zoom(-1)
+				else:
+					_on_zoom_out_pressed()
+		KEY_EQUAL:
+			# Mirror of KEY_MINUS above. NOT _on_zoom_in_pressed() even in the
+			# target-selected branch — that guards level-1-with-no-target to
+			# keep the BUTTON from doing a no-visible-effect zoom; the keyboard
+			# shortcut bypasses that guard so =/- work at any time.
+			if zoom_mgr:
+				if zoom_mgr.current_target_id == "":
+					zoom_mgr.nudge_free_zoom(1)
+				else:
+					zoom_mgr.set_zoom_level(zoom_mgr.zoom_level + 1)
+		KEY_1:
+			if zoom_mgr:
+				zoom_mgr.set_zoom_level(1)
+		KEY_2:
+			if zoom_mgr:
+				zoom_mgr.set_zoom_level(2)
+		KEY_3:
+			if zoom_mgr:
+				zoom_mgr.set_zoom_level(3)
+		KEY_Q:
+			if zoom_mgr:
+				zoom_mgr.cycle_target(-1)
+		KEY_E:
+			if zoom_mgr:
+				zoom_mgr.cycle_target(1)
 
 # ==========================================
 # SLIDER / SCRUBBER

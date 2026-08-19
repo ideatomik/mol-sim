@@ -10,6 +10,7 @@ UI_LOAD_BUTTON,LOAD,CARREGAR,CARGAR
 UI_ENZYME_DROPDOWN_PLACEHOLDER,Enzymes,Enzimas,Enzimas
 UI_COMPLEXITY_SETUP_TITLE,COMPLEXITY SETTINGS,CONFIGURAÇÕES DE COMPLEXIDADE,CONFIGURACIÓN DE COMPLEJIDAD
 UI_LANGUAGE_LABEL,Language,Idioma,Idioma
+UI_ENZYME_LABELS_TOGGLE_LABEL,Enzyme Labels (F3),Rótulos das Enzimas (F3),Etiquetas de Enzimas (F3)
 UI_TOPOLOGY_MODE_LABEL,DNA Type,Tipo de DNA,Tipo de ADN
 UI_TOPOLOGY_CIRCULAR,Prokaryotic (circular),Procariótico (circular),Procariota (circular)
 UI_TOPOLOGY_LINEAR,Eukaryotic (linear),Eucariótico (linear),Eucariota (lineal)
@@ -24,20 +25,26 @@ UI_COFACTOR_BYPRODUCTS_REQUIRES_COFACTOR_TOOLTIP,Requires Cofactor,Requer Cofato
 UI_CONTINUE_BUTTON,CONTINUE,CONTINUAR,CONTINUAR
 UI_QUIT_BUTTON,QUIT,SAIR,SALIR
 UI_POL1_COMING_SOON,Coming soon — requires Primase and Ligase,Em breve — requer Primase e Ligase,Próximamente — requiere Primasa y Ligasa
-UI_TOOLTIP_SPEED_DECREASE,Decrease playback speed,Diminuir velocidade de reprodução,Disminuir velocidad de reproducción
-UI_TOOLTIP_SPEED_INCREASE,Increase playback speed,Aumentar velocidade de reprodução,Aumentar velocidad de reproducción
+UI_TOOLTIP_SPEED_DECREASE,Decrease playback speed ([),Diminuir velocidade de reprodução ([),Disminuir velocidad de reproducción ([)
+UI_TOOLTIP_SPEED_INCREASE,Increase playback speed (]),Aumentar velocidade de reprodução (]),Aumentar velocidad de reproducción (])
 UI_TOOLTIP_WOBBLE_TOGGLE,Toggle wobble animation,Ativar/desativar animação de oscilação,Activar/desactivar animación de oscilación
 UI_TOOLTIP_NCLOUD_TOGGLE,Toggle nucleotide cloud,Ativar/desativar nuvem de nucleotídeos,Activar/desactivar nube de nucleótidos
-UI_TOOLTIP_PLAY_PAUSE,Play / Pause,Reproduzir / Pausar,Reproducir / Pausar
-UI_TOOLTIP_FAST_BACKWARD,Jump back one fragment,Voltar um fragmento,Retroceder un fragmento
-UI_TOOLTIP_BACKWARD,Step back one base,Voltar uma base,Retroceder una base
+UI_TOOLTIP_PLAY_PAUSE,Play / Pause (Space),Reproduzir / Pausar (Espaço),Reproducir / Pausar (Espacio)
+UI_TOOLTIP_FAST_BACKWARD,Jump back one fragment (Shift+←),Voltar um fragmento (Shift+←),Retroceder un fragmento (Shift+←)
+UI_TOOLTIP_BACKWARD,Step back one base (←),Voltar uma base (←),Retroceder una base (←)
 UI_TOOLTIP_STOP,Stop and reset to start,Parar e voltar ao início,Detener y volver al inicio
-UI_TOOLTIP_FORWARD,Step forward one base,Avançar uma base,Avanzar una base
-UI_TOOLTIP_FAST_FORWARD,Jump forward one fragment,Avançar um fragmento,Avanzar un fragmento
+UI_TOOLTIP_FORWARD,Step forward one base (→),Avançar uma base (→),Avanzar una base (→)
+UI_TOOLTIP_FAST_FORWARD,Jump forward one fragment (Shift+→),Avançar um fragmento (Shift+→),Avanzar un fragmento (Shift+→)
 UI_TOOLTIP_EJECT,Load a new sequence,Carregar nova sequência,Cargar nueva secuencia
 UI_TOOLTIP_MENU,Settings,Configurações,Configuración
 UI_TOOLTIP_HIGHLIGHT,Toggle enzyme highlight,Ativar/desativar destaque de enzima,Activar/desactivar resaltado de enzima
-UI_TOOLTIP_ZOOM_OUT,Zoom out,Diminuir zoom,Alejar zoom
-UI_TOOLTIP_ZOOM_IN,Zoom in,Aumentar zoom,Acercar zoom
+UI_TOOLTIP_ZOOM_OUT,Zoom out (-),Diminuir zoom (-),Alejar zoom (-)
+UI_TOOLTIP_ZOOM_IN,Zoom in (=),Aumentar zoom (=),Acercar zoom (=)
 UI_TOOLTIP_RESET_ZOOM,Reset zoom,Redefinir zoom,Restablecer zoom
 UI_TOOLTIP_RECENTER_PAN,Recenter view,Recentralizar visualização,Recentrar vista
+UI_TOOLTIP_EXIT,Exit Zymulador,Sair do Zymulador,Salir de Zymulador
+UI_TOOLTIP_TOGGLE_PLAYER_UI,Toggle player controls (F2),Exibir/Ocultar controles do reprodutor (F2),Mostrar/Ocultar controles del reproductor (F2)
+UI_CONFIRM_EXIT_TITLE,Exit Zymulador?,Sair do Zymulador?,¿Salir de Zymulador?
+UI_CONFIRM_EXIT_BODY,Any unsaved progress will be lost.,Qualquer progresso não salvo será perdido.,Se perderá cualquier progreso no guardado.
+UI_CONFIRM_EXIT_YES,Exit,Sair,Salir
+UI_CONFIRM_EXIT_NO,Cancel,Cancelar,Cancelar

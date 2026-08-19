@@ -81,7 +81,6 @@ theme_override_font_sizes/font_size = 18
 placeholder_text = "UI_SEQUENCE_INPUT_PLACEHOLDER"
 alignment = 1
 max_length = 300
-expand_to_text_length = false
 clear_button_enabled = true
 
 [node name="CharCountLabel" type="Label" parent="CenterContainer/DialogPanel/MarginContainer/MainLayout" unique_id=275838739]

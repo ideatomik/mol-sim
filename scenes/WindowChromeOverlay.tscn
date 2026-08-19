@@ -1,0 +1,138 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/window_chrome_overlay.gd" id="1_chrome"]
+[ext_resource type="Script" path="res://scripts/ui/exit_confirm_popup.gd" id="2_exitconfirm"]
+[ext_resource type="FontFile" uid="uid://ba4l0yjamuoiq" path="res://fonts/Raleway/static/Raleway-Bold.ttf" id="3_title"]
+[ext_resource type="FontFile" uid="uid://dswfvl6c65it4" path="res://fonts/Raleway/static/Raleway-Medium.ttf" id="4_body"]
+[ext_resource type="FontFile" uid="uid://dxdsv5nrybqcb" path="res://fonts/Raleway/static/Raleway-ExtraBold.ttf" id="5_button"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_exitpanel"]
+bg_color = Color(0.89827347, 0.89827347, 0.9138015, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.3, 0.35, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+corner_detail = 10
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_exitsep"]
+color = Color(1, 1, 1, 0)
+grow_begin = 0.0
+grow_end = 0.0
+thickness = 2
+
+[node name="WindowChromeOverlay" type="CanvasLayer"]
+layer = 100
+script = ExtResource("1_chrome")
+
+[node name="CloseButton" type="TextureButton" parent="."]
+custom_minimum_size = Vector2(32, 32)
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -48.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = 48.0
+pivot_offset = Vector2(16, 16)
+mouse_default_cursor_shape = 2
+ignore_texture_size = true
+stretch_mode = 5
+
+[node name="ToggleButton" type="TextureButton" parent="."]
+custom_minimum_size = Vector2(32, 32)
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -48.0
+offset_top = -48.0
+offset_right = -16.0
+offset_bottom = -16.0
+mouse_default_cursor_shape = 2
+ignore_texture_size = true
+stretch_mode = 5
+
+[node name="ExitConfirmPopup" type="ColorRect" parent="."]
+unique_name_in_owner = true
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.1)
+script = ExtResource("2_exitconfirm")
+
+[node name="CenterContainer" type="CenterContainer" parent="ExitConfirmPopup"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="DialogPanel" type="PanelContainer" parent="ExitConfirmPopup/CenterContainer"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_exitpanel")
+
+[node name="MarginContainer" type="MarginContainer" parent="ExitConfirmPopup/CenterContainer/DialogPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 32
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 32
+
+[node name="MainLayout" type="VBoxContainer" parent="ExitConfirmPopup/CenterContainer/DialogPanel/MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 15
+alignment = 1
+
+[node name="TitleLabel" type="Label" parent="ExitConfirmPopup/CenterContainer/DialogPanel/MarginContainer/MainLayout"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("3_title")
+theme_override_font_sizes/font_size = 22
+text = "UI_CONFIRM_EXIT_TITLE"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="ExitConfirmPopup/CenterContainer/DialogPanel/MarginContainer/MainLayout"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_exitsep")
+
+[node name="BodyLabel" type="Label" parent="ExitConfirmPopup/CenterContainer/DialogPanel/MarginContainer/MainLayout"]
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(0.12225223, 0.12225223, 0.12225223, 1)
+theme_override_fonts/font = ExtResource("4_body")
+theme_override_font_sizes/font_size = 15
+text = "UI_CONFIRM_EXIT_BODY"
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="ActionsRow" type="HBoxContainer" parent="ExitConfirmPopup/CenterContainer/DialogPanel/MarginContainer/MainLayout"]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+alignment = 1
+
+[node name="CancelButton" type="Button" parent="ExitConfirmPopup/CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow"]
+custom_minimum_size = Vector2(150, 30)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_button")
+text = "UI_CONFIRM_EXIT_NO"
+
+[node name="Control" type="Control" parent="ExitConfirmPopup/CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow"]
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+
+[node name="ConfirmButton" type="Button" parent="ExitConfirmPopup/CenterContainer/DialogPanel/MarginContainer/MainLayout/ActionsRow"]
+custom_minimum_size = Vector2(150, 30)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_button")
+text = "UI_CONFIRM_EXIT_YES"

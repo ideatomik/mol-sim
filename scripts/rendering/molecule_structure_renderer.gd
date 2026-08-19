@@ -828,7 +828,20 @@ func _rebuild_layout() -> void:
 		# this pass's working set (~20-30 atoms x a handful of on-screen
 		# residues at deep zoom, four strands). A per-ATOM cull tier is
 		# explicitly deferred, not forgotten.
-		if not cull_rect.intersects(bbox):
+		#
+		# Bead-glyph suppression (_active_slots below, consumed by
+		# get_bead_fade_amount()/get_strand_fade_amount()) must key off
+		# wherever the REAL bead glyph is drawn — raw, unpushed
+		# entry.world_position, same value replication_manager.gd's
+		# _lagging_render()/_leading_render() actually position those nodes
+		# at — not just world_pos above, which is push-offset by
+		# MOLECULAR_ROW_PUSH to spread atom clusters apart. Near the frame
+		# edge the two can disagree on visibility (leading/lagging get the
+		# largest push of the four strands), leaving an on-screen bead
+		# glyph unsuppressed because only its pushed position was tested.
+		# A residue counts as active if EITHER position is visible.
+		var raw_bbox := Rect2(entry.world_position - Vector2.ONE * padding, Vector2.ONE * padding * 2.0)
+		if not cull_rect.intersects(bbox) and not cull_rect.intersects(raw_bbox):
 			continue
 
 		var key: String = "%s:%d" % [entry.strand, entry.slot]

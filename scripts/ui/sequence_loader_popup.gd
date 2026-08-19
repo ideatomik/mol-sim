@@ -82,6 +82,14 @@ func show_dialog(is_startup: bool = false) -> void:
 
 func hide_dialog():
 	visible = false
+	# grab_focus() in show_dialog() never gets a matching release — without
+	# this, sequence_input stays the viewport's focus owner even while
+	# invisible, so every LineEdit-focus guard keyed off
+	# gui_get_focus_owner() (WASD pan in zoom_manager.gd, all of
+	# player_ui.gd's keyboard shortcuts) silently thinks a text field is
+	# still active for the rest of the session after the first sequence load.
+	if sequence_input.has_focus():
+		sequence_input.release_focus()
 
 # ----- PRIVATE HELPERS -----
 
