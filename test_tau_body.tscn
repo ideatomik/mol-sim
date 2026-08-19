@@ -1,9 +1,9 @@
-[gd_scene load_steps=4 format=3 uid="uid://test_tau_body_scene"]
+[gd_scene load_steps=4 format=3 uid="uid://c1x8y9z2a3b4c5"]
 
 [ext_resource type="Script" path="res://test_tau_body.gd" id="1_test_script"]
 [ext_resource type="PackedScene" uid="uid://tau_body_resource" path="res://tau_body.tscn" id="2_tau_body"]
 
-[node name="TestTauBody" type="Node2D"]
+[node name="TestTauScene" type="Node2D"]
 script = ExtResource("1_test_script")
 
 [node name="HelicaseDummy" type="ColorRect" parent="."]

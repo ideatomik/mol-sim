@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://tau_body_resource"]
+
+[ext_resource type="Script" path="res://tau_body.gd" id="1_tau_script"]
+
+[node name="TauBody" type="Node2D"]
+script = ExtResource("1_tau_script")
