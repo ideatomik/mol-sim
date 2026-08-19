@@ -59,6 +59,7 @@ enum Topology { CIRCULAR, LINEAR }
 @export var cofactor_activation_enabled: bool = false
 @export var cofactor_byproducts_visible: bool = true
 @export var pol1_enabled: bool = false  # Complex tier — implemented (pol1.gd, wired into replication_manager.gd's bridge-toggle cascade). Comment was stale; correcting per ground-truth read during the topology_mode pass.
+@export var trombone_loop_enabled: bool = false  # Planned: E. coli tau body replisome model (TauBodyDesign.md) — couples lagging polymerase to helicase with dynamic trombone loop geometry.
 
 var _sim: Node = null  # simulation.gd instance — see ligase_enabled migration note above
 
@@ -73,6 +74,8 @@ func is_enabled(feature: String) -> bool:
 			return _sim.ligase_enabled if _sim != null else false
 		"pol1":
 			return pol1_enabled
+		"trombone_loop":
+			return trombone_loop_enabled
 		"lagging_gap":
 			# Mode-gate, not a plain proxy: lagging_gap_enabled is only ever
 			# meaningful in Linear mode (COMPLEXITY_MODEL.md's topology
