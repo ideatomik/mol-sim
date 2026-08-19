@@ -1,31 +1,38 @@
 ```
+# Godot-specific ignores
+*.import
+*.remap
+export_presets.cfg
+.autoload_register
+.editor
+.godot/
+
 # Compiled and build artifacts
 *.pyc
-__pycache__/
-*.o
-*.obj
-*.so
-*.dll
-*.exe
 *.class
+*.o
+*.exe
+*.dll
+*.so
+*.a
+*.obj
 *.out
+*.tmp
 
 # Dependencies
-.venv/
-venv/
 node_modules/
-target/
-.gradle/
+venv/
+.venv/
+__pycache__/
 .mypy_cache/
 .pytest_cache/
-dist/
-build/
+target/
+.gradle/
 
 # Logs and temp files
 *.log
 *.tmp
 *.swp
-*.swo
 
 # Environment
 .env
@@ -40,7 +47,7 @@ build/
 .DS_Store
 Thumbs.db
 
-# Coverage reports
+# Coverage
 coverage/
 htmlcov/
 .coverage
@@ -64,8 +71,4 @@ htmlcov/
 *.Z
 *.lz
 *.lzo
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
 ```
