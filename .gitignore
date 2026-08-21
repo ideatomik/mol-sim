@@ -1,34 +1,4 @@
 ```
-# Godot-specific ignores
-*.import
-*.remap
-export_presets.cfg
-.autoload_register
-.editor
-.godot/
-
-# Compiled and build artifacts
-*.pyc
-*.class
-*.o
-*.exe
-*.dll
-*.so
-*.a
-*.obj
-*.out
-*.tmp
-
-# Dependencies
-node_modules/
-venv/
-.venv/
-__pycache__/
-.mypy_cache/
-.pytest_cache/
-target/
-.gradle/
-
 # Logs and temp files
 *.log
 *.tmp
@@ -37,11 +7,23 @@ target/
 # Environment
 .env
 .env.local
-*.env.*
+.env.*
 
 # Editors
 .vscode/
 .idea/
+
+# Dependencies
+node_modules/
+venv/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+dist/
+build/
+target/
+.gradle/
 
 # System files
 .DS_Store
@@ -71,4 +53,8 @@ htmlcov/
 *.Z
 *.lz
 *.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 ```
