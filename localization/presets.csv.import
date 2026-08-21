@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://dvqsg7n5ooxpa"
+
+[deps]
+
+files=["res://localization/presets.en.translation", "res://localization/presets.pt_BR.translation", "res://localization/presets.es.translation"]
+
+source_file="res://localization/presets.csv"
+dest_files=["res://localization/presets.en.translation", "res://localization/presets.pt_BR.translation", "res://localization/presets.es.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true

@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://b134rwpjgp6kr"
+
+[deps]
+
+files=["res://localization/enzyme_labels.en.translation", "res://localization/enzyme_labels.pt_BR.translation", "res://localization/enzyme_labels.es.translation"]
+
+source_file="res://localization/enzyme_labels.csv"
+dest_files=["res://localization/enzyme_labels.en.translation", "res://localization/enzyme_labels.pt_BR.translation", "res://localization/enzyme_labels.es.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true
